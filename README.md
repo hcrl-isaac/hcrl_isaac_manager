@@ -1,37 +1,65 @@
 # Quickstart
 
+## Prerequisites
+
+1. Ensure that `$HOME/.local/bin` is on your `PATH`.
+
+2. Install [just](https://just.systems/man/en/introduction.html), e.g. as a uv tool:
+    ```bash
+    uv tool install rust-just
+    ```
+
+## Usage
+
+All commands below add bash aliases `ilab` and `manager` to your RC file of choice (can be configured in [justfile](justfile)).
+- `manager`: enters the hcrl_isaac_manager directory and activates the manager venv.
+- `ilab`: enters the hcrl_isaaclab extension directory and activates the Isaac Lab venv (if it exists).
+
+### Local Installation
+
+To install set up the repo for running Isaac Lab locally, use the command
 ```bash
-make
-make cluster  # if deploying to cluster
+just setup
 ```
 
-See [Makefile Usage](#makefile-usage) for detailed instructions.
+This sets up the manager and Isaac Lab virtual environments.
 
-# Usage
+### Cluster Deployment
 
-## Local
-See Isaaclab instructions to setup Isaac Sim and the docker interface, the IsaacLab folder in `resources/` can be treated as if it were the standalone repo, just with the hcrl extension installed.
+If you are not planning on running Isaac Lab locally (e.g. if your machine does not meet [system requirements](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html#system-requirements)), you can set up a minimal environment for deploying to either ray or HPC clusters.
 
-> ***Note: when installing Isaac Lab, only install the rsl-rl framework (i.e. `./isaaclab.sh -i rsl-rl`).*** rl-games requires an old version of wandb that is incompatible with hcrl_isaaclab.
+#### Ray
 
-## Cluster
-
-After rebuilding the docker image (e.g. for updating dependencies), build and push the sif image with
+To configure the environment for Ray cluster deployment, run
 ```bash
-scripts/cluster.sh push
+just ray
+```
+This sets up the manager and creates the appropriate Ray configuration files. You can then send jobs with
+```bash
+scripts/ray.sh job <train args here>
 ```
 
-If you need to repush the existing sif image (e.g. if `push` times out on SSH), use
-```bash
-scripts/cluster.sh repush
-```
+See the [Ray README](scripts/ray/README.md) for more details on the Ray interface.
 
-To run a task on the cluster, run the command
-```bash
-scripts/cluster.sh job --task <task_name> <other cli args here>
-```
+#### HPC
 
-## Asynchronous Video Logging
+To add an HPC cluster configuration, run
+```bash
+just add-cluster
+```
+This will create a folder `scripts/cluster/<name>_config` with the appropriate config files. You can then build and push a .sif image to the cluster with
+```bash
+just cluster
+```
+You only need to do this once, or whenever your dependencies change. You can then deploy a run to the cluster with
+```bash
+scripts/cluster.sh job <train args here>
+```
+See the [Cluster README](scripts/cluster/README.md) for more details.
+
+# Asynchronous Video Logging
+
+Environments that do not require cameras during training **can** be deployed to GPU clusters without RT cores, e.g. A100s and H100s. These runs will not support video recording synchronously during training. We instead provide a utility script for asynchronously logging training videos to W&B from any local machine that meets Isaac Sim's [GPU requirements](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/requirements.html#system-requirements).
 
 To asynchronously log videos to W&B, start the listener with
 ```bash
@@ -43,164 +71,53 @@ Remove the listener with
 scripts/video_listener.sh remove --task <task_name>
 ```
 
-More script options can be viewed with `scripts/video_listener.sh --help`. When creating a server run, you can record videos asynchronously with the `--video` flag.
+This sets up a cron job to run the script `hcrl_isaaclab/scripts/utils/log_videos_async.sh` every 30 minutes. Asynchronous videos for a project can also be created manually using the `hcrl_isaaclab/scripts/log_videos_async.py` script.
 
-> **Note:** the listener must be run on a machine that meets Isaac Sim's [GPU requirements](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/requirements.html#system-requirements).
+More script options can be viewed with `scripts/video_listener.sh --help`. When sending a job to the cluster, be sure to use the `--video` flag to enable async video logging.
 
+# Justfile Targets
 
-# Makefile Usage
-
-The project includes a Makefile that supports both **conda** and **UV** package managers for environment management.
-
-## Quick Start
-
-```bash
-# Use default package manager (conda)
-make
-make conda
-conda activate ilab
-
-# Use specific package manager
-PACKAGE_MANAGER=uv make
-make uv
-source ilab/bin/activate
-```
+The project uses [just](https://just.systems/man/en/introduction.html) to manage packages and other utilities. Environment dependencies are managed using the **uv** package manager.
 
 ## Available Targets
 
-### Main Targets
-- **`all`** - Run complete setup: deps → gitman → clean → setup
-- **`deps`** - Install system dependencies and package managers
-- **`gitman`** - Update git submodules
-- **`clean`** - Clean up environments (uses selected package manager)
-- **`setup`** - Set up development environment (uses selected package manager)
-- **`cluster`** - Set up files necessary for cluster deployment
+### `deps`
 
-### Package Manager Specific Targets
-- **`clean-conda`** - Remove conda environment
-- **`clean-uv`** - Remove UV virtual environment
-- **`setup-conda`** - Set up conda environment
-- **`setup-uv`** - Set up UV virtual environment
+- Installs system packages and tools (uv, gitman)
+- Sets up manager uv environment
+- Pulls Isaac Lab and extension subrepos as specified in `gitman.yml`
+- Creates wandb env file, if necessary
+- Adds bash aliases to RC file, if necessary
 
-### Convenience Targets
-- **`conda`** - Force use of conda for all operations
-- **`uv`** - Force use of UV for all operations
-- **`wandb`** - Set up W&B environment file (included in main setup)
+> **Note**: This is called internally by `setup`, `cluster`, and `ray` targets.
 
-## Package Manager Selection
+### `setup`
 
-### Environment Variable
-```bash
-# Set UV as default for this session
-export PACKAGE_MANAGER=uv
+- Installs general dependencies (`just deps`)
+- Installs Isaac Lab packages and sets up local uv environment
 
-# Or specify per command
-PACKAGE_MANAGER=uv make setup
-```
+### `clean`
 
-### Command Line Override
-```bash
-# Use UV for this command only
-make uv
+- Deletes Isaac Lab environment
+- Removes bash aliases from RC file
 
-# Use conda for this command only  
-make conda
-```
+### `docker`
 
-## Detailed Target Descriptions
+- Installs and configures Docker if necessary
+- Builds and starts the Isaac Lab Docker container
 
-### `deps` Target
-- Updates system packages
-- Installs build tools (gcc-11+ if needed)
-- Installs UV if `PACKAGE_MANAGER=uv`
-- Installs gitman for submodule management
+### `cluster [name]`
 
-### `gitman` Target
-- Updates all git submodules in `resources/`
-- Downloads Isaac Sim and IsaacLab repositories
-- Maintains hcrl extensions
+- Installs general dependencies (`just deps`)
+- Installs nvidia-container-toolkit and Apptainer, if necessary
+- Builds and starts the Isaac Lab Docker container (`just docker`)
+- Builds and pushes Apptainer image to cluster
 
-### `clean` Target
-- **Conda**: Deactivates and removes `ilab` environment
-- **UV**: Removes `ilab` directory
+### `add-cluster`
 
-### `setup` Target
-- **Conda**: Creates `ilab` environment and installs IsaacLab
-- **UV**: Creates virtual environment and installs package in editable mode
-- Writes `.env.wandb` file
+- Creates cluster configuration files from template
 
-### `cluster` Target
-- Writes `.env.cluster` and `submit_job_slurm.sh` files for cluster deployment on TACC Lonestar6
+### `ray`
 
-## Examples
-
-### Complete Setup with UV
-```bash
-# Clean install with UV
-PACKAGE_MANAGER=uv make all
-```
-
-### Switch Package Managers
-```bash
-# Start with conda
-make conda
-
-# Switch to UV
-make uv
-
-# Clean both
-make clean
-PACKAGE_MANAGER=uv make clean
-```
-
-### Development Workflow
-```bash
-# Initial setup
-make deps
-make gitman
-make setup
-
-# Daily development
-make gitman  # Update dependencies
-make clean   # Clean environment
-make setup   # Recreate environment
-```
-
-## Troubleshooting
-
-### Conda Issues
-```bash
-# Fix conda initialization
-conda init bash
-source ~/.bashrc
-
-# Reset environment
-make clean
-make setup
-```
-
-### UV Issues
-```bash
-# Reinstall UV
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.cargo/env
-
-# Reset environment
-PACKAGE_MANAGER=uv make clean
-PACKAGE_MANAGER=uv make setup
-```
-
-### General Issues
-```bash
-# Clean everything and start fresh
-make clean
-make deps
-make gitman
-make setup
-```
-
-## Environment Variables
-
-- **`PACKAGE_MANAGER`** - Set to `conda` or `uv` (default: `conda`)
-- **`CONDA_NO_PLUGINS`** - Disables conda plugins for stability
-- **`SHELL`** - Set to `/bin/bash` for proper shell handling
+- Installs general dependencies (`just deps`)
+- Creates Ray configuration files from template

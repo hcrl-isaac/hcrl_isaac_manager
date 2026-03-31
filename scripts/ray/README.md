@@ -14,7 +14,7 @@ Add the server machine to your Tailnet (get link from Slack).
 
 ## Dependencies
 
-The ray scripts assume that you've installed IsaacLab and hcrl_isaac using hcrl_isaac_manager.
+The ray scripts assume that you will be developing on hcrl_isaaclab within manager-installed Isaac Lab.
 
 > Note:
 > - All paths below are relative to the `hcrl_isaac_manager` directory.
@@ -23,18 +23,17 @@ The ray scripts assume that you've installed IsaacLab and hcrl_isaac using hcrl_
 > - Commands below are consistent for Unix-like systems, i.e. Linux and Mac. If running on Windows, some commands may
 > be different.
 
-Fill out `scripts/ray/.env.ray` and `scripts/ray/job_config.yaml`. Use absolute paths (should start with `/home/<user>/...`)
-
-Python dependencies from `pyproject.toml` will be automatically installed from the `make deps` hook (automatically
-called with `make`). If you want to avoid installing other Isaac Lab dependencies, you can create the uv env with
+Set up the Ray configuration with
 ```bash
-uv sync
+just ray
 ```
+
+If you have additional non-standard configurations (e.g. additional file mounts, env variables, etc.), you can edit the config files at `ray/.env.ray` and `ray/job_config.yaml`.
 
 Activate the uv environment. You will need to have the environment activated anytime you want to use the ray commands.
 
 ```bash
-source .venv/bin/activate
+manager  # or `source .venv/bin/activate`
 ```
 
 Ensure connectivity to the server with
@@ -52,7 +51,7 @@ This should display a blank table, like so:
 └────────┴──────┴────────────┴──────────┴────────┴────────────┘
 ```
 
-## Using the ray.sh interface
+## Ray Interface
 
 You can access the Ray dashboard at `http://<server_ip>:8265`. The dashboard is view-only, i.e. you cannot cancel jobs
 from this interface.
@@ -62,7 +61,6 @@ from this interface.
 - Sends a job to the server.
     - You can modify the script that runs (e.g. between `train.py` and `play.py`) in the `python_script` field of `job_config.yaml`
 - Can be followed by any arguments you'd like to pass to the script (e.g. `--task reach-v0`)
-- Note that once you start a job, the program will output the logs from the job into your shell. You can exit this (Ctrl-C) without affecting the job
 
 ### `scripts/ray.sh stop <job_id>`
 

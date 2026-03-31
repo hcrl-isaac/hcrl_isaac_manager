@@ -1,6 +1,6 @@
 venv_name := "ilab"
 
-rc_file := "$HOME/.zshrc"
+rc_file := "$HOME/.bashrc"
 bash_utils := "$( pwd )/scripts/utils.sh"
 
 set shell := ["bash", "-c"]
@@ -57,6 +57,7 @@ docker:
     scripts/container.sh start
 
 cluster name="default":
+    just deps
     if ! command -v nvidia-container-toolkit >/dev/null 2>&1; then \
         curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
             && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
@@ -102,6 +103,7 @@ add-cluster:
     EMAIL=$email QUEUE=$queue NUM_PROCS=$num_procs NUM_CPUS=$num_cpus envsubst < scripts/cluster/tools/submit_job_slurm.template.sh > $outdir/submit_job_slurm.sh;
 
 ray:
+    just deps
     @read -p "UT EID: " ut_eid; \
     if [ ! -f "scripts/.env.wandb" ]; then \
         echo "[ERROR] wandb configuration file scripts/.env.wandb not found. Exiting."; \

@@ -13,5 +13,11 @@ if [[ -z "$VENV_NAME" ]]; then
     return
 fi
 
-alias ilab="source ${MANAGER_DIR}/scripts/.env.wandb && source ${MANAGER_DIR}/resources/IsaacLab/${VENV_NAME}/bin/activate && cd ${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab"
+# change ilab alias depending on if Isaac Lab is installed locally
+if [ -d "${MANAGER_DIR}/resources/IsaacLab/${VENV_NAME}" ]; then
+    alias ilab="source ${MANAGER_DIR}/scripts/.env.wandb && source ${MANAGER_DIR}/resources/IsaacLab/${VENV_NAME}/bin/activate && cd ${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab"
+else
+    alias ilab="cd ${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab"
+fi
+
 alias manager="cd ${MANAGER_DIR} && source ${MANAGER_DIR}/.venv/bin/activate"

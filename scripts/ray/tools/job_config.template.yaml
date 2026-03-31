@@ -12,12 +12,11 @@ file_mounts: {
   "${MANAGER_DIR}/resources/IsaacLab/source/robot_rl": "/workspace/isaaclab/source/robot_rl",
 }
 # Commands to execute after mounting runtime dependencies but before installation
-# Default command here creates a symlink between hcrl_robots (installed at /workspace/isaaclab) and its location within
+# Default command here creates a symlink between hcrl_robots (installed at /workspace/isaaclab/resources) and its location within
 #   hcrl_isaaclab, since hcrl_robots files are too big to transfer at runtime
 init_commands:
-  - cd /workspace/isaaclab/source && gitman update --force
   - mkdir -p /workspace/isaaclab/source/hcrl_isaaclab/resources
-  - ln -sf /workspace/isaaclab/hcrl_robots /workspace/isaaclab/source/hcrl_isaaclab/resources/hcrl_robots
+  - ln -sf /workspace/isaaclab/resources/hcrl_robots /workspace/isaaclab/source/hcrl_isaaclab/resources/hcrl_robots
 # python executable on the cluster
 "py_executable": "/workspace/isaaclab/isaaclab.sh -p"
 # patterns to exclude when copying dependencies (file_mounts) and working directory (ext_dir)
