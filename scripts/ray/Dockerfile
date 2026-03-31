@@ -31,3 +31,6 @@ RUN bash /workspace/isaaclab/install-git-lfs.sh && git lfs version
 
 # Install tuning dependencies
 RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install optuna bayesian-optimization
+
+# Install gitman
+RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install gitman

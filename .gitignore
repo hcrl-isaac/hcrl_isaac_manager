@@ -6,3 +6,6 @@ scripts/cluster/*_config
 **.venv/
 **ilab/
 outputs/
+scripts/ray/.env.ray
+scripts/ray/job_config.yaml
+resources/

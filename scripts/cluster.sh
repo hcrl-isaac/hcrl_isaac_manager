@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 
 if [ -z $CLUSTER ]; then
-    echo "[ERROR] CLUSTER is not set. Usage: CLUSTER=<value> scripts/cluster.sh <args>"
-    exit 1
+    CLUSTER="default"
 fi;
 
 # make the cwd the pwd
@@ -10,7 +9,7 @@ cd "$(dirname "$0")"
 
 CONFIG_DIR="cluster/${CLUSTER}_config"
 if [ ! -d $CONFIG_DIR ]; then
-    echo "[ERROR] Config directory $CONFIG_DIR not found for cluster $CLUSTER. Create config from template with \`CLUSTER=$CLUSTER make add-cluster\`."
+    echo "[ERROR] Config directory $CONFIG_DIR not found for cluster $CLUSTER. Create config from template with \`CLUSTER=$CLUSTER just add-cluster\`."
     exit 1
 fi;
 

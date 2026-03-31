@@ -13,13 +13,11 @@ if [[ -z "$VENV_NAME" ]]; then
     return
 fi
 
-if [[ $PACKAGE_MANAGER == "uv" ]]; then
+# change ilab alias depending on if Isaac Lab is installed locally
+if [ -d "${MANAGER_DIR}/resources/IsaacLab/${VENV_NAME}" ]; then
     alias ilab="source ${MANAGER_DIR}/scripts/.env.wandb && source ${MANAGER_DIR}/resources/IsaacLab/${VENV_NAME}/bin/activate && cd ${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab"
-    alias manager="cd ${MANAGER_DIR} && source ${MANAGER_DIR}/.venv/bin/activate"
-elif [[ $PACKAGE_MANAGER == "conda" ]]; then
-    alias ilab="source ${MANAGER_DIR}/scripts/.env.wandb && cd ${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab && conda activate ${VENV_NAME}"
-    alias manager="cd ${MANAGER_DIR} && conda activate base"
 else
-    echo "[ERROR] Invalid value PACKAGE_MANAGER=\"$PACKAGE_MANAGER\", expected one of \"uv\", \"conda\""
-    return
+    alias ilab="cd ${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab"
 fi
+
+alias manager="cd ${MANAGER_DIR} && source ${MANAGER_DIR}/.venv/bin/activate"
