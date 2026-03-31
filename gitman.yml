@@ -6,17 +6,17 @@ sources:
       rev: main
       type: git
    # repos linked in IsaacLab
-    - repo: git@github.com:Creampelt/hcrl_isaaclab.git
+    - repo: git@github.com:PanavMhatre/hcrl_isaaclab.git
       name: IsaacLab/source/hcrl_isaaclab
-      rev: main
+      rev: umrl-fri
       type: git
     - repo: git@github.com:Creampelt/hcrl_robots.git
       name: IsaacLab/source/hcrl_isaaclab/resources/hcrl_robots
       rev: main
       type: git
-    - repo: git@github.com:Creampelt/robot_rl.git
+    - repo: git@github.com:PanavMhatre/robot_rl.git
       name: IsaacLab/source/robot_rl
-      rev: main
+      rev: umrl-fri
       type: git
 default_group: ''
 groups:
