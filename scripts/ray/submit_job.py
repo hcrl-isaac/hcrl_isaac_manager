@@ -54,14 +54,13 @@ Usage:
 """
 
 import argparse
-import os
-import time
-from concurrent.futures import ThreadPoolExecutor
-from dotenv import dotenv_values
-import yaml
 import json
+import os
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
+import yaml
+from dotenv import dotenv_values
 from ray import job_submission
 
 
@@ -102,7 +101,7 @@ def submit_job(cluster: dict, job_command: str, runtime_env: dict, metadata: dic
         except Exception as e:
             print(f"[INFO] Failed to list directory contents: {str(e)}")
         entrypoint = f'{runtime_env["py_executable"]} {job_command} --file-mounts "{other_data["file_mounts"]}" --init-commands "{other_data.get("init_commands", "[]")}" --sub-jobs {other_data["python_script"]}'
-        print(f"[INFO] Attempting entrypoint {entrypoint=} in cluster {cluster}")
+        print(f"[INFO] Attempting entrypoint {entrypoint} in cluster {cluster}")
         job_id = client.submit_job(entrypoint=entrypoint, runtime_env=runtime_env, metadata=metadata)
 
         print(f"[INFO] Submitted job with ID {job_id}.")
@@ -141,7 +140,7 @@ def parse_env_file(fp: str | None) -> dict:
 
 
 def parse_job_config(cfg_file: str) -> tuple[dict, dict, dict]:
-    with open(cfg_file, "r") as job_yaml:
+    with open(cfg_file) as job_yaml:
         job_config = yaml.safe_load(job_yaml)
     working_dir = job_config["ext_dir"]
     env_dict = parse_env_file(job_config.get("env_file"))
