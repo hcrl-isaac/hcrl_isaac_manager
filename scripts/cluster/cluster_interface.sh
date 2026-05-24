@@ -13,12 +13,38 @@ tabs 4
 # get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
+# Cluster selection: CLUSTER=<name> picks the config in <name>_config/ (default: "default").
+CLUSTER="${CLUSTER:-default}"
+CLUSTER_ENV_FILE="${SCRIPT_DIR}/${CLUSTER}_config/.env.cluster"
+# Source the selected cluster's env (CLUSTER_LOGIN, CLUSTER_ISAACLAB_DIR, CLUSTER_SIF_PATH, ...).
+source_cluster_env() {
+    if [ ! -f "$CLUSTER_ENV_FILE" ]; then
+        echo "[Error] Cluster config not found: $CLUSTER_ENV_FILE" >&2
+        echo "[Error] Set CLUSTER=<name> for a <name>_config/ dir (available:" \
+            "$(cd "$SCRIPT_DIR" && ls -d *_config 2>/dev/null | sed 's/_config$//' | paste -sd, -))." >&2
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    source "$CLUSTER_ENV_FILE"
+}
+
+# Reuse one authenticated connection for up to 1h -- prevent 2FA reprompting
+SSH_CONTROL_DIR="${HOME}/.ssh/cm"
+mkdir -p "$SSH_CONTROL_DIR" && chmod 700 "$SSH_CONTROL_DIR"
+SSH_OPTS="-o ControlMaster=auto -o ControlPath=${SSH_CONTROL_DIR}/%C -o ControlPersist=1h"
+
 #==
 # Functions
 #==
 # Function to display warnings in red
 display_warning() {
     echo -e "\033[31mWARNING: $1\033[0m"
+}
+
+# Open the SSH control master. Subsequent ssh/scp/rsync calls reuse the same socket.
+ensure_ssh_master() {
+    echo "[INFO] Opening SSH control master to $CLUSTER_LOGIN (enter 2FA once)"
+    ssh $SSH_OPTS -o ConnectTimeout=60 "$CLUSTER_LOGIN" true
 }
 
 # Helper function to compare version numbers
@@ -65,7 +91,7 @@ check_image_exists() {
 # Check if the singularity image exists on the remote host, otherwise print warning and exit
 check_singularity_image_exists() {
     image_name="$1"
-    if ! ssh "$CLUSTER_LOGIN" "[ -f $CLUSTER_SIF_PATH/$image_name.tar ]"; then
+    if ! ssh $SSH_OPTS "$CLUSTER_LOGIN" "[ -f $CLUSTER_SIF_PATH/$image_name.tar ]"; then
         echo "[Error] The '$image_name' image does not exist on the remote host $CLUSTER_LOGIN!" >&2;
         exit 1
     fi
@@ -85,7 +111,7 @@ submit_job() {
             exit 1
             ;;
     esac
-    ssh $CLUSTER_LOGIN "cd $CLUSTER_ISAACLAB_DIR && bash $CLUSTER_ISAACLAB_DIR/docker/cluster/$job_script_file \"$CLUSTER_ISAACLAB_DIR\" \"isaac-lab-$profile\" ${@}"
+    ssh $SSH_OPTS $CLUSTER_LOGIN "cd $CLUSTER_ISAACLAB_DIR && bash $CLUSTER_ISAACLAB_DIR/docker/cluster/$job_script_file \"$CLUSTER_ISAACLAB_DIR\" \"isaac-lab-$profile\" ${@}"
 }
 
 #==
@@ -100,9 +126,12 @@ help() {
     echo -e "  push [<profile>]              Push the docker image to the cluster."
     echo -e "  repush [<profile>]            Repush existing SIF image to the cluster."
     echo -e "  job [<profile>] [<job_args>]  Submit a job to the cluster."
+    echo -e "  develop [<subcmd>] [<args>]   Manage a persistent dev node (start/status/attach/exec/sync/stop)."
     echo -e "\nwhere:"
     echo -e "  <profile>  is the optional container profile specification. Defaults to 'base'."
     echo -e "  <job_args> are optional arguments specific to the job command."
+    echo -e "\nenv:"
+    echo -e "  CLUSTER    selects the cluster config in <CLUSTER>_config/ (default: 'default')."
     echo -e "\n" >&2
 }
 
@@ -153,7 +182,7 @@ case $command in
         # Check docker and apptainer version
         check_docker_version
         # source env file to get cluster login and path information
-        source $SCRIPT_DIR/.env.cluster
+        source_cluster_env
         # make sure exports directory exists
         mkdir -p /$SCRIPT_DIR/exports
         # clear old exports for selected profile
@@ -163,18 +192,22 @@ case $command in
         APPTAINER_NOHTTPS=1 apptainer build --sandbox --fakeroot isaac-lab-$profile.sif docker-daemon://isaac-lab-$profile:latest
         # tar image (faster to send single file as opposed to directory with many files)
         tar -cvf /$SCRIPT_DIR/exports/isaac-lab-$profile.tar isaac-lab-$profile.sif
+        # open shared SSH connection
+        ensure_ssh_master
         # make sure target directory exists
-        ssh $CLUSTER_LOGIN "mkdir -p $CLUSTER_SIF_PATH"
+        ssh $SSH_OPTS $CLUSTER_LOGIN "mkdir -p $CLUSTER_SIF_PATH"
         # send image to cluster
-        scp $SCRIPT_DIR/exports/isaac-lab-$profile.tar $CLUSTER_LOGIN:$CLUSTER_SIF_PATH/isaac-lab-$profile.tar
+        scp $SSH_OPTS $SCRIPT_DIR/exports/isaac-lab-$profile.tar $CLUSTER_LOGIN:$CLUSTER_SIF_PATH/isaac-lab-$profile.tar
         ;;
     repush)
         # source env file to get cluster login and path information
-        source $SCRIPT_DIR/.env.cluster
+        source_cluster_env
+        # open shared SSH connection
+        ensure_ssh_master
         # make sure target directory exists
-        ssh $CLUSTER_LOGIN "mkdir -p $CLUSTER_SIF_PATH"
+        ssh $SSH_OPTS $CLUSTER_LOGIN "mkdir -p $CLUSTER_SIF_PATH"
         # send image to cluster
-        scp $SCRIPT_DIR/exports/isaac-lab-$profile.tar $CLUSTER_LOGIN:$CLUSTER_SIF_PATH/isaac-lab-$profile.tar
+        scp $SSH_OPTS $SCRIPT_DIR/exports/isaac-lab-$profile.tar $CLUSTER_LOGIN:$CLUSTER_SIF_PATH/isaac-lab-$profile.tar
         ;;
     job)
         if [ $# -ge 1 ]; then
@@ -188,18 +221,25 @@ case $command in
         echo "[INFO] Executing job command"
         [ -n "$profile" ] && echo -e "\tUsing profile: $profile"
         [ -n "$job_args" ] && echo -e "\tJob arguments: $job_args"
-        source $SCRIPT_DIR/.env.cluster
+        source_cluster_env
         # Get current date and time
         current_datetime=$(date +"%Y%m%d_%H%M%S")
         # Append current date and time to CLUSTER_ISAACLAB_DIR
         CLUSTER_ISAACLAB_DIR="${CLUSTER_ISAACLAB_DIR}_${current_datetime}"
+        # open shared SSH connection
+        ensure_ssh_master
         # Sync Isaac Lab code
         echo "[INFO] Syncing Isaac Lab code..."
-        rsync -rvh --rsync-path="mkdir -p $CLUSTER_ISAACLAB_DIR && rsync" --exclude="*.git*" --exclude "ilab/" --exclude "wandb/" --exclude "logs/" --exclude ".vscode/" --exclude "__pycache__" --filter=':- .dockerignore'  /$SCRIPT_DIR/../.. $CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR
+        # Keep the source package .git dirs so W&B captures the commit + uncommitted diff
+        rsync -rvh -e "ssh $SSH_OPTS" --rsync-path="mkdir -p $CLUSTER_ISAACLAB_DIR && rsync" --include="resources/IsaacLab/source/*/.git/***" --exclude="*.git*" --exclude "ilab/" --exclude "wandb/" --exclude "logs/" --exclude ".vscode/" --exclude "__pycache__" --filter=':- .dockerignore'  /$SCRIPT_DIR/../.. $CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR
         # execute job script
         echo "[INFO] Executing job script..."
         # check whether the second argument is a profile or a job argument
         submit_job $job_args
+        ;;
+    develop)
+        # Persistent Delta dev-node management (start/status/attach/exec/sync/stop)
+        exec env CLUSTER="$CLUSTER" "$SCRIPT_DIR/cluster_dev/cluster_dev.sh" "$@"
         ;;
     *)
         echo "Error: Invalid command: $command" >&2

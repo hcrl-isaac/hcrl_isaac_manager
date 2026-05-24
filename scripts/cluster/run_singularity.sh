@@ -13,19 +13,19 @@ echo -e "\tPython executable: $CLUSTER_PYTHON_EXECUTABLE ${@:3}"
 setup_directories() {
     # Check and create directories
     for dir in \
-        "${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/kit" \
-        "${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/ov" \
-        "${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/pip" \
-        "${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/glcache" \
-        "${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/computecache" \
-        "${CLUSTER_ISAAC_SIM_CACHE_DIR}/logs" \
-        "${CLUSTER_ISAAC_SIM_CACHE_DIR}/data" \
-        "${CLUSTER_ISAAC_SIM_CACHE_DIR}/documents" \
-        "${JOB_TMPDIR}/tmp"; do
-        if [ ! -d "$dir" ]; then
-            mkdir -p "$dir"
-            echo "(run_singularity.py): Created directory: $dir"
-        fi
+   "${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/kit" \
+   "${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/ov" \
+   "${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/pip" \
+   "${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/glcache" \
+   "${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/computecache" \
+   "${CLUSTER_ISAAC_SIM_CACHE_DIR}/logs" \
+   "${CLUSTER_ISAAC_SIM_CACHE_DIR}/data" \
+   "${CLUSTER_ISAAC_SIM_CACHE_DIR}/documents" \
+   "${JOB_TMPDIR}/tmp"; do
+   if [ ! -d "$dir" ]; then
+  mkdir -p "$dir"
+  echo "(run_singularity.py): Created directory: $dir"
+   fi
     done
 }
 
