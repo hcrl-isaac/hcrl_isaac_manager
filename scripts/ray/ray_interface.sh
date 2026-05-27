@@ -37,6 +37,7 @@ help() {
     echo -e "\ncommands:"
     echo -e "  push                                 Push the docker image to Docker Hub (will be pulled by the cluster on next startup)."
     echo -e "  job [<job_args>]                     Submit a job to the cluster."
+    echo -e "  bench [<job_args>]                   Submit an FPS-benchmark job (sweeps num_envs)."
     echo -e "  stop [<run_id>] [<script_args>]      Stop a currently running job."
     echo -e "  list [<script_args>]                 View existing jobs on the cluster."
     echo -e "  logs [<run_id>] [<script_file>]      Print logs from a run."
@@ -95,6 +96,19 @@ case $command in
         job_config=$SCRIPT_DIR/job_config.yaml
         # Submit job
         echo "[INFO] Executing job script..."
+        RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
+            --config_file $SCRIPT_DIR/ray.cfg \
+            --job_config $job_config \
+            --aggregate_jobs ray/wrap_resources.py \
+                --gpu_per_worker 1 \
+                $job_args
+        ;;
+    bench)
+        job_args="$@"
+        echo "[INFO] Executing bench command"
+        [ -n "$job_args" ] && echo -e "\tBench arguments: $job_args"
+        job_config=$SCRIPT_DIR/bench_job_config.yaml
+        echo "[INFO] Executing bench script..."
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
             --config_file $SCRIPT_DIR/ray.cfg \
             --job_config $job_config \

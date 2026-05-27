@@ -1,0 +1,33 @@
+# File containing environment variables (e.g. W&B credentials)
+env_file: /home/emily/hcrl_isaac_manager/scripts/ray/.env.ray
+# UT EID (for tracking ownership of Ray jobs)
+user_id: ecs3239
+# Working directory during job, should contain your scripts
+ext_dir: /home/emily/hcrl_isaac_manager/resources/IsaacLab/source/hcrl_isaaclab/scripts
+# Train script to execute on cluster
+python_script: "/workspace/isaaclab/source/hcrl_isaaclab/scripts/bench.py"
+# Additional dependencies to mount at runtime (will also auto-install module dependencies if setup.py is present at root level)
+file_mounts: {
+  "/home/emily/hcrl_isaac_manager/resources/IsaacLab/source/hcrl_isaaclab": "/workspace/isaaclab/source/hcrl_isaaclab",
+  "/home/emily/hcrl_isaac_manager/resources/IsaacLab/source/robot_rl": "/workspace/isaaclab/source/robot_rl",
+}
+# Commands to execute after mounting runtime dependencies but before installation
+# Default command here creates a symlink between hcrl_robots (installed at /workspace/isaaclab/resources) and its location within
+#   hcrl_isaaclab, since hcrl_robots files are too big to transfer at runtime
+init_commands:
+  - mkdir -p /workspace/isaaclab/source/hcrl_isaaclab/resources
+  - ln -sf /workspace/isaaclab/resources/hcrl_robots /workspace/isaaclab/source/hcrl_isaaclab/resources/hcrl_robots
+  - ln -sf /workspace/isaaclab/resources/motion_datasets /workspace/isaaclab/source/hcrl_isaaclab/resources/motion_datasets
+  - ln -sf /workspace/isaaclab/resources/ssti_robots /workspace/isaaclab/source/hcrl_isaaclab/resources/ssti_robots
+# python executable on the cluster
+"py_executable": "/workspace/isaaclab/isaaclab.sh -p"
+# patterns to exclude when copying dependencies (file_mounts) and working directory (ext_dir)
+"excludes":
+  - "**/resources/**"
+  - "**/wandb/**"
+  - "**/logs/**"
+  - "**/.git/objects/**"
+  - "**/.venv/**"
+  - "nohup.out"
+  # large exported pretrained policies (only needed by the latent task; >100MB blows Ray's upload limit)
+  - "**/policies/**"
