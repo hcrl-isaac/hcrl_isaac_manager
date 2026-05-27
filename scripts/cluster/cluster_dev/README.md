@@ -10,7 +10,7 @@ submit a 48h **batch "sentinel"** job that just holds a node, then ssh into it. 
 are **disabled** on Delta (password+Duo every login), so a persistent **ControlMaster**
 socket — opened once, kept warm 48h — is what avoids re-authenticating.
 
-## Tomorrow: the one command
+## User command
 ```bash
 cd ~/hcrl_isaac_manager/scripts/cluster/cluster_dev
 ./cluster_dev.sh start          # approve ONE Duo push; everything after is non-interactive
@@ -69,8 +69,3 @@ The watcher writes `~/.cluster_dev/state` (and `~/.cluster_dev/watch.log`); when
 - `node_exec.sh` — runs on the node; stages SIF+caches+code once, then `apptainer exec`s
   (bind mounts mirror `docker/cluster/run_singularity.sh`). Reached via the synced
   `${CLUSTER_ISAACLAB_DIR}/docker/cluster/cluster_dev/` copy.
-
-## Status
-Built 2026-05-20, **untested against live Delta** (no auth available at build time). The
-plain ssh/slurm/rsync paths (start/status/attach/sync/stop/watcher) are low-risk; the
-`exec` container path depends on q4–q6. First real run is the integration test.

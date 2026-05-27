@@ -14,14 +14,16 @@ tabs 4
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 # Cluster selection: CLUSTER=<name> picks the config in <name>_config/ (default: "default").
+# Config dirs live under the manager's scripts/cluster, reached relative to this (possibly synced) script.
 CLUSTER="${CLUSTER:-default}"
-CLUSTER_ENV_FILE="${SCRIPT_DIR}/${CLUSTER}_config/.env.cluster"
+CLUSTER_CONFIG_DIR="${SCRIPT_DIR}/../../../../scripts/cluster"
+CLUSTER_ENV_FILE="${CLUSTER_CONFIG_DIR}/${CLUSTER}_config/.env.cluster"
 # Source the selected cluster's env (CLUSTER_LOGIN, CLUSTER_ISAACLAB_DIR, CLUSTER_SIF_PATH, ...).
 source_cluster_env() {
     if [ ! -f "$CLUSTER_ENV_FILE" ]; then
-        echo "[Error] Cluster config not found: $CLUSTER_ENV_FILE" >&2
-        echo "[Error] Set CLUSTER=<name> for a <name>_config/ dir (available:" \
-            "$(cd "$SCRIPT_DIR" && ls -d *_config 2>/dev/null | sed 's/_config$//' | paste -sd, -))." >&2
+        echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE" >&2
+        echo "[ERROR] Set CLUSTER=<name> for a <name>_config/ dir (available:" \
+            "$(cd "$CLUSTER_CONFIG_DIR" && ls -d *_config 2>/dev/null | sed 's/_config$//' | paste -sd, -))." >&2
         exit 1
     fi
     # shellcheck disable=SC1090
