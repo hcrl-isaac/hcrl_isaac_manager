@@ -11,14 +11,7 @@ file_mounts: {
   "/home/emily/hcrl_isaac_manager/resources/IsaacLab/source/hcrl_isaaclab": "/workspace/isaaclab/source/hcrl_isaaclab",
   "/home/emily/hcrl_isaac_manager/resources/IsaacLab/source/robot_rl": "/workspace/isaaclab/source/robot_rl",
 }
-# Commands to execute after mounting runtime dependencies but before installation
-# Default command here creates a symlink between hcrl_robots (installed at /workspace/isaaclab/resources) and its location within
-#   hcrl_isaaclab, since hcrl_robots files are too big to transfer at runtime
-init_commands:
-  - mkdir -p /workspace/isaaclab/source/hcrl_isaaclab/resources
-  - ln -sf /workspace/isaaclab/resources/hcrl_robots /workspace/isaaclab/source/hcrl_isaaclab/resources/hcrl_robots
-  - ln -sf /workspace/isaaclab/resources/motion_datasets /workspace/isaaclab/source/hcrl_isaaclab/resources/motion_datasets
-  - ln -sf /workspace/isaaclab/resources/ssti_robots /workspace/isaaclab/source/hcrl_isaaclab/resources/ssti_robots
+init_commands: []
 # python executable on the cluster
 "py_executable": "/workspace/isaaclab/isaaclab.sh -p"
 # patterns to exclude when copying dependencies (file_mounts) and working directory (ext_dir)
@@ -27,6 +20,7 @@ init_commands:
   - "**/wandb/**"
   - "**/logs/**"
   - "**/.git/objects/**"
+  - "**/.git/lfs/**"
   - "**/.venv/**"
   - "nohup.out"
   # large exported pretrained policies (only needed by the latent task; >100MB blows Ray's upload limit)

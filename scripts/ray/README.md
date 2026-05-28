@@ -85,18 +85,51 @@ from this interface.
 ## How it works
 
 1. Currently, each server node runs a modified Isaac Lab docker container with some additional dependencies (ray, git-lfs,
-etc.). The `hcrl_robots` repo is also cloned to `/workspace/isaaclab`. This is necessary since `hcrl_robots` files are
-too large to mount at runtime (see [limitations](#current-limitations)).
+etc.).
 
 2. When a job is sent, file mounts (configured in `scripts/ray/job_config.yaml` as `"/path/on/local/": "/path/on/server"`)
 are copied from your local machine to the server. Dependencies are installed in each mount location with `pip install -e .`.
+Large files (robot assets, motion datasets, exported policies) are *excluded* from this upload (`excludes` in
+`job_config.yaml`) and fetched at runtime as W&B artifacts instead — see [Large-file resources](#large-file-resources).
 
-3. User-specified initialization commands (`init_commands` in `job_config.yaml`) are then executed. The default init
-command creates a symlink from the top-level `hcrl_robots` to its usual place in `hcrl_isaaclab/resources`.
+3. User-specified initialization commands (`init_commands` in `job_config.yaml`), if any, are then executed.
 
-4. The job script (`python_script` in `job_config.yaml`) is executed with any additional CLI args passed by the user.
+4. The job script (`python_script` in `job_config.yaml`) is executed with any additional CLI args passed by the user. On
+startup it fetches the large-file resources its task references, then runs as usual.
 
-5. The script finishes or fails, after which file mounts are deleted.
+5. The script finishes or fails, after which file mounts are deleted (the artifact downloads persist in a cache).
+
+## Large-file resources
+
+Large files — robot assets (`resources/hcrl_robots`, `resources/ssti_robots`), motion datasets
+(`resources/motion_datasets`), and exported policies (`tasks/.../policies/<name>`) — are too big to
+upload with each job, so they are versioned as **W&B artifacts** and fetched at runtime by the
+in-script resolver (`hcrl_isaaclab/utils/artifacts.py`). This is transparent: the resolver downloads
+each artifact and symlinks it into the canonical path the configs already reference, so nothing in
+the task configs changes. On a machine where the files already exist (local dev) it is a no-op.
+
+Each task only fetches the artifacts it actually references (auto-detected by scanning the resolved
+env cfg), so a pure-locomotion run does not pull the multi-GB motion datasets. Downloads land in
+`HCRL_ARTIFACT_ROOT` (bind-mounted to a persistent host dir on the cluster), keyed by artifact
+version, so they are fetched once and skipped thereafter; queued jobs pinning different versions
+never collide.
+
+### Adding / updating a large file
+
+1. Register it in `REGISTRY` in `hcrl_isaaclab/utils/artifacts.py` (key, artifact type, canonical
+   `dest`, the `marker` substring that signals a cfg uses it, and `tier`: `persistent` for static
+   bulk, `cache` for LRU-prunable mid-size files).
+2. Upload it from its local path:
+   ```bash
+   python source/hcrl_isaaclab/scripts/tools/upload_artifacts.py <key>   # or --all / --list
+   ```
+   Re-uploading dedupes unchanged content by hash, so it is cheap to re-run when a file changes.
+
+### Cleanup
+
+`HCRL_ARTIFACT_ROOT` grows over time. Bound the `cache`-tier footprint with
+`artifacts.cache_cleanup(max_bytes)` (LRU eviction; `persistent` tier is never auto-pruned). Old
+artifact *versions* in W&B can be deleted via the API/UI to reclaim quota.
 
 ## Current Limitations
 
@@ -104,7 +137,6 @@ There are a couple of limitations on the server setup. They may be fixed over ti
 
 - **Isaac Lab only** *(plan to fix: no)*. Currently, the server is in an Isaac Lab docker container, so it can *only* run Isaac Lab jobs. If you need more general clusters, we recommend using TACC.
 - **Fixed Isaac Lab** *(plan to fix: if demand)*. The runs assume that Isaac Lab itself is unmodified. If you edit Isaac Lab locally, those changes will not be reflected in the runs.
-- **hcrl_isaaclab/resources** *(plan to fix: yes)*. Directories in `hcrl_isaaclab/resources` (just `hcrl_isaaclab` on default setups) are *not* mounted at runtime, since they are too large. For now, we clone any necessary dependencies in `/workspace/isaaclab` on cluster startup, then add symlinks to those dependencies at runtime. If you need an additional dependency, message Emily on Slack to get that added immediately. If you need your dependency to be *dynamic*, or if it is a private repo, this will require more overhead work (1-2 weeks).
 - **Coarse-grained resource allocation** *(plan to fix: yes)*: Currently, resources are allocated as a single GPU node per job (or multiple GPU nodes per job, if required). Some jobs may require fewer resources (e.g. 50% of the gpu, 20% of memory). We may eventually change this so that we can execute more jobs at once.
 
 ## Etiquette
