@@ -101,9 +101,18 @@ on_login() { ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "$@"; }
 # our source-of-truth before each sync.
 stage_node_exec() {
     local dst="${LOCAL_ISAACLAB_DIR}/docker/cluster/cluster_dev"
+    local src="${SCRIPT_DIR}/node_exec.sh"
+    local dst_file="${dst}/node_exec.sh"
     mkdir -p "$dst"
-    cp "${SCRIPT_DIR}/node_exec.sh" "${dst}/node_exec.sh"
-    chmod +x "${dst}/node_exec.sh"
+    # If src == dst (e.g. cluster_dev.sh was copied INTO LOCAL_ISAACLAB_DIR by scripts/cluster.sh,
+    # so SCRIPT_DIR is already the staging dir), skip the cp -- it would fail with
+    # "are the same file".
+    if [ -e "$dst_file" ] && [ "$src" -ef "$dst_file" ]; then
+        chmod +x "$dst_file"
+        return 0
+    fi
+    cp "$src" "$dst_file"
+    chmod +x "$dst_file"
 }
 
 rsync_code() {
