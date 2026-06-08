@@ -121,3 +121,10 @@ The project uses [just](https://just.systems/man/en/introduction.html) to manage
 
 - Installs general dependencies (`just deps`)
 - Creates Ray configuration files from template
+
+### `upload-artifacts [args]`
+
+- Uploads managed large-file resources (robot assets, motion datasets, exported policies) to W&B as versioned artifacts
+- `just upload-artifacts --list` shows the registry + local presence; `--all` uploads everything; or pass specific resource keys
+- Dedups unchanged content by hash (cheap to re-run); reads W&B credentials from `scripts/.env.wandb`
+- These artifacts are fetched back at runtime by the in-script resolver — see [Large-file resources](scripts/ray/README.md#large-file-resources)

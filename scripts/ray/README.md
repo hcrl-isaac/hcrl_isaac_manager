@@ -119,10 +119,12 @@ never collide.
 1. Register it in `REGISTRY` in `hcrl_isaaclab/utils/artifacts.py` (key, artifact type, canonical
    `dest`, the `marker` substring that signals a cfg uses it, and `tier`: `persistent` for static
    bulk, `cache` for LRU-prunable mid-size files).
-2. Upload it from its local path:
+2. Upload it from its local path. From the manager directory:
    ```bash
-   python source/hcrl_isaaclab/scripts/tools/upload_artifacts.py <key>   # or --all / --list
+   just upload-artifacts <key>   # or --all / --list
    ```
+   This sources W&B credentials from `scripts/.env.wandb` and runs the uploader in the `ilab` venv
+   (equivalent to `source/hcrl_isaaclab/scripts/tools/upload_artifacts.py <key>`).
    Re-uploading dedupes unchanged content by hash, so it is cheap to re-run when a file changes.
 
 ### Cleanup

@@ -113,3 +113,16 @@ ray:
     UT_EID=$ut_eid envsubst < scripts/ray/tools/.env.ray.template > scripts/ray/.env.ray; \
     UT_EID=$ut_eid MANAGER_DIR="$( pwd )" envsubst < scripts/ray/tools/job_config.template.yaml > scripts/ray/job_config.yaml; \
     echo "[INFO] Created ray configuration files .env.ray and job_config.yaml in scripts/ray."
+
+# Usage:  just upload-artifacts --list   (registry + local presence)
+#         just upload-artifacts --all    (every registered resource)
+#         just upload-artifacts <key>... (specific resource keys)
+# Upload managed large-file resources (assets, motion datasets, policies) to W&B as versioned artifacts.
+upload-artifacts *args:
+    @if [ ! -f "scripts/.env.wandb" ]; then \
+        echo "[ERROR] scripts/.env.wandb not found; run 'just deps' first."; \
+        exit 1; \
+    fi; \
+    set -a; source scripts/.env.wandb; set +a; \
+    resources/IsaacLab/{{venv_name}}/bin/python \
+        resources/IsaacLab/source/hcrl_isaaclab/scripts/tools/upload_artifacts.py {{args}}
