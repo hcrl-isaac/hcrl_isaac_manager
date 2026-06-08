@@ -103,6 +103,24 @@ case $command in
                 --gpu_per_worker 1 \
                 $job_args
         ;;
+    job_distributed)
+        # Distributed-training variant of `job`: one Ray submission spawns two sub-jobs
+        # (via job_config_distributed.yaml's WRAPPER+WRAPPER python_script), one per GPU
+        # node. Each runs scripts/ray/torchrun_wrapper.py which sets torchrun-style env
+        # vars by IP and execs train.py --distributed. Use when you want a single training
+        # run with a 2-node global batch instead of two independent single-node runs.
+        job_args="$@"
+        echo "[INFO] Executing distributed job command"
+        [ -n "$job_args" ] && echo -e "\tJob arguments: $job_args"
+        job_config=$SCRIPT_DIR/job_config_distributed.yaml
+        echo "[INFO] Executing distributed job script..."
+        RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
+            --config_file $SCRIPT_DIR/ray.cfg \
+            --job_config $job_config \
+            --aggregate_jobs ray/wrap_resources.py \
+                --gpu_per_worker 1 \
+                $job_args
+        ;;
     bench)
         job_args="$@"
         echo "[INFO] Executing bench command"
