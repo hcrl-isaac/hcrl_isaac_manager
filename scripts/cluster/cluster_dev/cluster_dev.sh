@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# cluster_dev.sh — turn an NCSA Delta gpuA40x4 node into a persistent (≤48h) dev box.
+# cluster_dev.sh — turn an NCSA Delta gpuA40x4 node into a persistent (<=48h) dev box.
 #
 # WHY this shape: Delta's *interactive* partition caps at 1h, but *batch* jobs get 48h,
 # and NCSA enables "direct ssh to a compute node in a running job". So we submit a 48h
@@ -9,11 +9,16 @@
 # Delta (password+Duo every login), so the ControlMaster socket — opened ONCE with one
 # Duo approval and kept warm — is the only way to avoid re-authenticating all day.
 #
-# Tomorrow's one command:   ./cluster_dev.sh start          (approve ONE Duo push)
+# Queue a job:              ./cluster_dev.sh start            (approve ONE Duo push)
 # Then it self-tracks the (possibly multi-hour) queue wait in the background.
 # Check anytime:            ./cluster_dev.sh status
-# Use it:                   ./cluster_dev.sh attach          (interactive shell on the node)
-#                           ./cluster_dev.sh exec -- <cmd>   (run a command in the container)
+# Use it:                   ./cluster_dev.sh attach           (interactive shell on the node)
+#                           ./cluster_dev.sh exec -- <cmd>    (run in container, SSH-tethered)
+#                           ./cluster_dev.sh exec --detach -- <cmd>   (run in container, detached
+#                                                                      from SSH master; survives
+#                                                                      master drops; log on login
+#                                                                      node, follow with `tail`)
+#                           ./cluster_dev.sh tail             (follow the latest --detach log)
 # Tear down:                ./cluster_dev.sh stop
 #
 # Everything except the first Duo is non-interactive, so a Claude session can drive
@@ -255,17 +260,68 @@ cmd_attach() {  # interactive shell on the compute node
     fi
 }
 
-cmd_exec() {  # cluster_dev.sh exec -- <command...>  : run inside the Apptainer container on the node
-    [ "${1:-}" = "--" ] && shift
+cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
+    #
+    # Default (foreground): run the container command tethered to this SSH master. Stdout/stderr
+    # stream back to the caller; exit code propagates. Good for short ops (smoke tests, status
+    # queries). FRAGILE for long runs — an SSH master drop kills the in-container process.
+    #
+    # --detach: spawn a `nohup setsid` wrapper ON THE LOGIN NODE that owns srun (or the
+    # inner ssh-to-compute) for the lifetime of the training task. Once disowned, the local
+    # SSH master can drop without taking down the wrapper or its srun child. Output is
+    # redirected to a log file on the login node (default: $HOME/cluster_dev_run_<ts>.log).
+    # Follow it with `cluster_dev.sh tail`. The latest --detach log path is recorded in
+    # ~/.cluster_dev/state (LAST_RUN_LOG) so `tail` finds it without args.
+    local detach="" logfile=""
+    while [ $# -gt 0 ]; do
+        case "${1:-}" in
+            --detach) detach="1"; shift;;
+            --log) logfile="$2"; shift 2;;
+            --) shift; break;;
+            *) break;;
+        esac
+    done
     require_running
     local nodecmd="bash ${REMOTE_ISAACLAB_DIR}/docker/cluster/cluster_dev/node_exec.sh $*"
-    log "[${DD_MODE}] container exec on job ${DD_JOBID}: $*"
-    if [ "$DD_MODE" = "ssh" ]; then
-        ssh "${SSH_OPTS[@]}" -J "$CLUSTER_LOGIN" "${DELTA_USER}@${DD_NODE}" "$nodecmd"
-    else
-        ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
-            "srun --jobid=${DD_JOBID} --overlap --gres=${DELTA_SRUN_GRES} bash -lc '${nodecmd}'"
+    if [ -z "$detach" ]; then
+        log "[${DD_MODE}] container exec on job ${DD_JOBID}: $*"
+        if [ "$DD_MODE" = "ssh" ]; then
+            ssh "${SSH_OPTS[@]}" -J "$CLUSTER_LOGIN" "${DELTA_USER}@${DD_NODE}" "$nodecmd"
+        else
+            ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
+                "srun --jobid=${DD_JOBID} --overlap --gres=${DELTA_SRUN_GRES} bash -lc '${nodecmd}'"
+        fi
+        return
     fi
+    # --detach path. Default log lives in $HOME on the login node (literal `$HOME` is
+    # preserved through the local→ssh hop and expanded by the remote bash).
+    [ -z "$logfile" ] && logfile="\$HOME/cluster_dev_run_$(date -u +%Y%m%d-%H%M%S).log"
+    # Build the inner command (what the detached wrapper will exec). Always go via the login
+    # node — Delta blocks direct login→node ssh without re-auth in srun-mode, so even in
+    # ssh-mode we keep the detach point on the login node for consistency.
+    local inner
+    if [ "$DD_MODE" = "ssh" ]; then
+        inner="ssh -J ${CLUSTER_LOGIN} ${DELTA_USER}@${DD_NODE} bash -lc '${nodecmd}'"
+    else
+        inner="srun --jobid=${DD_JOBID} --overlap --gres=${DELTA_SRUN_GRES} bash -lc '${nodecmd}'"
+    fi
+    log "[${DD_MODE} detached] container exec on job ${DD_JOBID}: $*"
+    log "Log on login node: ${logfile}   (follow with: $(basename "${BASH_SOURCE[0]}") tail)"
+    # Wrap `inner` in double-quotes for bash -c, escaping any inner " (rare for python args).
+    local wrapped="${inner//\"/\\\"}"
+    ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
+        "nohup setsid bash -c \"${wrapped}\" > ${logfile} 2>&1 < /dev/null & disown; sleep 0.3; echo \"[cluster_dev] login-side wrapper pid=\$(pgrep -nf 'nohup setsid bash' || echo ?)\""
+    state_set LAST_RUN_LOG "$logfile"
+}
+
+cmd_tail() {  # cluster_dev.sh tail [LOGFILE]  : follow a detached --detach log on the login node
+    local logfile="${1:-}"
+    [ -z "$logfile" ] && logfile="$(state_get LAST_RUN_LOG)"
+    [ -z "$logfile" ] && { err "No detached run on record. Use 'exec --detach -- <cmd>' first."; exit 1; }
+    ensure_master
+    log "Tailing ${logfile} on ${CLUSTER_LOGIN} (Ctrl-C to stop; training keeps running)…"
+    # -F so it survives the file being missing or rotated.
+    ssh "${SSH_OPTS[@]}" -t "$CLUSTER_LOGIN" "tail -F ${logfile}"
 }
 
 cmd_sync() {  # re-mirror local code → Delta isaaclab dir (and onto the live node workspace)
@@ -294,6 +350,7 @@ case "${1:-}" in
     status)   shift; cmd_status "$@" ;;
     attach)   shift; cmd_attach "$@" ;;
     exec)     shift; cmd_exec "$@" ;;
+    tail)     shift; cmd_tail "$@" ;;
     sync)     shift; cmd_sync "$@" ;;
     stop)     shift; cmd_stop "$@" ;;
     __watch)  shift; cmd_watch_loop "$@" ;;   # internal (used by nohup)
