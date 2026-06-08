@@ -1,15 +1,15 @@
 # File containing environment variables (e.g. W&B credentials)
-env_file: /home/emily/hcrl_isaac_manager/scripts/ray/.env.ray
+env_file: ${MANAGER_DIR}/scripts/ray/.env.ray
 # UT EID (for tracking ownership of Ray jobs)
-user_id: ecs3239
+user_id: ${UT_EID}
 # Working directory during job, should contain your scripts
-ext_dir: /home/emily/hcrl_isaac_manager/resources/IsaacLab/source/hcrl_isaaclab/scripts
+ext_dir: ${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab/scripts
 # Train script to execute on cluster
 python_script: "/workspace/isaaclab/source/hcrl_isaaclab/scripts/bench.py"
 # Additional dependencies to mount at runtime (will also auto-install module dependencies if setup.py is present at root level)
 file_mounts: {
-  "/home/emily/hcrl_isaac_manager/resources/IsaacLab/source/hcrl_isaaclab": "/workspace/isaaclab/source/hcrl_isaaclab",
-  "/home/emily/hcrl_isaac_manager/resources/IsaacLab/source/robot_rl": "/workspace/isaaclab/source/robot_rl",
+  "${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab": "/workspace/isaaclab/source/hcrl_isaaclab",
+  "${MANAGER_DIR}/resources/IsaacLab/source/robot_rl": "/workspace/isaaclab/source/robot_rl",
 }
 init_commands: []
 # python executable on the cluster

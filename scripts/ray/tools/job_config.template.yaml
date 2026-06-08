@@ -11,12 +11,10 @@ file_mounts: {
   "${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab": "/workspace/isaaclab/source/hcrl_isaaclab",
   "${MANAGER_DIR}/resources/IsaacLab/source/robot_rl": "/workspace/isaaclab/source/robot_rl",
 }
-# Commands to execute after mounting runtime dependencies but before installation
-# Default command here creates a symlink between hcrl_robots (installed at /workspace/isaaclab/resources) and its location within
-#   hcrl_isaaclab, since hcrl_robots files are too big to transfer at runtime
-init_commands:
-  - mkdir -p /workspace/isaaclab/source/hcrl_isaaclab/resources
-  - ln -sf /workspace/isaaclab/resources/hcrl_robots /workspace/isaaclab/source/hcrl_isaaclab/resources/hcrl_robots
+# Large-file resources (robot assets, motion datasets, exported policies) are fetched at runtime as
+# W&B artifacts by the in-script resolver (hcrl_isaaclab.utils.artifacts): it downloads them to
+# HCRL_ARTIFACT_ROOT and symlinks them into their canonical paths, so no pre-staging is needed.
+init_commands: []
 # python executable on the cluster
 "py_executable": "/workspace/isaaclab/isaaclab.sh -p"
 # patterns to exclude when copying dependencies (file_mounts) and working directory (ext_dir)
@@ -25,5 +23,8 @@ init_commands:
   - "**/wandb/**"
   - "**/logs/**"
   - "**/.git/objects/**"
+  - "**/.git/lfs/**"
   - "**/.venv/**"
   - "nohup.out"
+  # large exported pretrained policies (only needed by the latent task; >100MB blows Ray's upload limit)
+  - "**/policies/**"

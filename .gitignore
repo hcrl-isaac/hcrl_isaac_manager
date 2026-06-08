@@ -7,5 +7,5 @@ scripts/cluster/*_config
 **ilab/
 outputs/
 scripts/ray/.env.ray
-scripts/ray/job_config.yaml
+scripts/ray/*job_config*.yaml
 resources/

@@ -111,8 +111,10 @@ ray:
     fi; \
     source scripts/.env.wandb; \
     UT_EID=$ut_eid envsubst < scripts/ray/tools/.env.ray.template > scripts/ray/.env.ray; \
-    UT_EID=$ut_eid MANAGER_DIR="$( pwd )" envsubst < scripts/ray/tools/job_config.template.yaml > scripts/ray/job_config.yaml; \
-    echo "[INFO] Created ray configuration files .env.ray and job_config.yaml in scripts/ray."
+    for cfg in job_config bench_job_config job_config_distributed; do \
+        UT_EID=$ut_eid MANAGER_DIR="$( pwd )" envsubst < scripts/ray/tools/$cfg.template.yaml > scripts/ray/$cfg.yaml; \
+    done; \
+    echo "[INFO] Created ray configuration files (.env.ray + job_config/bench_job_config/job_config_distributed .yaml) in scripts/ray."
 
 # Usage:  just upload-artifacts --list   (registry + local presence)
 #         just upload-artifacts --all    (every registered resource)
