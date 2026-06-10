@@ -9,3 +9,5 @@ outputs/
 scripts/ray/.env.ray
 scripts/ray/*job_config*.yaml
 resources/
+wandb/
+worktrees/

@@ -240,7 +240,7 @@ case $command in
         submit_job $job_args
         ;;
     develop)
-        # Persistent Delta dev-node management (start/status/attach/exec/sync/stop)
+        # Persistent dev-node management (start/status/attach/exec/sync/stop); cluster-agnostic.
         exec env CLUSTER="$CLUSTER" "$SCRIPT_DIR/cluster_dev/cluster_dev.sh" "$@"
         ;;
     *)

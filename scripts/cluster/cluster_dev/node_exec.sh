@@ -1,18 +1,31 @@
 #!/usr/bin/env bash
-# node_exec.sh — runs ON the Delta compute node (invoked by `cluster_dev.sh exec`).
+# node_exec.sh — runs ON the cluster compute node (invoked by `cluster_dev.sh exec`).
 # Stages the Apptainer SIF + Isaac Sim caches + code into node-local $TMPDIR once
 # (cached across calls within the same job), then `apptainer exec`s the given command
 # inside the container. Bind-mount list mirrors docker/cluster/run_singularity.sh.
 #
-# [VERIFY q5] assumes `apptainer` is on PATH on gpuA40x4 nodes (Delta config has no
-#   `module load`); if not, add the needed `module load apptainer` here.
-# [VERIFY q6] assumes ${CLUSTER_SIF_PATH}/isaac-lab-base.tar exists and is current.
+# Assumes `apptainer` is on PATH on the compute node (no `module load`); if your site needs
+#   one, add the needed `module load apptainer` here.
+# Assumes ${CLUSTER_SIF_PATH}/isaac-lab-base.tar exists and is current.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 source "${SCRIPT_DIR}/../.env.cluster"
 source "${SCRIPT_DIR}/../.env.wandb"  2>/dev/null || true
 source "${SCRIPT_DIR}/../../.env.base" 2>/dev/null || true
+
+# Some sites ship the container runtime as an Lmod module (e.g. TACC: tacc-apptainer)
+# rather than on PATH. Load it if the cluster's .env.cluster sets CDEV_MODULE_LOAD.
+if [ -n "${CDEV_MODULE_LOAD:-}" ]; then
+    set +u
+    if ! type module >/dev/null 2>&1; then
+        for init in /etc/profile.d/z00_lmod.sh /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/bash; do
+            [ -f "$init" ] && source "$init" && break
+        done
+    fi
+    module load ${CDEV_MODULE_LOAD} || echo "[node_exec] WARNING: 'module load ${CDEV_MODULE_LOAD}' failed"
+    set -u
+fi
 
 PROFILE="${PROFILE:-isaac-lab-base}"
 # Persistent per-job staging dir on node-local scratch (reused across exec calls).
