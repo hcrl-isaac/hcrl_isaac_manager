@@ -26,5 +26,6 @@ init_commands: []
   - "**/.git/lfs/**"
   - "**/.venv/**"
   - "nohup.out"
-  # large exported pretrained policies (only needed by the latent task; >100MB blows Ray's upload limit)
-  - "**/policies/**"
+  # the large exported BFM-Zero policy dir (fetched as a W&B artifact at runtime; >100MB blows
+  # Ray's upload limit). Small git-tracked policies (e.g. g1_locomotion_jit.pt) ship with the job.
+  - "**/policies/g1_bfmzero_q9q549nf**"
