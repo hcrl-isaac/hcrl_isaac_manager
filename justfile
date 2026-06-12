@@ -128,14 +128,3 @@ upload-artifacts *args:
     set -a; source scripts/.env.wandb; set +a; \
     .venv/bin/python \
         resources/IsaacLab/source/hcrl_isaaclab/scripts/tools/upload_artifacts.py {{args}}
-
-# Export trained policies from a checkpoint (no Isaac Sim needed; runs in the manager venv).
-# Usage:  just export --load_run <wandb-run-url-or-local-run-dir> [--all_models] [--formats jit,onnx]
-export *args:
-    @if [ ! -f "scripts/.env.wandb" ]; then \
-        echo "[ERROR] scripts/.env.wandb not found; run 'just deps' first."; \
-        exit 1; \
-    fi; \
-    set -a; source scripts/.env.wandb; set +a; \
-    .venv/bin/python \
-        resources/IsaacLab/source/hcrl_isaaclab/scripts/export.py {{args}}
