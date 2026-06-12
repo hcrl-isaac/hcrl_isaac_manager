@@ -9,4 +9,12 @@ dependencies = [
     "rich==14.2.0",
     "dotenv==0.9.9",
     "argparse==1.1",
+    # artifact uploads + checkpoint export (scripts/tools/upload_artifacts.py, scripts/export.py)
+    "wandb",
+    "pyyaml",
+    "robot-rl",
+    "tensorboard",
 ]
+
+[tool.uv.sources]
+robot-rl = { path = "resources/IsaacLab/source/robot_rl", editable = true }
