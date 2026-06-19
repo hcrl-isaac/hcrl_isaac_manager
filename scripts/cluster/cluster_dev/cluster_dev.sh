@@ -296,6 +296,19 @@ cmd_status() {
 
 # Ensures job RUNNING + master up; sets DD_JOBID, DD_NODE, DD_MODE (ssh|srun).
 require_running() {
+    # CDEV_JOBID overrides the tracked state file: target any RUNNING job of this user (e.g. a
+    # second sentinel the watcher isn't tracking). Such jobs are always driven via srun --overlap
+    # (no ssh-node probe), so it works even when the state file points at a different job.
+    if [ -n "${CDEV_JOBID:-}" ]; then
+        DD_JOBID="$CDEV_JOBID"
+        master_alive || { err "SSH master is down — re-run './cluster_dev.sh start' (needs 2FA)."; exit 1; }
+        local row state; row="$(on_login "squeue -j ${DD_JOBID} -h -o '%T %N' 2>/dev/null")"
+        state="$(echo "$row" | awk '{print $1}')"
+        [ "$state" = "RUNNING" ] || { err "Job ${DD_JOBID} not RUNNING (state=${state:-gone})."; exit 1; }
+        DD_NODE="$(echo "$row" | awk '{print $2}')"; DD_MODE="srun"
+        log "[override] targeting job ${DD_JOBID} on ${DD_NODE} via srun --overlap"
+        return
+    fi
     DD_JOBID="$(state_get JOBID)"; DD_NODE="$(state_get NODE)"
     [ "$(state_get JOB_STATE)" = "RUNNING" ] && [ -n "$DD_JOBID" ] || {
         err "No running job yet (state=$(state_get JOB_STATE)). Run './cluster_dev.sh status'."; exit 1; }
