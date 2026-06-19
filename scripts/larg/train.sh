@@ -33,14 +33,24 @@ if [ "${1:-}" = "--" ]; then shift; extra=("$@"); fi
 envs_arg=""
 [ -n "$num_envs" ] && envs_arg="--num_envs $num_envs"
 
+# Pin the run to specific physical GPUs when CUDA_VISIBLE_DEVICES is set in the caller's env, so multiple
+# (e.g. dual-GPU) runs can share one box without colliding. The tag also disambiguates the log filename.
+cvd_export=""; cvd_tag=""
+if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+  cvd_export="export CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES;"
+  cvd_tag="_gpu$(echo "$CUDA_VISIBLE_DEVICES" | tr ',' '-')"
+fi
+
 ts="\$(date +%Y%m%d-%H%M%S)"
-log="\$HOME/larg_train_${task}_${ts}.log"
+log="\$HOME/larg_train_${task}${cvd_tag}_${ts}.log"
 remote_cmd="cd \$HOME/$LARG_REMOTE_DIR/$ILAB_REL && \
   export PATH=\$HOME/.local/bin:\$PATH ACCEPT_EULA=Y OMNI_KIT_ACCEPT_EULA=YES && \
+  export LD_PRELOAD=\"\$(ls ilab/lib/python3.11/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)\${LD_PRELOAD:+:\$LD_PRELOAD}\" && \
+  ${cvd_export} \
   set -a; source \$HOME/$LARG_REMOTE_DIR/scripts/.env.wandb 2>/dev/null; set +a; \
   setsid ./ilab/bin/python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=$NPROC \
     $TRAIN --distributed --server --task $task \
-    --run_name $run_name --run_group $run_group $envs_arg ${extra[*]} \
+    --run_name \"$run_name\" --run_group \"$run_group\" $envs_arg ${extra[*]} \
     > $log 2>&1 < /dev/null & \
   echo started pid \$!; echo log: $log"
 
