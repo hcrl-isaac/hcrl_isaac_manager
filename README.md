@@ -57,23 +57,72 @@ scripts/cluster.sh job <train args here>
 ```
 See the [Cluster README](scripts/cluster/README.md) for more details.
 
+#### LARG GPU Boxes
+
+The UT LARG lab workstations are bare-metal multi-GPU boxes (no SLURM, no containers) reachable directly over SSH. Sync code and deploy to these clusters with:
+```bash
+scripts/larg/deploy.sh <host>                                      # one-time: rsync + build the ilab venv
+scripts/larg/train.sh <host> <task> <run_name> [run_group] [num_envs]
+```
+See the [LARG README](scripts/larg/README.md) for the host list, all scripts, and env-var options.
+
+## W&B Workspace Setup
+
+We add two metrics to the W&B workspace that can be used as the x-axis in line graphs and media (set them in the workspace
+settings, in the top left).)
+
+- `local_step` is the training iteration, similar to the default `_step` metric. W&B forces `_step` to be monotonically
+increasing, which means out-of-process/asynchronously logged videos cannot be logged at the step they are being recorded
+for. `local_step` is a workaround for this, and we recommend using it instead of `_step`.
+- `env_step` is the total number of environment steps. It is computed as `local_step * num_envs * num_steps_per_env`.
+This can be useful for comparing training runs that use a different number of environments.
+
 # Asynchronous Video Logging
 
-Environments that do not require cameras during training **can** be deployed to GPU clusters without RT cores, e.g. A100s and H100s. These runs will not support video recording synchronously during training. We instead provide a utility script for asynchronously logging training videos to W&B from any local machine that meets Isaac Sim's [GPU requirements](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/requirements.html#system-requirements).
+Environments that do not require cameras during training **can** be deployed to GPU clusters without RT cores, e.g. A100s and H100s. These runs will not support video recording synchronously during training. Instead, the trainer logs rollout state to W&B and tags the run; a separate **async video logger** running on any local machine that meets Isaac Sim's [GPU requirements](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/requirements.html#system-requirements) then discovers the tagged run, pulls its checkpoints, renders the videos, and uploads them back to the same W&B run.
 
-To asynchronously log videos to W&B, start the listener with
+### 1. Tag the training run
+
+When sending a cluster job, pass **both** `--video` and `--server` to `train.py`. `--server` tells the trainer it is on a headless (no-RT) box, so instead of spawning a local recorder it tags the W&B run with `log_videos_async` for the async logger to pick up (`--video` alone, on an RT-capable box, records in-process instead).
+
+### 2. Run the async video logger (on an RT-capable device)
+
+The unified logger is `hcrl_isaaclab/scripts/video_logger.py`; run it from the `ilab` venv.
+
 ```bash
-scripts/video_listener.sh add --task <task_name>
+python video_logger.py --mode async --task <task_name> --wandb_project <entity>/<project> [options]
 ```
 
-Remove the listener with
+Async mode scans `--wandb_project` for `log_videos_async`-tagged runs and records any checkpoints they haven't logged yet. Useful options:
+
+| Arg | Default | Purpose |
+| --- | --- | --- |
+| `--task <id>` | -- | IsaacLab env id to rebuild for rendering (required). |
+| `--wandb_project <entity>/<project>` | -- | Project to scan for tagged runs (required in async mode). |
+| `--num_envs <N>` | 64 | Env count for the small render sim. |
+| `--video_length <steps>` | 400 | Clip length in env steps (capped to one episode). |
+| `--train_effective_envs <N>` | -- | Training run's `num_envs * world_size`, so the curriculum clock is restored correctly in the render sim (otherwise the curriculum looks fully ramped). |
+| `--rerecord_from <iter>` / `--rerecord_all` | -- | Re-record checkpoints ≥ `iter` (or all), uploading alongside the existing videos. |
+| `--max_runs_per_sweep <N>` | 0 (no limit) | Record `N` source runs then exit. Use `1` under an outer keeper loop so each process renders one run with a fresh sim. |
+| `--stochastic` | off | Record the policy **sampling** actions (training-time exploration noise) instead of the deterministic mean. |
+
+For a long-lived logger, wrap the `--max_runs_per_sweep 1` invocation in a loop that restarts it each pass and prevents the sim from hanging.
+
+### Cron listener
+
+To run the async logger automatically, register a cron listener (every 30 min):
+
 ```bash
-scripts/video_listener.sh remove --task <task_name>
+scripts/video_listener.sh add --task <task_name> --wandb_project <entity>/<project>
 ```
 
-This sets up a cron job to run the script `hcrl_isaaclab/scripts/utils/log_videos_async.sh` every 30 minutes. Asynchronous videos for a project can also be created manually using the `hcrl_isaaclab/scripts/log_videos_async.py` script.
+Remove it with:
 
-More script options can be viewed with `scripts/video_listener.sh --help`. When sending a job to the cluster, be sure to use the `--video` flag to enable async video logging.
+```bash
+scripts/video_listener.sh remove --task <task_name> --wandb_project <entity>/<project>
+```
+
+This installs a cron job that runs `hcrl_isaaclab/scripts/utils/log_videos_async.sh`, which activates the `ilab` venv, sources your W&B credentials, skips the pass if GPU 0 is >50% busy, and invokes `video_logger.py --mode async`. See `scripts/video_listener.sh --help` for all options.
 
 # Justfile Targets
 
