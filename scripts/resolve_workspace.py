@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 """Resolve a per-project workspace into a flat, deduped gitman config, then materialize it.
 
-The hcrl Isaac Lab workspace is composed from independent repos: a shared core (``hcrl_isaaclab``),
-the RL package (``robot_rl``), shared robots (``hcrl_robots``), and per-project task + robot repos
-(``ssti_tasks``/``ssti_robots``, ``umrl_tasks``, …). Each repo declares only its *direct* deps in a
-``dependencies.yaml``; this script walks that graph **transitively**, **dedups by name** (so a dep
-shared by two projects is checked out once), detects ref conflicts, and writes a single flat
-``resources/gitman.yml`` (everything a sibling under ``resources/``). ``gitman update`` then fetches.
+Each repo (core ``hcrl_isaaclab``, ``robot_rl``, shared ``hcrl_robots``, per-project ``*_tasks`` /
+``*_robots``) declares only its *direct* deps in a ``dependencies.yaml``; this resolves them into one
+flat ``gitman.yml`` (all repos siblings under ``resources/``) for ``gitman update`` to fetch.
 
-This is the "west-style flat/name-keyed/dedup resolver, gitman as the fetch backend" from the reorg
-design: gitman alone would vendor a nested copy of a shared dep per consumer; the dedup pass here is
-what guarantees one copy.
+The dedup-by-name pass is the reason this exists rather than plain gitman: gitman alone vendors a
+nested copy of a shared dep per consumer, so a dep two projects share would be checked out twice.
 
 Manifest (``workspace.yaml`` at the manager root)::
 

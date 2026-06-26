@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Scaffold a new ``<name>_tasks`` extension repo for the hcrl Isaac Lab workspace.
 
-Mirrors Isaac Lab's external-extension template: produces a self-contained task package that registers
-its tasks under its own source namespace (``<name>/Task-vN``) against the shared ``hcrl_isaaclab``
-core. The generated package's ``register_task`` calls auto-derive the source from the package name, so
-a repo named ``foo_tasks`` namespaces under ``foo/`` with no extra wiring.
+Produces a self-contained task package (mirroring Isaac Lab's external-extension template). Its
+``register_task`` calls auto-derive the source from the package name, so ``foo_tasks`` namespaces
+under ``foo/`` against the shared ``hcrl_isaaclab`` core with no extra wiring.
 
     python scripts/new_tasks.py foo            # -> resources/foo_tasks/
 
