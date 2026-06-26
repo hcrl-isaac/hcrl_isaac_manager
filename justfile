@@ -26,13 +26,22 @@ deps:
 
 setup:
     just deps
-    uv venv --python 3.11 resources/IsaacLab/{{venv_name}}; \
-    cd resources/IsaacLab && source {{venv_name}}/bin/activate; \
+    just resolve            # workspace.yaml -> flat deduped gitman.yml + fetch repos as siblings under resources/
+    uv venv --python 3.11 resources/{{venv_name}}; \
+    source resources/{{venv_name}}/bin/activate; \
     uv pip install --upgrade pip; \
     uv pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com; \
     uv pip install -U torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128; \
-    ./isaaclab.sh -u {{venv_name}}; \
-    ./isaaclab.sh -i rsl_rl
+    if [ -d resources/IsaacLab/source ]; then \
+        echo "[setup] IsaacLab source present -> editable install"; \
+        for d in resources/IsaacLab/source/isaaclab*/; do [ -d "$d" ] && uv pip install -e "$d"; done; \
+    else \
+        echo "[setup] IsaacLab via pip (satisfied by hcrl_isaaclab's isaaclab* deps)"; \
+    fi; \
+    uv pip install rsl_rl-lib; \
+    for d in resources/hcrl_isaaclab resources/robot_rl resources/*_tasks resources/*_robots; do \
+        [ -d "$d" ] && uv pip install --extra-index-url https://pypi.nvidia.com -e "$d"; \
+    done
 
 clean:
     @venv_dir="$( pwd )/resources/IsaacLab/{{venv_name}}"; \
