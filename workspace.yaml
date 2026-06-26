@@ -1,0 +1,8 @@
+# Which projects + IsaacLab mode this workspace composes. `resolve_workspace.py` turns this into a
+# flat, deduped gitman.yml (all repos siblings under resources/).
+org: Creampelt
+isaaclab:
+  source: false        # true → check out IsaacLab source under resources/IsaacLab; false → pip isaacsim/isaaclab
+  version: "5.1.0"
+projects: [ssti, umrl]   # -> ssti_tasks + umrl_tasks (and their transitive robot deps)
+always: [hcrl_isaaclab, robot_rl]

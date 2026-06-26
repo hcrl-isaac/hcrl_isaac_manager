@@ -128,3 +128,11 @@ upload-artifacts *args:
     set -a; source scripts/.env.wandb; set +a; \
     .venv/bin/python \
         resources/IsaacLab/source/hcrl_isaaclab/scripts/tools/upload_artifacts.py {{args}}
+
+# Resolve workspace.yaml -> flat deduped gitman.yml, then fetch all repos (flat under resources/).
+resolve:
+    .venv/bin/python scripts/resolve_workspace.py --manifest workspace.yaml --update
+
+# Scaffold a new <name>_tasks extension repo under resources/ (registers under the <name>/ namespace).
+new-tasks name:
+    .venv/bin/python scripts/new_tasks.py {{name}}
