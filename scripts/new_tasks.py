@@ -78,10 +78,22 @@ def _files(name: str, org: str) -> dict[str, str]:
         ),
         "README.md": (
             f"# {pkg}\n\n"
-            f"`{name}`-project task extension for hcrl Isaac Lab. Tasks register under the `{name}/` "
-            "namespace against the shared `hcrl_isaaclab` core.\n\n"
-            f"Install via the manager: add `{name}` to `workspace.yaml` `projects:` and run "
-            "`python scripts/resolve_workspace.py --update`.\n"
+            f"`{name}` task extension for the hcrl Isaac Lab workspace. Tasks register under the "
+            f"`{name}/` source namespace (via `hcrl_isaaclab.tasks_registry.register_task`) and run "
+            "against the shared `hcrl_isaaclab` core, coexisting with the other project task packages.\n\n"
+            "## Domains\n\n"
+            "- `example/` — replace with this project's task domains.\n\n"
+            "## Install\n\n"
+            f"Normally installed as part of the workspace via the manager: add `{name}` to "
+            "`workspace.yaml`'s `projects:` and run `just setup`. Standalone, with core already in the "
+            "env: `pip install -e .`.\n\n"
+            "## Run\n\n"
+            "```bash\n"
+            f"python scripts/train.py --task <Task-id> --source {name}   # --source only needed on a shared id\n"
+            "```\n\n"
+            "## Dependencies\n\n"
+            f"Core `hcrl_isaaclab` (and `{name}_robots` if this project has its own robots) — see "
+            "`dependencies.yaml`.\n"
         ),
         ".gitignore": "__pycache__/\n*.pyc\n*.egg-info/\nlogs/\noutputs/\n.artifacts/\n",
     }
