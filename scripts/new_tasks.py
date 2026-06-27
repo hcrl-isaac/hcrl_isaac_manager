@@ -97,20 +97,63 @@ def _files(name: str, org: str) -> dict[str, str]:
         ),
         ".github/PULL_REQUEST_TEMPLATE.md": (
             "## Summary\n\n"
-            "<!-- What does this change and why. One or two sentences. -->\n\n"
-            f"## Scope check ({pkg})\n\n"
-            f"This repo holds {name} tasks, namespaced under `{name}/`. Shared infra/MDP belong in "
-            f"`hcrl_isaaclab`; shared robots in `hcrl_robots`.\n\n"
-            f"- [ ] Tasks register via `register_task` and resolve under the `{name}/` source namespace.\n"
-            "- [ ] No infra/shared-MDP changes that belong upstream in core; matching core PR linked if so.\n"
-            "- [ ] Dependency pins in `dependencies.yaml` are correct (and bumped if this needs new core).\n\n"
-            "## Testing\n\n"
-            "<!-- Commands run + result. -->\n\n"
-            "- [ ] `pre-commit run --all-files` clean.\n"
-            "- [ ] Loaded a changed task in-sim, e.g. "
-            f"`python scripts/train.py --task <Task-id> --source {name} --headless`.\n\n"
-            "## Notes\n\n"
-            "<!-- Related core / manager PRs, migration notes, follow-ups. -->\n"
+            "<!-- What changed and why. -->\n\n"
+            "## Checklist\n\n"
+            f"- [ ] Changes fit within this repo's scope — {name} tasks under the `{name}/` namespace. "
+            "Shared infra/robots belong upstream (`hcrl_isaaclab` / `hcrl_robots`).\n"
+            "- [ ] Ran the GPU test suite locally (`pytest -m gpu`). CI runs only the CPU build tests + lint.\n"
+            "- [ ] Added tests for any new functionality not already covered by the registration/build "
+            "smoke (usually unnecessary — the smoke tests cover every registered task automatically).\n"
+        ),
+        "pytest.ini": "[pytest]\ntestpaths = tests\nmarkers =\n    gpu: heavier check that instantiates env cfgs (needs a GPU)\n",
+        "tests/conftest.py": (
+            '"""Pytest fixtures: launch Isaac Sim once per session (skip when absent)."""\n\n'
+            "import pytest\n\n"
+            "from hcrl_isaaclab import testing\n\n\n"
+            "def pytest_configure(config):\n"
+            '    config.addinivalue_line("markers", "gpu: heavier check that instantiates env cfgs (needs a GPU)")\n\n\n'
+            '@pytest.fixture(scope="session")\n'
+            "def sim_app():\n"
+            "    if not testing.isaac_sim_available():\n"
+            '        pytest.skip("Isaac Sim not installed")\n'
+            "    return testing.launch_app(headless=True)\n"
+        ),
+        "tests/test_smoke.py": (
+            f'"""Smoke tests for {pkg} (CPU: register + build; GPU: create + reset)."""\n\n'
+            "import pytest\n\n"
+            "from hcrl_isaaclab import testing\n\n"
+            f'PACKAGE = "{pkg}"\n'
+            f'SOURCE = "{name}"\n\n\n'
+            "def test_tasks_register(sim_app):\n"
+            "    testing.run_registration_smoke(PACKAGE, SOURCE, min_expected=1)\n\n\n"
+            "def test_tasks_build(sim_app):\n"
+            "    testing.run_build_smoke(PACKAGE, SOURCE)\n\n\n"
+            "@pytest.mark.gpu\n"
+            "def test_tasks_run(sim_app):\n"
+            "    testing.run_gpu_smoke(PACKAGE, SOURCE)\n"
+        ),
+        ".github/workflows/ci.yml": (
+            "name: ci\n\n"
+            "on:\n  pull_request:\n  push:\n    branches: [main]\n\n"
+            "jobs:\n"
+            "  lint:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@v4\n"
+            "      - uses: actions/setup-python@v5\n"
+            '        with:\n          python-version: "3.11"\n'
+            "      - run: python -m pip install pre-commit\n"
+            "      - run: pre-commit run --all-files --show-diff-on-failure\n\n"
+            "  build:\n"
+            "    # CPU tier; importing needs the Isaac Sim env, so run on the self-hosted `isaac` runner.\n"
+            "    name: build smoke (CPU)\n"
+            "    runs-on: [self-hosted, isaac]\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@v4\n"
+            "      - name: Install + run CPU smoke\n"
+            "        run: |\n"
+            "          ${ILAB_PYTHON:-python} -m pip install -e .\n"
+            '          ${ILAB_PYTHON:-python} -m pytest -m "not gpu" -q\n'
         ),
         ".gitignore": "__pycache__/\n*.pyc\n*.egg-info/\nlogs/\noutputs/\n.artifacts/\n",
     }
