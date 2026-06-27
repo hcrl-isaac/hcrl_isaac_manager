@@ -10,7 +10,7 @@ nested copy of a shared dep per consumer, so a dep two projects share would be c
 
 Manifest (``workspace.yaml`` at the manager root)::
 
-    org: Creampelt                       # default GitHub org for bare repo names
+    org: hcrl-isaac                      # default GitHub org for bare repo names
     isaaclab:
       source: false                      # true → check out IsaacLab source under resources/IsaacLab
       version: "5.1.0"                    # pin for pip mode (informational here)
@@ -21,7 +21,7 @@ Manifest (``workspace.yaml`` at the manager root)::
 
     deps:
       - name: hcrl_isaaclab
-        git: git@github.com:Creampelt/hcrl_isaaclab.git   # optional; derived from org + name if omitted
+        git: git@github.com:hcrl-isaac/hcrl_isaaclab.git  # optional; derived from org + name if omitted
         ref: main
 """
 
@@ -64,7 +64,7 @@ def resolve(manifest: dict) -> dict[str, dict]:
     Raises:
         SystemExit: Two repos request the same dependency name at different refs (unresolved conflict).
     """
-    org = manifest.get("org", "Creampelt")
+    org = manifest.get("org", "hcrl-isaac")
     resolved: dict[str, dict] = {}
 
     # seed roots: the always-present repos + each selected project's task repo

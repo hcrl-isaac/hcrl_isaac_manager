@@ -95,6 +95,23 @@ def _files(name: str, org: str) -> dict[str, str]:
             f"Core `hcrl_isaaclab` (and `{name}_robots` if this project has its own robots) — see "
             "`dependencies.yaml`.\n"
         ),
+        ".github/PULL_REQUEST_TEMPLATE.md": (
+            "## Summary\n\n"
+            "<!-- What does this change and why. One or two sentences. -->\n\n"
+            f"## Scope check ({pkg})\n\n"
+            f"This repo holds {name} tasks, namespaced under `{name}/`. Shared infra/MDP belong in "
+            f"`hcrl_isaaclab`; shared robots in `hcrl_robots`.\n\n"
+            f"- [ ] Tasks register via `register_task` and resolve under the `{name}/` source namespace.\n"
+            "- [ ] No infra/shared-MDP changes that belong upstream in core; matching core PR linked if so.\n"
+            "- [ ] Dependency pins in `dependencies.yaml` are correct (and bumped if this needs new core).\n\n"
+            "## Testing\n\n"
+            "<!-- Commands run + result. -->\n\n"
+            "- [ ] `pre-commit run --all-files` clean.\n"
+            "- [ ] Loaded a changed task in-sim, e.g. "
+            f"`python scripts/train.py --task <Task-id> --source {name} --headless`.\n\n"
+            "## Notes\n\n"
+            "<!-- Related core / manager PRs, migration notes, follow-ups. -->\n"
+        ),
         ".gitignore": "__pycache__/\n*.pyc\n*.egg-info/\nlogs/\noutputs/\n.artifacts/\n",
     }
 
@@ -102,7 +119,7 @@ def _files(name: str, org: str) -> dict[str, str]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("name", help="Project name (without the _tasks suffix), e.g. 'foo' -> foo_tasks.")
-    ap.add_argument("--org", default="Creampelt")
+    ap.add_argument("--org", default="hcrl-isaac")
     ap.add_argument("--dest", default=None, help="Output dir (default: resources/<name>_tasks).")
     args = ap.parse_args()
 
