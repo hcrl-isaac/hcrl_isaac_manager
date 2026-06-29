@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Cluster interface: build/push the shared Isaac .sif and submit jobs.
-#
-# Decoupled from the IsaacLab source tree -- the .sif is the SAME shared image Ray uses
-# (scripts/docker/), Apptainer-converted, so the two deploy paths share one image and the cluster build
-# no longer requires resources/IsaacLab. `CLUSTER=<name>` selects a cluster config under
-# scripts/cluster/config/<name> (default: "default").
+# Cluster interface: build/push the shared Isaac .sif (Apptainer-converted from the same image Ray uses)
+# and submit jobs. CLUSTER=<name> selects scripts/cluster/config/<name> (default: "default").
 set -euo pipefail
 [ -z "${CLUSTER:-}" ] && CLUSTER="default"
 cd "$(dirname "$0")"  # scripts/

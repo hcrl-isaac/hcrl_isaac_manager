@@ -124,9 +124,8 @@ def main() -> None:
             print(f"[resolve] pip mode: removing orphaned IsaacLab source clone at {isaaclab_dir}")
             shutil.rmtree(isaaclab_dir)
 
-    # A repo's transitive deps live in its own dependencies.yaml, which we can only read once that
-    # repo is checked out. So resolve -> gitman update -> re-resolve, looping until the repo set
-    # stops growing (fixpoint). Without --update we just write the first-pass gitman.yml and stop.
+    # A repo's transitive deps are in its own dependencies.yaml, readable only once it's checked out --
+    # so resolve -> gitman update -> re-resolve to a fixpoint. Without --update, write the first pass + stop.
     prev_names: set[str] | None = None
     while True:
         resolved = resolve(manifest)

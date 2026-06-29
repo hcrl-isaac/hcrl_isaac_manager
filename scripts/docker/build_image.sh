@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Build the shared Isaac image used by BOTH Ray and the HPC Apptainer (.sif) build.
-#
-# A plain `docker build` of scripts/docker/Dockerfile -- no IsaacLab container.py, no source COPY:
-# isaacsim/Kit from the nvcr base, Isaac Lab from pip, workspace code mounted + editable-installed at
-# job start (see entrypoint.sh). The resulting image is what `scripts/cluster.sh` converts to a .sif and
-# what the Ray job config runs, so the two deploy paths share one image.
+# Plain `docker build` of scripts/docker/Dockerfile -- the shared image used by BOTH Ray and the HPC .sif
+# (nvcr isaacsim base + pip Isaac Lab, workspace code mounted + PYTHONPATH'd at job start; see entrypoint.sh).
 set -euo pipefail
 cd "$(dirname "$0")"
 

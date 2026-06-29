@@ -1,12 +1,7 @@
-# Shared Isaac image, reused by BOTH the Ray worker and the HPC Apptainer (.sif) build.
-#
-# Decoupled from the IsaacLab source tree: isaacsim/Kit comes from the nvcr base image, Isaac Lab is
-# installed from pip, and the workspace extensions (hcrl_isaaclab, robot_rl, *_tasks, packaged *_robots)
-# are NOT baked in -- they are mounted and PYTHONPATH'd at job start (see scripts/docker/entrypoint.sh),
-# so code changes sync without rebuilding the image. In source mode, the local IsaacLab source is mounted
-# and PYTHONPATH'd ahead of the baked pip isaaclab.
-#
-# Build: scripts/docker/build_image.sh  (plain `docker build`, no IsaacLab container.py / source COPY).
+# Shared Isaac image, reused by BOTH the Ray worker and the HPC Apptainer (.sif). Decoupled from the
+# IsaacLab source tree: nvcr isaacsim/Kit base + pip Isaac Lab; the workspace extensions are NOT baked in
+# -- they're mounted + PYTHONPATH'd at job start (see entrypoint.sh) so code syncs without a rebuild.
+# Build: scripts/docker/build_image.sh.
 
 ARG ISAACSIM_BASE_IMAGE=nvcr.io/nvidia/isaac-sim
 ARG ISAACSIM_VERSION=5.1.0
@@ -35,9 +30,8 @@ RUN ${ISAAC_PY} -m pip install --upgrade pip && \
     ${ISAAC_PY} -m pip install "isaaclab==2.3.2.post1" "rsl-rl-lib" && \
     ${ISAAC_PY} -m pip install "ray[default,tune]==2.50.1" optuna bayesian-optimization gitman
 
-# Workspace package runtime deps. The workspace packages (hcrl_isaaclab, robot_rl, *_tasks) are mounted
-# + PYTHONPATH'd at runtime (not pip-installed), so their *dependencies* must be baked here. Keep in sync
-# with resources/robot_rl + resources/hcrl_isaaclab deps (TODO: auto-extract from their pyproject/setup).
+# Runtime deps of the mounted workspace packages (PYTHONPATH'd, not pip-installed, so their deps must be
+# baked). Keep in sync with resources/robot_rl + resources/hcrl_isaaclab (TODO: auto-extract from pyproject).
 RUN ${ISAAC_PY} -m pip install \
     "tensordict>=0.7.0" GitPython onnx "POT==0.9.6" "onnxscript>=0.5.4" \
     psutil "wandb>=0.19.9" onnxruntime urdfpy usd-core "networkx>=3.3" rtree

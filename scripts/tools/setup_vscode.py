@@ -23,9 +23,8 @@ def main() -> None:
 
     from isaacsim import SimulationApp  # noqa: PLC0415 -- import after the EULA env is set
 
-    # Boot Kit so the Isaac Sim extension layout is materialized/located authoritatively, then glob
-    # the extension directories Pylance needs. (Kit loads most extensions via its own finder rather
-    # than sys.path, so a sys.path snapshot misses almost everything -- we walk the dirs instead.)
+    # Boot Kit so the extension layout is materialized, then glob the ext dirs Pylance needs (Kit loads
+    # most extensions via its own finder, not sys.path, so a sys.path snapshot would miss them).
     app = SimulationApp({"headless": True})
     import isaacsim  # noqa: PLC0415
 

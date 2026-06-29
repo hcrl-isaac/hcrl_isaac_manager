@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Docker interface for the shared Isaac image (reused by Ray and the HPC .sif).
-#
-# Replaces the old IsaacLab container.py-driven flow (which built FROM the IsaacLab source tree). The
-# new image is decoupled from that source: isaacsim from the nvcr base + Isaac Lab from pip, workspace
-# code mounted at job start. See scripts/docker/.
+# Docker interface for the shared Isaac image (reused by Ray + the HPC .sif). Decoupled from the
+# IsaacLab source tree: nvcr isaacsim base + pip Isaac Lab, workspace code mounted at job start.
 set -euo pipefail
 cd "$(dirname "$0")"
 

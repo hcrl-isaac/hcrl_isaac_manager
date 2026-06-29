@@ -6,11 +6,9 @@ bash_utils := "$( pwd )/scripts/utils.sh"
 
 set shell := ["bash", "-c"]
 
-# Single uv-managed venv at the manager root (./ilab). `uv sync` / `uv run` target it via this var;
-# `uv pip install` targets it via `--python {{venv_py}}`.
+# Single uv venv at ./ilab: `uv sync`/`uv run` use this var; `uv pip install` uses `--python {{venv_py}}`.
 export UV_PROJECT_ENVIRONMENT := venv_name
-# Neutralize any venv the user's shell profile auto-activates, so uv never operates on it by accident
-# (a stray `VIRTUAL_ENV` + `uv sync --active` will prune that env to this project's deps).
+# Neutralize any profile-activated venv so a stray VIRTUAL_ENV + `uv sync --active` can't prune it.
 export VIRTUAL_ENV := ""
 
 # Manager-only dependencies (ray/cluster tooling). Creates the single `ilab` venv and installs the
@@ -38,8 +36,7 @@ deps:
 setup:
     just deps
     just resolve            # workspace.yaml -> flat deduped gitman.yml + fetch repos as siblings under resources/
-    @# Install the Blackwell-correct torch (cu128) FIRST so nothing downstream pulls a cu126 build that
-    @# then "satisfies" the torch>=2.7 constraint and sticks. Everything after sees torch already present.
+    @# Install cu128 torch FIRST, else something later pulls a cu126 build that "satisfies" torch>=2.7 and sticks.
     uv pip install --python {{venv_py}} --torch-backend cu128 torch==2.7.0 torchvision==0.22.0
     @# isaacsim/torch otherwise come transitively from isaaclab (pip mode) or explicitly (source mode).
     if grep -Eq '^[[:space:]]*source:[[:space:]]*true' workspace.yaml; then \
@@ -61,10 +58,8 @@ setup:
     done
     just vscode
 
-# Generate .vscode/settings.json so the workspace can be developed from the manager directory.
-# Boots a headless Isaac Sim to snapshot the Kit extension paths (works for both source and pip
-# Isaac Lab; the official `python -m isaaclab --generate-vscode-settings` can't import omni.kit_app
-# under a pip-installed isaacsim).
+# Generate .vscode/settings.json by booting a headless Isaac Sim to snapshot the Kit extension paths
+# (the official `python -m isaaclab --generate-vscode-settings` can't import omni.kit_app under pip isaacsim).
 vscode:
     @echo "[vscode] generating .vscode/settings.json via headless SimulationApp..."
     OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} scripts/tools/setup_vscode.py || echo "[vscode][WARN] settings generation failed"
@@ -81,9 +76,8 @@ clean:
     fi
     @echo "[INFO] Successfully cleaned up environment."
 
-# Docker interface (passthrough to scripts/container.sh): build the shared Isaac image -- isaacsim from
-# the nvcr base + Isaac Lab from pip, workspace code mounted at job start. Reused by Ray + the HPC .sif.
-#   just docker build   (or `just docker`)
+# Docker interface (-> scripts/container.sh): build the shared Isaac image (nvcr isaacsim + pip Isaac Lab,
+# code mounted at job start), reused by Ray + the HPC .sif. E.g. `just docker build`.
 docker *args:
     if ! command -v docker >/dev/null 2>&1; then \
         curl -fsSL https://get.docker.com -o get-docker.sh; \
@@ -94,9 +88,8 @@ docker *args:
     fi
     scripts/container.sh {{args}}
 
-# Cluster interface (passthrough to scripts/cluster.sh). The first arg may be a cluster name (when a
-# matching scripts/cluster/config/<name> exists); otherwise CLUSTER env / "default" is used. e.g.:
-#   just cluster multi-delta repush      just cluster delta setup      CLUSTER=delta just cluster repush
+# Cluster interface (-> scripts/cluster.sh). First arg may be a cluster name (if config/<name> exists),
+# else CLUSTER env / "default". E.g. `just cluster multi-delta repush` or `CLUSTER=delta just cluster setup`.
 cluster *args:
     @set -- {{args}}; \
     if [ -n "${1:-}" ] && [ -d "scripts/cluster/config/${1}" ]; then \
@@ -114,11 +107,8 @@ add-cluster:
 ray *args:
     scripts/ray.sh {{args}}
 
-# Upload managed large-file resources (assets, motion datasets, policies) to W&B as versioned artifacts.
-# Usage:  just upload-artifacts            (auto: every present resource >= 50MB -- the ones too big for the job upload)
-#         just upload-artifacts --list     (registry + sizes + large unregistered dirs)
-#         just upload-artifacts --all      (every registered resource, any size)
-#         just upload-artifacts <key>...   (specific resource keys)
+# Upload managed large-file resources (assets, datasets, policies) to W&B as versioned artifacts.
+# Args: none/--auto (present resources >=50MB), --list, --all, or specific <key>...
 upload-artifacts *args:
     @if [ ! -f "scripts/.env.wandb" ]; then \
         echo "[ERROR] scripts/.env.wandb not found; run 'just deps' first."; \
