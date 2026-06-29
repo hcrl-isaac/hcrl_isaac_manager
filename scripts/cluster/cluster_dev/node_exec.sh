@@ -38,13 +38,15 @@ SIF="${STAGE}/${PROFILE}.sif"
 
 stage_once() {
     # The shared image is a single immutable .sif file (Kit writes go to a tmpfs overlay via
-    # --writable-tmpfs; the Isaac Sim caches are bound rw). Copy it to node-local scratch once.
-    [ -f "$SIF" ] && return 0
+    # --writable-tmpfs; the Isaac Sim caches are bound rw). Copy it to node-local scratch once -- but
+    # re-copy if the pushed image is newer than the staged copy, so a `cluster.sh repush` takes effect
+    # without manually clearing the node cache.
+    local src="${CLUSTER_SIF_PATH}/${PROFILE}.sif"
+    [ -f "$SIF" ] && [ ! "$src" -nt "$SIF" ] && return 0
     mkdir -p "$STAGE"
-    echo "[node_exec] staging container + caches into ${STAGE} (first call only)..."
+    echo "[node_exec] staging container + caches into ${STAGE} (sif new/updated)..."
     cp -rn "$CLUSTER_ISAAC_SIM_CACHE_DIR" "$STAGE/" 2>/dev/null || true
-    cp "${CLUSTER_SIF_PATH}/${PROFILE}.sif" "$SIF" \
-        || { echo "[node_exec] could not stage ${CLUSTER_SIF_PATH}/${PROFILE}.sif"; exit 1; }
+    cp "$src" "$SIF" || { echo "[node_exec] could not stage ${src}"; exit 1; }
     echo "[node_exec] staged."
 }
 
