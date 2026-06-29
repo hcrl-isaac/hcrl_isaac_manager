@@ -8,14 +8,11 @@
 #   * Everything else (env_file, file_mounts, py_executable, excludes) is identical.
 env_file: ${MANAGER_DIR}/scripts/ray/.env.ray
 user_id: ${UT_EID}
-ext_dir: ${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab/scripts
+ext_dir: ${MANAGER_DIR}/resources/hcrl_isaaclab/scripts
 # Two identical sub-jobs joined with `+` so wrap_resources splits and dispatches one per node.
 # The wrapper assigns RANK from the worker's IP, so both sub-jobs can be byte-identical.
 python_script: "/workspace/isaaclab/source/hcrl_isaaclab/scripts/ray/torchrun_wrapper.py+/workspace/isaaclab/source/hcrl_isaaclab/scripts/ray/torchrun_wrapper.py"
-file_mounts: {
-  "${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab": "/workspace/isaaclab/source/hcrl_isaaclab",
-  "${MANAGER_DIR}/resources/IsaacLab/source/robot_rl": "/workspace/isaaclab/source/robot_rl",
-}
+file_mounts: ${WORKSPACE_FILE_MOUNTS}
 init_commands: []
 "py_executable": "/workspace/isaaclab/isaaclab.sh -p"
 "excludes":

@@ -3,14 +3,11 @@ env_file: ${MANAGER_DIR}/scripts/ray/.env.ray
 # UT EID (for tracking ownership of Ray jobs)
 user_id: ${UT_EID}
 # Working directory during job, should contain your scripts
-ext_dir: ${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab/scripts
+ext_dir: ${MANAGER_DIR}/resources/hcrl_isaaclab/scripts
 # Train script to execute on cluster
 python_script: "/workspace/isaaclab/source/hcrl_isaaclab/scripts/train.py"
 # Additional dependencies to mount at runtime (will also auto-install module dependencies if setup.py is present at root level)
-file_mounts: {
-  "${MANAGER_DIR}/resources/IsaacLab/source/hcrl_isaaclab": "/workspace/isaaclab/source/hcrl_isaaclab",
-  "${MANAGER_DIR}/resources/IsaacLab/source/robot_rl": "/workspace/isaaclab/source/robot_rl",
-}
+file_mounts: ${WORKSPACE_FILE_MOUNTS}
 # Large-file resources (robot assets, motion datasets, exported policies) are fetched at runtime as
 # W&B artifacts by the in-script resolver (hcrl_isaaclab.utils.artifacts): it downloads them to
 # HCRL_ARTIFACT_ROOT and symlinks them into their canonical paths, so no pre-staging is needed.
