@@ -95,12 +95,10 @@ clean:
     fi
     @echo "[INFO] Successfully cleaned up environment."
 
-# Build the shared Isaac docker image (isaacsim from the nvcr base + Isaac Lab from pip; workspace code
-# mounted + editable-installed at job start). Reused by BOTH Ray and the HPC .sif -- see scripts/docker/.
-image:
-    scripts/docker/build_image.sh
-
-docker:
+# Docker interface (passthrough to scripts/container.sh): build the shared Isaac image -- isaacsim from
+# the nvcr base + Isaac Lab from pip, workspace code mounted at job start. Reused by Ray + the HPC .sif.
+#   just docker build   (or `just docker`)
+docker *args:
     if ! command -v docker >/dev/null 2>&1; then \
         curl -fsSL https://get.docker.com -o get-docker.sh; \
         sudo sh get-docker.sh; \
@@ -108,7 +106,7 @@ docker:
         sudo usermod -aG docker $USER; \
         newgrp docker; \
     fi
-    scripts/container.sh start
+    scripts/container.sh {{args}}
 
 cluster name="default":
     just deps
@@ -156,20 +154,10 @@ add-cluster:
     echo "[INFO] Writing SLURM job config file..."; \
     EMAIL=$email QUEUE=$queue NUM_PROCS=$num_procs NUM_CPUS=$num_cpus envsubst < scripts/cluster/tools/submit_job_slurm.template.sh > $outdir/submit_job_slurm.sh;
 
-ray:
-    just deps
-    @read -p "UT EID: " ut_eid; \
-    if [ ! -f "scripts/.env.wandb" ]; then \
-        echo "[ERROR] wandb configuration file scripts/.env.wandb not found. Exiting."; \
-        exit 1; \
-    fi; \
-    source scripts/.env.wandb; \
-    UT_EID=$ut_eid envsubst < scripts/ray/tools/.env.ray.template > scripts/ray/.env.ray; \
-    export WORKSPACE_FILE_MOUNTS="$({{venv_py}} scripts/ray/build_file_mounts.py)"; \
-    for cfg in job_config bench_job_config job_config_distributed; do \
-        UT_EID=$ut_eid MANAGER_DIR="$( pwd )" envsubst '$UT_EID $MANAGER_DIR $WORKSPACE_FILE_MOUNTS' < scripts/ray/tools/$cfg.template.yaml > scripts/ray/$cfg.yaml; \
-    done; \
-    echo "[INFO] Created ray configuration files (.env.ray + job_config/bench_job_config/job_config_distributed .yaml) in scripts/ray."
+# Ray interface (passthrough to scripts/ray.sh): `just ray setup` writes the configs, `just ray job ...`
+# submits, plus list/logs/stop/push. Run `just deps` first so the configs + venv exist.
+ray *args:
+    scripts/ray.sh {{args}}
 
 # Upload managed large-file resources (assets, motion datasets, policies) to W&B as versioned artifacts.
 # Usage:  just upload-artifacts            (auto: every present resource >= 50MB -- the ones too big for the job upload)

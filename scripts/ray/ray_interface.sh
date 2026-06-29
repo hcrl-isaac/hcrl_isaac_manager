@@ -35,7 +35,8 @@ help() {
     echo -e "\noptions:"
     echo -e "  -h              Display this help message."
     echo -e "\ncommands:"
-    echo -e "  push                                 Push the docker image to Docker Hub (will be pulled by the cluster on next startup)."
+    echo -e "  setup                                Generate the Ray config files (.env.ray + job configs)."
+    echo -e "  push                                 Build + push the shared Isaac image to Docker Hub (pulled by the cluster on next startup)."
     echo -e "  job [<job_args>]                     Submit a job to the cluster."
     echo -e "  bench [<job_args>]                   Submit an FPS-benchmark job (sweeps num_envs)."
     echo -e "  stop [<run_id>] [<script_args>]      Stop a currently running job."
@@ -74,20 +75,38 @@ command=$1
 shift
 
 case $command in
+    setup)
+        # Generate the Ray config files (.env.ray + job configs) from the templates.
+        MANAGER_DIR="$( cd "$SCRIPT_DIR/../.." && pwd )"
+        VENV_PY="$MANAGER_DIR/ilab/bin/python"
+        [ -x "$VENV_PY" ] || VENV_PY="python3"
+        if [ ! -f "$MANAGER_DIR/scripts/.env.wandb" ]; then
+            echo "[ERROR] $MANAGER_DIR/scripts/.env.wandb not found. Run 'just deps' first." >&2
+            exit 1
+        fi
+        read -p "UT EID: " ut_eid
+        source "$MANAGER_DIR/scripts/.env.wandb"
+        UT_EID=$ut_eid envsubst < "$SCRIPT_DIR/tools/.env.ray.template" > "$SCRIPT_DIR/.env.ray"
+        export WORKSPACE_FILE_MOUNTS="$("$VENV_PY" "$SCRIPT_DIR/build_file_mounts.py")"
+        for cfg in job_config bench_job_config job_config_distributed; do
+            UT_EID=$ut_eid MANAGER_DIR="$MANAGER_DIR" \
+                envsubst '$UT_EID $MANAGER_DIR $WORKSPACE_FILE_MOUNTS' \
+                < "$SCRIPT_DIR/tools/$cfg.template.yaml" > "$SCRIPT_DIR/$cfg.yaml"
+        done
+        echo "[INFO] Created Ray config files in $SCRIPT_DIR (.env.ray + job_config/bench_job_config/job_config_distributed .yaml)."
+        ;;
     push)
         if [ $# -gt 1 ]; then
             echo "Error: Too many arguments for push command." >&2
             help
             exit 1
         fi
-        echo "Building and pushing Ray Docker image"
-        # Check that docker is installed
+        echo "Building and pushing the shared Isaac image for Ray"
         check_docker_version
-        # Build docker image
-        docker build -t isaac-ray:latest -f $SCRIPT_DIR/Dockerfile .
-        # Tag and push docker image to Docker Hub
-        docker tag isaac-ray:latest esturman/isaac-ray:latest;
-        docker push esturman/isaac-ray:latest;
+        # Build the shared decoupled image (isaacsim base + pip isaaclab) and push it for the cluster to pull.
+        "$SCRIPT_DIR/../container.sh" build
+        docker tag hcrl-isaac:latest esturman/isaac-ray:latest
+        docker push esturman/isaac-ray:latest
         ;;
     job)
         job_args="$@"

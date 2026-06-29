@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-
-# make the cwd the pwd
+# Docker interface for the shared Isaac image (reused by Ray and the HPC .sif).
+#
+# Replaces the old IsaacLab container.py-driven flow (which built FROM the IsaacLab source tree). The
+# new image is decoupled from that source: isaacsim from the nvcr base + Isaac Lab from pip, workspace
+# code mounted at job start. See scripts/docker/.
+set -euo pipefail
 cd "$(dirname "$0")"
-# mark hcrl git directories as safe
-git config --global --add safe.directory ../resources/IsaacLab/source/hcrl_isaaclab/
-git config --global --add safe.directory ../resources/IsaacLab/source/robot_rl/
-# export wandb api keys
-wandb_env_file="$(pwd)/.env.wandb"
-dockerfile="$(pwd)/cluster/Dockerfile.base"
-target_env_file="../resources/IsaacLab/docker/.env.base"
-if ! grep -Fxq -f "$wandb_env_file" "$target_env_file"; then
-    cat "$wandb_env_file" >> "$target_env_file"
-fi
-cp $dockerfile ../resources/IsaacLab/docker/Dockerfile.base
-# take git ownership of the hcrl extensions
-sudo chown -R "${USER:-$(id -un)}" ../resources/IsaacLab/source/hcrl_isaaclab/
-sudo chown -R "${USER:-$(id -un)}" ../resources/IsaacLab/source/robot_rl/
-# turn off x11 mode
-ssh_mode='"0"'
-sed -i "s/^x11_forwarding_enabled.*/x11_forwarding_enabled: ${ssh_mode}/" ../resources/IsaacLab/docker/.container.cfg
-# start the container
-python3 ../resources/IsaacLab/docker/container.py "${@:1}" base
+
+cmd="${1:-build}"
+case "$cmd" in
+    build)
+        shift || true
+        docker/build_image.sh "$@"
+        ;;
+    -h | --help | help)
+        echo "usage: $(basename "$0") build   -- build the shared Isaac docker image (hcrl-isaac:latest)"
+        ;;
+    *)
+        echo "[ERROR] unknown command '$cmd' (try: build)" >&2
+        exit 1
+        ;;
+esac
