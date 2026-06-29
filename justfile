@@ -166,10 +166,11 @@ ray:
     done; \
     echo "[INFO] Created ray configuration files (.env.ray + job_config/bench_job_config/job_config_distributed .yaml) in scripts/ray."
 
-# Usage:  just upload-artifacts --list   (registry + local presence)
-#         just upload-artifacts --all    (every registered resource)
-#         just upload-artifacts <key>... (specific resource keys)
 # Upload managed large-file resources (assets, motion datasets, policies) to W&B as versioned artifacts.
+# Usage:  just upload-artifacts            (auto: every present resource >= 50MB -- the ones too big for the job upload)
+#         just upload-artifacts --list     (registry + sizes + large unregistered dirs)
+#         just upload-artifacts --all      (every registered resource, any size)
+#         just upload-artifacts <key>...   (specific resource keys)
 upload-artifacts *args:
     @if [ ! -f "scripts/.env.wandb" ]; then \
         echo "[ERROR] scripts/.env.wandb not found; run 'just deps' first."; \
