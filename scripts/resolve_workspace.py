@@ -12,7 +12,7 @@ Manifest (``workspace.yaml`` at the manager root)::
 
     org: hcrl-isaac                      # default GitHub org for bare repo names
     isaaclab:
-      source: false                      # true → check out IsaacLab source under resources/IsaacLab
+      source: false                      # true -> check out IsaacLab source under resources/IsaacLab
       version: "5.1.0"                    # pin for pip mode (informational here)
     projects: [ssti, umrl]               # which project task repos to include (-> <name>_tasks)
     always: [hcrl_isaaclab, robot_rl]     # repos always present (the core + RL package)

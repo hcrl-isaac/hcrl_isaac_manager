@@ -16,9 +16,9 @@ LARG_REMOTE_DIR="${LARG_REMOTE_DIR:-hcrl_isaac_manager}"
 # Local manager root (this repo's parent-of-scripts).
 LARG_LOCAL_DIR="${LARG_LOCAL_DIR:-$HOME/hcrl_isaac_manager}"
 
-# A100 80GB boxes (4 GPUs each) — primary targets.
+# A100 80GB boxes (4 GPUs each) -- primary targets.
 LARG_A100_HOSTS=(mckennie hazard debruyne aaronson)
-# A40 boxes (4 GPUs each) — fallback.
+# A40 boxes (4 GPUs each) -- fallback.
 LARG_A40_HOSTS=(pepi pulisic salah pogba)
 
 # Resolve a short host name (mckennie) -> full ssh target (sturman@mckennie.cs.utexas.edu).

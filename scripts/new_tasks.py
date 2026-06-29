@@ -66,7 +66,7 @@ def _files(name: str, org: str) -> dict[str, str]:
             ")\n"
         ),
         f"{pkg}/example/example_cfg.py": (
-            '"""Minimal example task — subclass a core base and override per-robot bits here.\n\n'
+            '"""Minimal example task -- subclass a core base and override per-robot bits here.\n\n'
             "Replace this with real configs; it exists so a freshly-generated repo registers + loads.\n"
             '"""\n\n'
             "# from hcrl_isaaclab.tasks.locomotion.locomotion_env_cfg import LocomotionEnvCfg\n"
@@ -82,7 +82,7 @@ def _files(name: str, org: str) -> dict[str, str]:
             f"`{name}/` source namespace (via `hcrl_isaaclab.tasks_registry.register_task`) and run "
             "against the shared `hcrl_isaaclab` core, coexisting with the other project task packages.\n\n"
             "## Domains\n\n"
-            "- `example/` — replace with this project's task domains.\n\n"
+            "- `example/` -- replace with this project's task domains.\n\n"
             "## Install\n\n"
             f"Normally installed as part of the workspace via the manager: add `{name}` to "
             "`workspace.yaml`'s `projects:` and run `just setup`. Standalone, with core already in the "
@@ -92,18 +92,18 @@ def _files(name: str, org: str) -> dict[str, str]:
             f"python scripts/train.py --task <Task-id> --source {name}   # --source only needed on a shared id\n"
             "```\n\n"
             "## Dependencies\n\n"
-            f"Core `hcrl_isaaclab` (and `{name}_robots` if this project has its own robots) — see "
+            f"Core `hcrl_isaaclab` (and `{name}_robots` if this project has its own robots) -- see "
             "`dependencies.yaml`.\n"
         ),
         ".github/PULL_REQUEST_TEMPLATE.md": (
             "## Summary\n\n"
             "<!-- What changed and why. -->\n\n"
             "## Checklist\n\n"
-            f"- [ ] Changes fit within this repo's scope — {name} tasks under the `{name}/` namespace. "
+            f"- [ ] Changes fit within this repo's scope -- {name} tasks under the `{name}/` namespace. "
             "Shared infra/robots belong upstream (`hcrl_isaaclab` / `hcrl_robots`).\n"
             "- [ ] Ran the GPU test suite locally (`pytest -m gpu`). CI runs only the CPU build tests + lint.\n"
             "- [ ] Added tests for any new functionality not already covered by the registration/build "
-            "smoke (usually unnecessary — the smoke tests cover every registered task automatically).\n"
+            "smoke (usually unnecessary -- the smoke tests cover every registered task automatically).\n"
         ),
         "pytest.ini": "[pytest]\ntestpaths = tests\nmarkers =\n    gpu: heavier check that instantiates env cfgs (needs a GPU)\n",
         "tests/conftest.py": (

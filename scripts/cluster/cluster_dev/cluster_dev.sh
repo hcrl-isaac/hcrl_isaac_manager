@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# cluster_dev.sh — turn an HPC compute node into a persistent (<=walltime) dev box.
+# cluster_dev.sh -- turn an HPC compute node into a persistent (<=walltime) dev box.
 #
 # WHY this shape: interactive partitions are usually short-capped, but *batch* jobs get a
 # long walltime, and many HPC sites allow "direct ssh to a compute node in a running job".
 # So we submit a long-lived "sentinel" batch job that just holds a node, then ssh into it
 # (proxied through a persistent login-node ControlMaster) and run/develop there. Where SSH
-# keys are disabled (password+2FA every login, e.g. NCSA Delta), the ControlMaster socket —
-# opened ONCE with one 2FA approval and kept warm — is the only way to avoid re-auth all day.
+# keys are disabled (password+2FA every login, e.g. NCSA Delta), the ControlMaster socket --
+# opened ONCE with one 2FA approval and kept warm -- is the only way to avoid re-auth all day.
 #
 # Cluster-agnostic: all site specifics (login host, account, partition, resources) come from
 # <cluster>_config/.env.cluster, selected with CLUSTER=<name>. Nothing here is Delta-specific.
@@ -32,7 +32,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
 #============================================================================
-# Config — sourced from the selected cluster's .env.cluster, with dev-box overrides.
+# Config -- sourced from the selected cluster's .env.cluster, with dev-box overrides.
 #============================================================================
 # Cluster config: CLUSTER=<name> picks ../<name>_config/.env.cluster (default "default"); matches
 # cluster_interface.sh, which sets CLUSTER when invoked as `cluster_interface.sh develop`.
@@ -53,13 +53,13 @@ REMOTE_ISAACLAB_DIR="${CLUSTER_ISAACLAB_DIR:?CLUSTER_ISAACLAB_DIR not set}"
 CDEV_ACCOUNT="${CDEV_ACCOUNT:-}"          # e.g. an allocation/charge code; omit where not required
 CDEV_PARTITION="${CDEV_PARTITION:-}"      # e.g. gpuA40x4 (Delta), rtx-small (TACC); omit for queue default
 CDEV_TIME="${CDEV_TIME:-48:00:00}"        # walltime to hold the node; cap to the queue max
-CDEV_GPUS_PER_NODE="${CDEV_GPUS_PER_NODE:-}"  # set to force --gpus-per-node=N; unset → queue default
-CDEV_CPUS="${CDEV_CPUS:-}"                # set to force --cpus-per-task=N; unset → queue default
-CDEV_MEM="${CDEV_MEM:-}"                  # set to force --mem; unset → queue default
+CDEV_GPUS_PER_NODE="${CDEV_GPUS_PER_NODE:-}"  # set to force --gpus-per-node=N; unset -> queue default
+CDEV_CPUS="${CDEV_CPUS:-}"                # set to force --cpus-per-task=N; unset -> queue default
+CDEV_MEM="${CDEV_MEM:-}"                  # set to force --mem; unset -> queue default
 CDEV_EXCLUSIVE="${CDEV_EXCLUSIVE:-}"      # set 1/true/yes to request a whole node (--exclusive)
 
 # Build each #SBATCH directive line; an empty string means the directive is omitted entirely.
-# NB: use `[ -n "$X" ] && VAR=...` (not `VAR="$( ... && echo )"`) — a top-level assignment
+# NB: use `[ -n "$X" ] && VAR=...` (not `VAR="$( ... && echo )"`) -- a top-level assignment
 # whose command substitution exits non-zero trips `set -e` and would abort the script silently.
 CDEV_ACCOUNT_DIRECTIVE=""
 CDEV_PARTITION_DIRECTIVE=""
@@ -77,7 +77,7 @@ case "$CDEV_EXCLUSIVE" in
 esac
 
 # How to get onto the node for attach/exec: "auto" probes at job start whether
-# login→node ssh works without re-auth; else falls back to srun --overlap.
+# login->node ssh works without re-auth; else falls back to srun --overlap.
 # Override with CDEV_ATTACH_MODE=ssh|srun. For srun-mode GPU access we request the gres
 # only when a count is known; otherwise the --overlap step inherits the job's allocation.
 CDEV_ATTACH_MODE="${CDEV_ATTACH_MODE:-auto}"
@@ -90,8 +90,8 @@ if [ -n "$CDEV_SRUN_GRES" ]; then
 else
     CDEV_SRUN_GRES_OPT=""
 fi
-# Some sites (e.g. TACC) enforce a submit filter on EVERY srun step — including an --overlap
-# step joining a running job — requiring -p, -N and -n (and sometimes -A). Pass them through.
+# Some sites (e.g. TACC) enforce a submit filter on EVERY srun step -- including an --overlap
+# step joining a running job -- requiring -p, -N and -n (and sometimes -A). Pass them through.
 # -N 1 -n 1 is correct for a single-node dev box; override the whole set via CDEV_SRUN_EXTRA.
 CDEV_SRUN_PART_OPT=""; [ -n "$CDEV_PARTITION" ] && CDEV_SRUN_PART_OPT="-p ${CDEV_PARTITION}"
 CDEV_SRUN_ACCT_OPT="";  [ -n "$CDEV_ACCOUNT" ]   && CDEV_SRUN_ACCT_OPT="-A ${CDEV_ACCOUNT}"
@@ -100,7 +100,7 @@ CDEV_SRUN_OPTS="${CDEV_SRUN_PART_OPT} ${CDEV_SRUN_ACCT_OPT} -N 1 -n 1 -t ${CDEV_
 # Local code to mirror to the cluster (the IsaacLab working tree).
 LOCAL_ISAACLAB_DIR="${LOCAL_ISAACLAB_DIR:-/home/emily/hcrl_isaac_manager/resources/IsaacLab}"
 
-# Local state — keyed by CLUSTER so concurrent dev sessions on different clusters (e.g. a
+# Local state -- keyed by CLUSTER so concurrent dev sessions on different clusters (e.g. a
 # Delta box and a TACC box at the same time) keep separate state and don't clobber each other.
 STATE_DIR="${HOME}/.cluster_dev/${CLUSTER}"
 STATE_FILE="${STATE_DIR}/state"          # KEY=VALUE: JOBID, JOB_STATE, NODE, SUBMIT_TS, START_TS
@@ -132,7 +132,7 @@ master_alive() { ssh "${SSH_OPTS[@]}" -O check "$CLUSTER_LOGIN" >/dev/null 2>&1;
 
 ensure_master() {
     if master_alive; then log "SSH master already open to $CLUSTER_LOGIN."; return 0; fi
-    log "Opening SSH master to $CLUSTER_LOGIN — APPROVE THE 2FA PROMPT NOW (one time, if your site uses it)."
+    log "Opening SSH master to $CLUSTER_LOGIN -- APPROVE THE 2FA PROMPT NOW (one time, if your site uses it)."
     # -f backgrounds only AFTER auth completes, so the 2FA/password prompt is interactive.
     ssh -fN "${SSH_OPTS[@]}" "$CLUSTER_LOGIN"
     master_alive && log "Master established (persists 48h, kept warm by keepalives)." \
@@ -165,7 +165,7 @@ stage_node_exec() {
 
 # Stage the SELECTED cluster's .env.cluster into the IsaacLab tree so it rides the rsync and
 # node_exec.sh (which sources ../.env.cluster ON THE NODE) picks up THIS cluster's paths/modules
-# (CLUSTER_ISAACLAB_DIR, CLUSTER_SIF_PATH, CDEV_MODULE_LOAD, ...) — not whatever another cluster's
+# (CLUSTER_ISAACLAB_DIR, CLUSTER_SIF_PATH, CDEV_MODULE_LOAD, ...) -- not whatever another cluster's
 # session last left in the shared staging slot. This is what makes node_exec cluster-agnostic.
 stage_env_cluster() {
     local env_dst="${LOCAL_ISAACLAB_DIR}/docker/cluster/.env.cluster"
@@ -202,14 +202,14 @@ cmd_start() {
     ensure_master
     # 1) mirror local code up first so the node has the latest on attach.
     if [ -d "$LOCAL_ISAACLAB_DIR" ]; then
-        log "Syncing code → ${REMOTE_ISAACLAB_DIR} (excludes git/venv/logs/wandb)…"
+        log "Syncing code -> ${REMOTE_ISAACLAB_DIR} (excludes git/venv/logs/wandb)..."
         stage_node_exec
         rsync_code || err "rsync failed (continuing; you can re-run './cluster_dev.sh sync')."
     fi
     # 2) render + submit the sentinel sbatch from the template.
     local sbatch_remote=".cluster_dev_sentinel.sbatch"
     # IMPORTANT: pass an explicit allowlist to envsubst so it ONLY substitutes our config
-    # vars and leaves runtime refs ($SLURM_JOB_ID, $HOME, $(hostname), ${CDEV_TIME_SECONDS:-…})
+    # vars and leaves runtime refs ($SLURM_JOB_ID, $HOME, $(hostname), ${CDEV_TIME_SECONDS:-...})
     # untouched for the job to evaluate on the node.
     export CDEV_TIME CDEV_GPUS_PER_NODE \
         CDEV_ACCOUNT_DIRECTIVE CDEV_PARTITION_DIRECTIVE CDEV_GPUS_DIRECTIVE \
@@ -219,7 +219,7 @@ cmd_start() {
     local jobid raw
     raw="$(on_login "sbatch --parsable ${sbatch_remote}")" || { err "sbatch failed."; exit 1; }
     # --parsable prints "<jobid>[;<cluster>]". Some login shells (e.g. TACC) emit banner/
-    # balance lines first, so DON'T strip digits globally — take the LAST non-empty line and
+    # balance lines first, so DON'T strip digits globally -- take the LAST non-empty line and
     # the field before any ';', then keep only its digits.
     jobid="$(printf '%s\n' "$raw" | sed '/^[[:space:]]*$/d' | tail -n1 | cut -d';' -f1 | tr -dc '0-9')"
     [ -n "$jobid" ] || { err "Could not parse job id from sbatch output: ${raw}"; exit 1; }
@@ -229,7 +229,7 @@ cmd_start() {
     log "Submitted sentinel job ${jobid} (partition=${CDEV_PARTITION:-queue-default}, gpus=${CDEV_GPUS_PER_NODE:-queue-default}, time=${CDEV_TIME})."
     # 3) background watcher tracks the (possibly long) queue wait.
     cmd_watch_start "$jobid"
-    log "Watcher started. It may queue for hours — check './cluster_dev.sh status' anytime."
+    log "Watcher started. It may queue for hours -- check './cluster_dev.sh status' anytime."
     log "When NODE is set + JOB_STATE=RUNNING, use './cluster_dev.sh attach' or 'exec'."
 }
 
@@ -245,12 +245,12 @@ cmd_watch_loop() {  # internal: poll squeue until RUNNING/terminal, record node
     echo "[$(date -u +%FT%TZ)] watching job $jobid (poll ${POLL_SECONDS}s)" >> "$WATCH_LOG"
     while :; do
         if ! master_alive; then
-            echo "[$(date -u +%FT%TZ)] master down — cannot poll; will retry" >> "$WATCH_LOG"
+            echo "[$(date -u +%FT%TZ)] master down -- cannot poll; will retry" >> "$WATCH_LOG"
             sleep "$POLL_SECONDS"; continue
         fi
         st="$(job_state "$jobid")"
         if [ -z "$st" ]; then
-            # not in squeue anymore → finished/failed/cancelled
+            # not in squeue anymore -> finished/failed/cancelled
             state_set JOB_STATE "GONE"
             echo "[$(date -u +%FT%TZ)] job $jobid no longer in queue (ended/cancelled)" >> "$WATCH_LOG"
             break
@@ -259,16 +259,16 @@ cmd_watch_loop() {  # internal: poll squeue until RUNNING/terminal, record node
         if [ "$st" = "RUNNING" ]; then
             node="$(job_node "$jobid")"
             state_set NODE "$node"; state_set START_TS "$(date -u +%FT%TZ)"
-            echo "[$(date -u +%FT%TZ)] job $jobid RUNNING on $node 🎉" >> "$WATCH_LOG"
-            # Auto-detect q4: can we ssh login→node WITHOUT interactive auth (2FA)?
+            echo "[$(date -u +%FT%TZ)] job $jobid RUNNING on $node" >> "$WATCH_LOG"
+            # Auto-detect q4: can we ssh login->node WITHOUT interactive auth (2FA)?
             # BatchMode=yes makes ssh fail fast instead of prompting if creds are needed.
             if [ -n "$node" ] && ssh "${SSH_OPTS[@]}" -o BatchMode=yes -o ConnectTimeout=15 \
                     -J "$CLUSTER_LOGIN" "${CDEV_USER}@${node}" true 2>/dev/null; then
                 state_set SSH_NODE_OK yes
-                echo "[$(date -u +%FT%TZ)] login→node ssh works passwordlessly → attach via direct ssh" >> "$WATCH_LOG"
+                echo "[$(date -u +%FT%TZ)] login->node ssh works passwordlessly -> attach via direct ssh" >> "$WATCH_LOG"
             else
                 state_set SSH_NODE_OK no
-                echo "[$(date -u +%FT%TZ)] login→node ssh needs auth/blocked → attach via srun --overlap" >> "$WATCH_LOG"
+                echo "[$(date -u +%FT%TZ)] login->node ssh needs auth/blocked -> attach via srun --overlap" >> "$WATCH_LOG"
             fi
             break
         fi
@@ -279,7 +279,7 @@ cmd_watch_loop() {  # internal: poll squeue until RUNNING/terminal, record node
 
 cmd_status() {
     local jobid; jobid="$(state_get JOBID)"
-    echo "── cluster_dev status ──"
+    echo "-- cluster_dev status --"
     echo "  job id     : ${jobid:-<none>}"
     echo "  job state  : $(state_get JOB_STATE)"
     echo "  node       : $(state_get NODE)"
@@ -301,7 +301,7 @@ require_running() {
     # (no ssh-node probe), so it works even when the state file points at a different job.
     if [ -n "${CDEV_JOBID:-}" ]; then
         DD_JOBID="$CDEV_JOBID"
-        master_alive || { err "SSH master is down — re-run './cluster_dev.sh start' (needs 2FA)."; exit 1; }
+        master_alive || { err "SSH master is down -- re-run './cluster_dev.sh start' (needs 2FA)."; exit 1; }
         local row state; row="$(on_login "squeue -j ${DD_JOBID} -h -o '%T %N' 2>/dev/null")"
         state="$(echo "$row" | awk '{print $1}')"
         [ "$state" = "RUNNING" ] || { err "Job ${DD_JOBID} not RUNNING (state=${state:-gone})."; exit 1; }
@@ -312,7 +312,7 @@ require_running() {
     DD_JOBID="$(state_get JOBID)"; DD_NODE="$(state_get NODE)"
     [ "$(state_get JOB_STATE)" = "RUNNING" ] && [ -n "$DD_JOBID" ] || {
         err "No running job yet (state=$(state_get JOB_STATE)). Run './cluster_dev.sh status'."; exit 1; }
-    master_alive || { err "SSH master is down — re-run './cluster_dev.sh start' (needs 2FA)."; exit 1; }
+    master_alive || { err "SSH master is down -- re-run './cluster_dev.sh start' (needs 2FA)."; exit 1; }
     DD_MODE="$CDEV_ATTACH_MODE"
     if [ "$DD_MODE" = "auto" ]; then
         [ "$(state_get SSH_NODE_OK)" = "yes" ] && [ -n "$DD_NODE" ] && DD_MODE="ssh" || DD_MODE="srun"
@@ -324,7 +324,7 @@ cmd_attach() {  # interactive shell on the compute node
     [ "${1:-}" = "--srun" ] && { CDEV_ATTACH_MODE="srun"; shift; }
     require_running
     if [ "$DD_MODE" = "ssh" ]; then
-        log "ssh → ${DD_NODE} (direct, proxied via master). Ctrl-D leaves node; job keeps running."
+        log "ssh -> ${DD_NODE} (direct, proxied via master). Ctrl-D leaves node; job keeps running."
         ssh "${SSH_OPTS[@]}" -t -J "$CLUSTER_LOGIN" "${CDEV_USER}@${DD_NODE}" "${@:-bash -l}"
     else
         log "srun --overlap onto job ${DD_JOBID}'s node (auth-safe). Ctrl-D leaves; job keeps running."
@@ -337,7 +337,7 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     #
     # Default (foreground): run the container command tethered to this SSH master. Stdout/stderr
     # stream back to the caller; exit code propagates. Good for short ops (smoke tests, status
-    # queries). FRAGILE for long runs — an SSH master drop kills the in-container process.
+    # queries). FRAGILE for long runs -- an SSH master drop kills the in-container process.
     #
     # --detach: spawn a `nohup setsid` wrapper ON THE LOGIN NODE that owns srun (or the
     # inner ssh-to-compute) for the lifetime of the training task. Once disowned, the local
@@ -367,10 +367,10 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
         return
     fi
     # --detach path. Default log lives in $HOME on the login node (literal `$HOME` is
-    # preserved through the local→ssh hop and expanded by the remote bash).
+    # preserved through the local->ssh hop and expanded by the remote bash).
     [ -z "$logfile" ] && logfile="\$HOME/cluster_dev_run_$(date -u +%Y%m%d-%H%M%S).log"
     # Build the inner command (what the detached wrapper will exec). Always go via the login
-    # node — some sites (e.g. Delta) block direct login→node ssh without re-auth in srun-mode, so even in
+    # node -- some sites (e.g. Delta) block direct login->node ssh without re-auth in srun-mode, so even in
     # ssh-mode we keep the detach point on the login node for consistency.
     local inner
     if [ "$DD_MODE" = "ssh" ]; then
@@ -392,12 +392,12 @@ cmd_tail() {  # cluster_dev.sh tail [LOGFILE]  : follow a detached --detach log 
     [ -z "$logfile" ] && logfile="$(state_get LAST_RUN_LOG)"
     [ -z "$logfile" ] && { err "No detached run on record. Use 'exec --detach -- <cmd>' first."; exit 1; }
     ensure_master
-    log "Tailing ${logfile} on ${CLUSTER_LOGIN} (Ctrl-C to stop; training keeps running)…"
+    log "Tailing ${logfile} on ${CLUSTER_LOGIN} (Ctrl-C to stop; training keeps running)..."
     # -F so it survives the file being missing or rotated.
     ssh "${SSH_OPTS[@]}" -t "$CLUSTER_LOGIN" "tail -F ${logfile}"
 }
 
-cmd_sync() {  # re-mirror local code → cluster isaaclab dir (and onto the live node workspace)
+cmd_sync() {  # re-mirror local code -> cluster isaaclab dir (and onto the live node workspace)
     ensure_master
     stage_node_exec
     rsync_code
@@ -408,7 +408,7 @@ cmd_stop() {
     local jobid; jobid="$(state_get JOBID)"
     [ -f "$WATCH_PID" ] && kill "$(cat "$WATCH_PID")" 2>/dev/null || true; rm -f "$WATCH_PID"
     if [ -n "$jobid" ] && master_alive; then
-        log "Cancelling job $jobid…"; on_login "scancel $jobid" || true
+        log "Cancelling job $jobid..."; on_login "scancel $jobid" || true
     fi
     state_set JOB_STATE "STOPPED"
     log "Cancelled. Closing SSH master."; ssh "${SSH_OPTS[@]}" -O exit "$CLUSTER_LOGIN" 2>/dev/null || true

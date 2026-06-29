@@ -3,12 +3,12 @@
 # interactively. Rendered by cluster_dev.sh via envsubst (which fills in / omits the resource
 # directives per the selected cluster's .env.cluster), then sbatch'd on the cluster login node.
 #
-# Deliberately does NO heavy setup — staging the SIF/caches is done on demand by
+# Deliberately does NO heavy setup -- staging the SIF/caches is done on demand by
 # node_exec.sh AFTER the node is up, so a staging bug can never waste the allocation.
 #
 # The ${CDEV_*_DIRECTIVE} lines expand to a full "#SBATCH ..." line or to nothing; an omitted
 # directive (blank line) just lets SLURM use the queue default. Account/partition/gpus/cpus/
-# mem/exclusive are all driven this way — nothing here is cluster-specific.
+# mem/exclusive are all driven this way -- nothing here is cluster-specific.
 #
 ${CDEV_ACCOUNT_DIRECTIVE}
 ${CDEV_PARTITION_DIRECTIVE}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# node_exec.sh — runs ON the cluster compute node (invoked by `cluster_dev.sh exec`).
+# node_exec.sh -- runs ON the cluster compute node (invoked by `cluster_dev.sh exec`).
 # Stages the Apptainer SIF + Isaac Sim caches + code into node-local $TMPDIR once
 # (cached across calls within the same job), then `apptainer exec`s the given command
 # inside the container. Bind-mount list mirrors docker/cluster/run_singularity.sh.
@@ -36,7 +36,7 @@ stage_once() {
     # The "SIF" is a sandbox *directory* (tar of an apptainer sandbox), not a single .sif file.
     # Use isaac-sim/python.sh (always in the SIF, never written at runtime) as the extract marker.
     [ -x "${SIF}/isaac-sim/python.sh" ] && return 0
-    echo "[node_exec] staging container + caches into ${STAGE} (first call only)…"
+    echo "[node_exec] staging container + caches into ${STAGE} (first call only)..."
     cp -rn "$CLUSTER_ISAAC_SIM_CACHE_DIR" "$STAGE/" 2>/dev/null || true
     tar -xf "${CLUSTER_SIF_PATH}/${PROFILE}.tar" -C "$STAGE" || { echo "[node_exec] SIF extract failed"; exit 1; }
     echo "[node_exec] staged."
@@ -44,7 +44,7 @@ stage_once() {
 
 stage_once
 # Idempotent: ensure all bind-mount sources + sandbox bind targets exist on every call.
-# (These can't live in stage_once because we want existing stages — pre-fix — to get the dirs
+# (These can't live in stage_once because we want existing stages -- pre-fix -- to get the dirs
 # without busting the 30+GB SIF cache.)
 # Cache subdirs (ov/kit/pip/glcache/computecache) come from `cp -rn $CLUSTER_ISAAC_SIM_CACHE_DIR`
 # in stage_once, but that's silenced with `|| true`; on a fresh node where the source cache
@@ -63,7 +63,7 @@ mkdir -p \
     "${STAGE}/docker-isaac-sim/documents" \
     "${SIF}/u/esturman"
 cmd="$*"; [ -n "$cmd" ] || cmd="/isaac-sim/python.sh --version"
-# Bind list mirrors docker/cluster/run_singularity.sh — with extra `-B …:/u/esturman` so HOME
+# Bind list mirrors docker/cluster/run_singularity.sh -- with extra `-B ...:/u/esturman` so HOME
 # is writable inside the container. `--writable` is required (matches run_singularity.sh) so
 # Kit can write /isaac-sim/kit/data/user.config.json; the SIF is a sandbox dir, not a file.
 apptainer exec \
