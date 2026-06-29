@@ -61,16 +61,13 @@ setup:
     done
     just vscode
 
-# Generate VSCode settings so the workspace can be developed from the manager directory.
-# pip mode: the isaaclab pip package ships the generator; source mode: IsaacLab's setup_vscode.py tool.
+# Generate .vscode/settings.json so the workspace can be developed from the manager directory.
+# Boots a headless Isaac Sim to snapshot the Kit extension paths (works for both source and pip
+# Isaac Lab; the official `python -m isaaclab --generate-vscode-settings` can't import omni.kit_app
+# under a pip-installed isaacsim).
 vscode:
-    @if grep -Eq '^[[:space:]]*source:[[:space:]]*true' workspace.yaml; then \
-        echo "[vscode] source mode -> setup_vscode.py"; \
-        ACCEPT_EULA=y {{venv_py}} resources/IsaacLab/.vscode/tools/setup_vscode.py || echo "[vscode][WARN] setup_vscode.py failed"; \
-    else \
-        echo "[vscode] pip mode -> python -m isaaclab --generate-vscode-settings"; \
-        ACCEPT_EULA=y {{venv_py}} -m isaaclab --generate-vscode-settings || echo "[vscode][WARN] generate-vscode-settings failed"; \
-    fi
+    @echo "[vscode] generating .vscode/settings.json via headless SimulationApp..."
+    OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} scripts/tools/setup_vscode.py || echo "[vscode][WARN] settings generation failed"
 
 clean:
     @venv_dir="$( pwd )/{{venv_name}}"; \
