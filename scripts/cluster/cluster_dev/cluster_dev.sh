@@ -97,8 +97,9 @@ CDEV_SRUN_PART_OPT=""; [ -n "$CDEV_PARTITION" ] && CDEV_SRUN_PART_OPT="-p ${CDEV
 CDEV_SRUN_ACCT_OPT="";  [ -n "$CDEV_ACCOUNT" ]   && CDEV_SRUN_ACCT_OPT="-A ${CDEV_ACCOUNT}"
 CDEV_SRUN_OPTS="${CDEV_SRUN_PART_OPT} ${CDEV_SRUN_ACCT_OPT} -N 1 -n 1 -t ${CDEV_TIME} ${CDEV_SRUN_GRES_OPT} ${CDEV_SRUN_EXTRA:-}"
 
-# Local code to mirror to the cluster (the IsaacLab working tree).
-LOCAL_ISAACLAB_DIR="${LOCAL_ISAACLAB_DIR:-/home/emily/hcrl_isaac_manager/resources/IsaacLab}"
+# Local code to mirror to the cluster (the manager workspace root -- flat layout: scripts/ + the
+# resources/<pkg> repos; the shared .sif provides isaacsim + Isaac Lab so no IsaacLab tree is required).
+LOCAL_ISAACLAB_DIR="${LOCAL_ISAACLAB_DIR:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 
 # Local state -- keyed by CLUSTER so concurrent dev sessions on different clusters (e.g. a
 # Delta box and a TACC box at the same time) keep separate state and don't clobber each other.
@@ -146,7 +147,7 @@ on_login() { ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "$@"; }
 # source the staged docker/cluster/.env.* like run_singularity.sh does). Copy it in from
 # our source-of-truth before each sync.
 stage_node_exec() {
-    local dst="${LOCAL_ISAACLAB_DIR}/docker/cluster/cluster_dev"
+    local dst="${LOCAL_ISAACLAB_DIR}/scripts/cluster/cluster_dev"
     local src="${SCRIPT_DIR}/node_exec.sh"
     local dst_file="${dst}/node_exec.sh"
     mkdir -p "$dst"
@@ -168,7 +169,7 @@ stage_node_exec() {
 # (CLUSTER_ISAACLAB_DIR, CLUSTER_SIF_PATH, CDEV_MODULE_LOAD, ...) -- not whatever another cluster's
 # session last left in the shared staging slot. This is what makes node_exec cluster-agnostic.
 stage_env_cluster() {
-    local env_dst="${LOCAL_ISAACLAB_DIR}/docker/cluster/.env.cluster"
+    local env_dst="${LOCAL_ISAACLAB_DIR}/scripts/cluster/.env.cluster"
     [ -f "$ENV_FILE" ] || { err "Cluster env file not found: $ENV_FILE"; return 1; }
     [ "$ENV_FILE" -ef "$env_dst" ] && return 0
     mkdir -p "$(dirname "$env_dst")"
@@ -184,7 +185,7 @@ rsync_code() {
         --filter=':- .dockerignore' \
         --exclude='*.git*' --exclude='ilab/' --exclude='.venv/' \
         --exclude='wandb/' --exclude='logs/' --exclude='.vscode/' \
-        --exclude='**/__pycache__/' --exclude='docker/cluster/exports/' \
+        --exclude='**/__pycache__/' --exclude='docker/cluster/exports/' --exclude='scripts/cluster/exports/' --exclude='*.sif' --exclude='*.tar' \
         -e "ssh ${SSH_OPTS[*]}" \
         "${LOCAL_ISAACLAB_DIR}/" "${CLUSTER_LOGIN}:${REMOTE_ISAACLAB_DIR}/"
 }
@@ -355,7 +356,7 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
         esac
     done
     require_running
-    local nodecmd="bash ${REMOTE_ISAACLAB_DIR}/docker/cluster/cluster_dev/node_exec.sh $*"
+    local nodecmd="bash ${REMOTE_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh $*"
     if [ -z "$detach" ]; then
         log "[${DD_MODE}] container exec on job ${DD_JOBID}: $*"
         if [ "$DD_MODE" = "ssh" ]; then
