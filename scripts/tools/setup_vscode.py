@@ -53,6 +53,20 @@ def main() -> None:
         "python.analysis.typeCheckingMode": "basic",
         "python.formatting.provider": "black",
         "python.formatting.blackArgs": ["--line-length", "120"],
+        # Index all of resources/ (gitman subrepos, gitignored by the manager) in Ctrl-P / search.
+        "search.useIgnoreFiles": False,
+        "search.exclude": {
+            "**/.git": True, "**/ilab": True, "**/.venv": True, "**/__pycache__": True, "**/*.pyc": True,
+            "**/logs": True, "**/wandb": True, "**/outputs": True, "**/.pytest_cache": True,
+            "**/*.sif": True, "**/scripts/cluster/exports": True,
+        },
+        "files.watcherExclude": {
+            "**/ilab/**": True, "**/.venv/**": True, "**/.git/**": True, "**/logs/**": True, "**/wandb/**": True,
+        },
+        # Detect each gitman subrepo under resources/ (depth 2) so SCM shows per-subrepo git status.
+        "git.autoRepositoryDetection": True,
+        "git.repositoryScanMaxDepth": 3,
+        "git.detectSubmodules": False,
     }
 
     vscode_dir = MANAGER_DIR / ".vscode"
