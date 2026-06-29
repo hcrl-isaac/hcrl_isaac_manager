@@ -59,21 +59,7 @@ setup:
             uv pip install --python {{venv_py}} --torch-backend cu128 --extra-index-url https://pypi.nvidia.com -e "$d"; \
         elif [ -d "$d" ]; then echo "[setup] skipping non-package data repo: $d"; fi; \
     done
-    just link-resources
     just vscode
-
-# Symlink the flat-cloned asset/dataset repos into the hcrl_isaaclab extension's resources/ dir, so
-# LOCAL runs reference the checked-out repos directly. The W&B artifact resolver (hcrl_isaaclab/utils/
-# artifacts.py) leaves real dirs alone and only fetches when a resource is absent -- i.e. on Ray, where
-# these repos aren't checked out. Re-run after `just resolve` adds/updates a resource repo.
-link-resources:
-    @mkdir -p resources/hcrl_isaaclab/resources
-    @for r in hcrl_robots motion_datasets datasets; do \
-        if [ -d "resources/$r" ]; then \
-            ln -sfn "../../$r" "resources/hcrl_isaaclab/resources/$r"; \
-            echo "[link-resources] resources/hcrl_isaaclab/resources/$r -> ../../$r"; \
-        fi; \
-    done
 
 # Generate .vscode/settings.json so the workspace can be developed from the manager directory.
 # Boots a headless Isaac Sim to snapshot the Kit extension paths (works for both source and pip
@@ -147,7 +133,7 @@ resolve:
     {{venv_py}} scripts/resolve_workspace.py --manifest workspace.yaml --update
 
 # Scaffold a new <name>_tasks extension repo under resources/ (registers under the <name>/ namespace).
-new-tasks name:
+new name:
     {{venv_py}} scripts/new_tasks.py {{name}}
 
 # Run any hcrl_isaaclab script from the manager dir (no need to cd into the extension), e.g.:
