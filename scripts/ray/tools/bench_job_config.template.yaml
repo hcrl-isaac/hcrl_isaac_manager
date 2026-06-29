@@ -5,12 +5,12 @@ user_id: ${UT_EID}
 # Working directory during job, should contain your scripts
 ext_dir: ${MANAGER_DIR}/resources/hcrl_isaaclab/scripts
 # Train script to execute on cluster
-python_script: "/workspace/isaaclab/source/hcrl_isaaclab/scripts/bench.py"
+python_script: "/workspace/ext/hcrl_isaaclab/scripts/bench.py"
 # Additional dependencies to mount at runtime (will also auto-install module dependencies if setup.py is present at root level)
 file_mounts: ${WORKSPACE_FILE_MOUNTS}
 init_commands: []
 # python executable on the cluster
-"py_executable": "/workspace/isaaclab/isaaclab.sh -p"
+"py_executable": "/isaac-sim/python.sh"
 # patterns to exclude when copying dependencies (file_mounts) and working directory (ext_dir)
 "excludes":
   - "**/resources/**"
