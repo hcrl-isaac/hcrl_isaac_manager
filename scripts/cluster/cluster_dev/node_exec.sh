@@ -1,19 +1,13 @@
 #!/usr/bin/env bash
-# node_exec.sh -- runs ON the cluster compute node (invoked by `cluster_dev.sh exec`).
-# Stages the Apptainer SIF + Isaac Sim caches + code into node-local $TMPDIR once
-# (cached across calls within the same job), then `apptainer exec`s the given command
-# inside the container. Bind-mount list mirrors docker/cluster/run_singularity.sh.
-#
-# Assumes `apptainer` is on PATH on the compute node (no `module load`); if your site needs
-#   one, add the needed `module load apptainer` here.
-# Assumes ${CLUSTER_SIF_PATH}/isaac-lab-base.tar exists and is current.
+# node_exec.sh -- runs ON the cluster compute node (invoked by `cluster_dev.sh exec`). Stages the .sif +
+# Isaac Sim caches into node-local $TMPDIR once per job, then `apptainer exec`s the given command in the
+# container. Bind list mirrors scripts/cluster/run_singularity.sh.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 source "${SCRIPT_DIR}/../.env.cluster"
 source "${SCRIPT_DIR}/../../.env.wandb"  2>/dev/null || true
-# .env.base came from IsaacLab's docker tree (source mode); the decoupled image doesn't need it.
-# Default the container paths for the shared image (isaac-sim base) so `set -u` doesn't trip.
+# .env.base is only present in source mode; default the container paths so `set -u` doesn't trip.
 source "${SCRIPT_DIR}/../../.env.base" 2>/dev/null || true
 : "${DOCKER_ISAACSIM_ROOT_PATH:=/isaac-sim}"
 : "${DOCKER_USER_HOME:=/root}"
@@ -37,10 +31,8 @@ STAGE="${TMPDIR:-/tmp}/cluster_dev_${SLURM_JOB_ID:-box}"
 SIF="${STAGE}/${PROFILE}.sif"
 
 stage_once() {
-    # The shared image is a single immutable .sif file (Kit writes go to a tmpfs overlay via
-    # --writable-tmpfs; the Isaac Sim caches are bound rw). Copy it to node-local scratch once -- but
-    # re-copy if the pushed image is newer than the staged copy, so a `cluster.sh repush` takes effect
-    # without manually clearing the node cache.
+    # Copy the .sif to node-local scratch once; re-copy if a newer one was pushed, so `cluster.sh
+    # repush` takes effect without clearing the node cache. (Kit writes go to a --writable-tmpfs overlay.)
     local src="${CLUSTER_SIF_PATH}/${PROFILE}.sif"
     [ -f "$SIF" ] && [ ! "$src" -nt "$SIF" ] && return 0
     mkdir -p "$STAGE"
@@ -51,13 +43,8 @@ stage_once() {
 }
 
 stage_once
-# Idempotent: ensure all bind-mount sources + sandbox bind targets exist on every call.
-# (These can't live in stage_once because we want existing stages -- pre-fix -- to get the dirs
-# without busting the 30+GB SIF cache.)
-# Cache subdirs (ov/kit/pip/glcache/computecache) come from `cp -rn $CLUSTER_ISAAC_SIM_CACHE_DIR`
-# in stage_once, but that's silenced with `|| true`; on a fresh node where the source cache
-# doesn't exist yet, the cp is a no-op and the cache subdirs are missing. Pre-create them so
-# the bind succeeds and Isaac Sim populates them on first use.
+# Pre-create every bind source on each call (idempotent): on a fresh node the cache cp in stage_once
+# is a no-op, so the cache subdirs would be missing and the binds would fail.
 mkdir -p \
     "${STAGE}/tmp" \
     "${STAGE}/home" \
@@ -70,9 +57,8 @@ mkdir -p \
     "${STAGE}/docker-isaac-sim/data" \
     "${STAGE}/docker-isaac-sim/documents"
 cmd="$*"; [ -n "$cmd" ] || cmd="/isaac-sim/python.sh --version"
-# Bind ALL flat workspace repos into /workspace/ext -- packages AND data/asset repos (e.g. hcrl_robots),
-# since the in-repo resource symlinks (hcrl_isaaclab/resources/<name> -> ../../<name>) need the asset
-# repos mounted too. The entrypoint adds only the Python packages to PYTHONPATH. (+ source overlay below.)
+# Bind all workspace repos into /workspace/ext -- packages AND asset repos (e.g. hcrl_robots), since the
+# in-repo resource symlinks need the asset repos mounted. The entrypoint PYTHONPATHs only the packages.
 EXT_BINDS=""
 for d in "${CLUSTER_ISAACLAB_DIR}"/resources/*/; do
     name="$(basename "$d")"

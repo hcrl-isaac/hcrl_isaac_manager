@@ -43,8 +43,7 @@ JOB_TMPDIR="$TMPDIR/isaaclab_$SLURM_JOB_ID"
 # load variables to set the Isaac Lab path on the cluster
 source $SCRIPT_DIR/.env.cluster
 source $SCRIPT_DIR/.env.wandb
-# .env.base came from IsaacLab's docker tree (source mode); the decoupled image doesn't need it. Default
-# the container paths for the shared image (isaac-sim base).
+# .env.base is only present in source mode; default the container paths so `set -u` doesn't trip.
 [ -f "$SCRIPT_DIR/../.env.base" ] && source "$SCRIPT_DIR/../.env.base"
 : "${DOCKER_ISAACSIM_ROOT_PATH:=/isaac-sim}"
 : "${DOCKER_USER_HOME:=/root}"
@@ -78,9 +77,8 @@ else
     echo "(run_singularity.py) No container found at $CLUSTER_SIF_PATH ($2.sif / hcrl-isaac.sif / $2.tar)"; exit 1
 fi
 
-# Bind the flat workspace packages into /workspace/ext (code sync), plus the IsaacLab source overlay in
-# source mode. The container has Isaac Lab from pip baked in; the entrypoint adds these to PYTHONPATH so
-# they import ahead of it.
+# Bind all workspace repos into /workspace/ext -- packages AND asset repos (for the in-repo resource
+# symlinks); the entrypoint PYTHONPATHs only the packages. (+ IsaacLab source overlay in source mode.)
 EXT_BINDS=""
 SYNC_DIR="$JOB_TMPDIR/$dir_name"
 for d in "$SYNC_DIR"/resources/*/; do

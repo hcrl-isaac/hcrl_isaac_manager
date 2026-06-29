@@ -2,9 +2,9 @@
 #
 # Decoupled from the IsaacLab source tree: isaacsim/Kit comes from the nvcr base image, Isaac Lab is
 # installed from pip, and the workspace extensions (hcrl_isaaclab, robot_rl, *_tasks, packaged *_robots)
-# are NOT baked in -- they are mounted and editable-installed at job start (see scripts/docker/entrypoint.sh),
+# are NOT baked in -- they are mounted and PYTHONPATH'd at job start (see scripts/docker/entrypoint.sh),
 # so code changes sync without rebuilding the image. In source mode, the local IsaacLab source is mounted
-# and editable-installed on top at job start to override the baked pip isaaclab.
+# and PYTHONPATH'd ahead of the baked pip isaaclab.
 #
 # Build: scripts/docker/build_image.sh  (plain `docker build`, no IsaacLab container.py / source COPY).
 
@@ -65,8 +65,8 @@ RUN mkdir -p ${ISAACSIM_ROOT_PATH}/kit/cache /root/.cache/ov /root/.cache/pip \
     /bin/nvidia-cuda-mps-control /bin/nvidia-cuda-mps-server /etc/localtime && \
     mkdir -p /var/run/nvidia-persistenced && touch /var/run/nvidia-persistenced/socket
 
-# Editable-install the mounted workspace extensions (and, in source mode, the mounted IsaacLab source)
-# at container start, then exec the requested command. Mount points are bound at run time.
+# Entrypoint PYTHONPATHs the mounted workspace extensions (+ IsaacLab source in source mode) ahead of the
+# baked pip isaaclab, then execs the requested command. Mount points are bound at run time.
 COPY entrypoint.sh /usr/local/bin/hcrl-entrypoint
 RUN chmod +x /usr/local/bin/hcrl-entrypoint
 
