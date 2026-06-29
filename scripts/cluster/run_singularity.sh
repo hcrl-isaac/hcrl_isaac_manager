@@ -43,7 +43,11 @@ JOB_TMPDIR="$TMPDIR/isaaclab_$SLURM_JOB_ID"
 # load variables to set the Isaac Lab path on the cluster
 source $SCRIPT_DIR/.env.cluster
 source $SCRIPT_DIR/.env.wandb
-source $SCRIPT_DIR/../.env.base
+# .env.base came from IsaacLab's docker tree (source mode); the decoupled image doesn't need it. Default
+# the container paths for the shared image (isaac-sim base).
+[ -f "$SCRIPT_DIR/../.env.base" ] && source "$SCRIPT_DIR/../.env.base"
+: "${DOCKER_ISAACSIM_ROOT_PATH:=/isaac-sim}"
+: "${DOCKER_USER_HOME:=/root}"
 
 # make sure that all directories exists in cache directory
 mkdir "$JOB_TMPDIR"
@@ -62,9 +66,29 @@ echo "(run_singularity.py) Copied $1 to $JOB_TMPDIR"
 # Get the directory name
 dir_name=$(basename "$1")
 
-# copy container to the compute node
-tar -xf $CLUSTER_SIF_PATH/$2.tar -C $JOB_TMPDIR || { echo "(run_singularity.py) Tar extraction failed!"; exit 1; }
-echo "(run_singularity.py) Extracted $CLUSTER_SIF_PATH/$2.tar at $JOB_TMPDIR"
+# copy the shared decoupled container (.sif, built by `scripts/cluster.sh setup`) to the compute node
+SIF_SRC="$CLUSTER_SIF_PATH/$2.sif"
+[ -f "$SIF_SRC" ] || SIF_SRC="$CLUSTER_SIF_PATH/hcrl-isaac.sif"
+if [ -f "$SIF_SRC" ]; then
+    cp "$SIF_SRC" "$JOB_TMPDIR/$2.sif"
+    echo "(run_singularity.py) Using container $SIF_SRC"
+elif [ -f "$CLUSTER_SIF_PATH/$2.tar" ]; then  # backwards-compat: an exported docker tar
+    tar -xf "$CLUSTER_SIF_PATH/$2.tar" -C "$JOB_TMPDIR" || { echo "(run_singularity.py) Tar extraction failed!"; exit 1; }
+else
+    echo "(run_singularity.py) No container found at $CLUSTER_SIF_PATH ($2.sif / hcrl-isaac.sif / $2.tar)"; exit 1
+fi
+
+# Bind the flat workspace packages into /workspace/ext (code sync), plus the IsaacLab source overlay in
+# source mode. The container has Isaac Lab from pip baked in; the entrypoint adds these to PYTHONPATH so
+# they import ahead of it.
+EXT_BINDS=""
+SYNC_DIR="$JOB_TMPDIR/$dir_name"
+for d in "$SYNC_DIR"/resources/*/; do
+    name="$(basename "$d")"
+    { [ -f "${d}setup.py" ] || [ -f "${d}pyproject.toml" ]; } || continue
+    EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:rw"
+done
+[ -d "$SYNC_DIR/resources/IsaacLab/source" ] && EXT_BINDS="$EXT_BINDS -B $SYNC_DIR/resources/IsaacLab/source:/workspace/isaaclab_source:rw"
 
 # execute command in singularity container
 # NOTE: ISAACLAB_PATH is normally set in `isaaclab.sh` but we directly call the isaac-sim python because we sync the entire
@@ -78,11 +102,11 @@ apptainer exec \
     -B $JOB_TMPDIR/docker-isaac-sim/logs:${DOCKER_USER_HOME}/.nvidia-omniverse/logs:rw \
     -B $JOB_TMPDIR/docker-isaac-sim/data:${DOCKER_USER_HOME}/.local/share/ov/data:rw \
     -B $JOB_TMPDIR/docker-isaac-sim/documents:${DOCKER_USER_HOME}/Documents:rw \
-    -B $JOB_TMPDIR/$dir_name:/workspace/isaaclab:rw \
+    $EXT_BINDS \
     -B $JOB_TMPDIR/tmp:/tmp:rw \
-    -B $CLUSTER_ISAACLAB_DIR/logs:/workspace/isaaclab/logs:rw \
-    --nv --writable --containall --no-home $JOB_TMPDIR/$2.sif \
-    bash -c "export OMP_NUM_THREADS=$OMP_NUM_THREADS && export ISAACLAB_PATH=/workspace/isaaclab && export WANDB_USERNAME=$WANDB_USERNAME && export WANDB_API_KEY=$WANDB_API_KEY && cd /workspace/isaaclab && /isaac-sim/python.sh ${CLUSTER_PYTHON_EXECUTABLE} ${@:3}"
+    -B $CLUSTER_ISAACLAB_DIR/logs:/workspace/ext/hcrl_isaaclab/logs:rw \
+    --nv --writable-tmpfs --containall --no-home $JOB_TMPDIR/$2.sif \
+    bash -c "export OMP_NUM_THREADS=$OMP_NUM_THREADS && export OMNI_KIT_ACCEPT_EULA=YES && export WANDB_USERNAME=$WANDB_USERNAME && export WANDB_API_KEY=$WANDB_API_KEY && cd /workspace/ext/hcrl_isaaclab && /usr/local/bin/hcrl-entrypoint /isaac-sim/python.sh ${CLUSTER_PYTHON_EXECUTABLE} ${@:3}"
 
 EXIT_CODE=$?
 
