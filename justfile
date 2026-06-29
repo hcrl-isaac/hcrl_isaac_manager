@@ -95,17 +95,17 @@ docker *args:
     scripts/container.sh {{args}}
 
 # Cluster interface (passthrough to scripts/cluster.sh). The first arg may be a cluster name (when a
-# matching scripts/cluster/<name>_config exists); otherwise CLUSTER env / "default" is used. e.g.:
+# matching scripts/cluster/config/<name> exists); otherwise CLUSTER env / "default" is used. e.g.:
 #   just cluster multi-delta repush      just cluster delta setup      CLUSTER=delta just cluster repush
 cluster *args:
     @set -- {{args}}; \
-    if [ -n "${1:-}" ] && [ -d "scripts/cluster/${1}_config" ]; then \
+    if [ -n "${1:-}" ] && [ -d "scripts/cluster/config/${1}" ]; then \
         name="$1"; shift; CLUSTER="$name" scripts/cluster.sh "$@"; \
     else \
         scripts/cluster.sh "$@"; \
     fi
 
-# Create a cluster config (scripts/cluster/<name>_config) -- alias for `scripts/cluster.sh add-cluster`.
+# Create a cluster config (scripts/cluster/config/<name>) -- alias for `scripts/cluster.sh add-cluster`.
 add-cluster:
     scripts/cluster.sh add-cluster
 

@@ -10,7 +10,7 @@
 # opened ONCE with one 2FA approval and kept warm -- is the only way to avoid re-auth all day.
 #
 # Cluster-agnostic: all site specifics (login host, account, partition, resources) come from
-# <cluster>_config/.env.cluster, selected with CLUSTER=<name>. Nothing here is Delta-specific.
+# config/<cluster>/.env.cluster, selected with CLUSTER=<name>. Nothing here is Delta-specific.
 #
 # Queue a job:              ./cluster_dev.sh start            (approve ONE 2FA prompt)
 # Then it self-tracks the (possibly multi-hour) queue wait in the background.
@@ -34,20 +34,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 #============================================================================
 # Config -- sourced from the selected cluster's .env.cluster, with dev-box overrides.
 #============================================================================
-# Cluster config: CLUSTER=<name> picks ../<name>_config/.env.cluster (default "default"); matches
+# Cluster config: CLUSTER=<name> picks ../config/<name>/.env.cluster (default "default"); matches
 # cluster_interface.sh, which sets CLUSTER when invoked as `cluster_interface.sh develop`.
 CLUSTER="${CLUSTER:-default}"
-ENV_FILE="${SCRIPT_DIR}/../${CLUSTER}_config/.env.cluster"
+ENV_FILE="${SCRIPT_DIR}/../config/${CLUSTER}/.env.cluster"
 # shellcheck disable=SC1090
 [ -f "$ENV_FILE" ] && source "$ENV_FILE"
 
-CLUSTER_LOGIN="${CLUSTER_LOGIN:?CLUSTER_LOGIN not set (expected from ${CLUSTER}_config/.env.cluster)}"
+CLUSTER_LOGIN="${CLUSTER_LOGIN:?CLUSTER_LOGIN not set (expected from config/${CLUSTER}/.env.cluster)}"
 CDEV_USER="${CLUSTER_LOGIN%@*}"
 CDEV_LOGIN_HOST="${CDEV_LOGIN_HOST:-${CLUSTER_LOGIN#*@}}"   # login host; round-robin DNS is fine since we always multiplex over one master.
 REMOTE_ISAACLAB_DIR="${CLUSTER_ISAACLAB_DIR:?CLUSTER_ISAACLAB_DIR not set}"
 
 # Sentinel job resources. These are cluster-agnostic: set whatever the target queue needs
-# in <cluster>_config/.env.cluster (CDEV_ACCOUNT, CDEV_PARTITION, CDEV_GPUS_PER_NODE,
+# in config/<cluster>/.env.cluster (CDEV_ACCOUNT, CDEV_PARTITION, CDEV_GPUS_PER_NODE,
 # CDEV_CPUS, CDEV_MEM, CDEV_EXCLUSIVE). Anything left UNSET emits no corresponding #SBATCH
 # directive, so SLURM falls back to the queue's own default rather than a forced value.
 CDEV_ACCOUNT="${CDEV_ACCOUNT:-}"          # e.g. an allocation/charge code; omit where not required

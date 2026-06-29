@@ -13,17 +13,17 @@ tabs 4
 # get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
-# Cluster selection: CLUSTER=<name> picks the config in <name>_config/ (default: "default").
+# Cluster selection: CLUSTER=<name> picks the config in config/<name>/ (default: "default").
 # Config dirs live under the manager's scripts/cluster, reached relative to this (possibly synced) script.
 CLUSTER="${CLUSTER:-default}"
 CLUSTER_CONFIG_DIR="${SCRIPT_DIR}/../../../../scripts/cluster"
-CLUSTER_ENV_FILE="${CLUSTER_CONFIG_DIR}/${CLUSTER}_config/.env.cluster"
+CLUSTER_ENV_FILE="${CLUSTER_CONFIG_DIR}/config/${CLUSTER}/.env.cluster"
 # Source the selected cluster's env (CLUSTER_LOGIN, CLUSTER_ISAACLAB_DIR, CLUSTER_SIF_PATH, ...).
 source_cluster_env() {
     if [ ! -f "$CLUSTER_ENV_FILE" ]; then
         echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE" >&2
-        echo "[ERROR] Set CLUSTER=<name> for a <name>_config/ dir (available:" \
-            "$(cd "$CLUSTER_CONFIG_DIR" && ls -d *_config 2>/dev/null | sed 's/_config$//' | paste -sd, -))." >&2
+        echo "[ERROR] Set CLUSTER=<name> for a config/<name>/ dir (available:" \
+            "$(ls "$CLUSTER_CONFIG_DIR/config" 2>/dev/null | paste -sd, -))." >&2
         exit 1
     fi
     # shellcheck disable=SC1090
@@ -133,7 +133,7 @@ help() {
     echo -e "  <profile>  is the optional container profile specification. Defaults to 'base'."
     echo -e "  <job_args> are optional arguments specific to the job command."
     echo -e "\nenv:"
-    echo -e "  CLUSTER    selects the cluster config in <CLUSTER>_config/ (default: 'default')."
+    echo -e "  CLUSTER    selects the cluster config in config/<CLUSTER>/ (default: 'default')."
     echo -e "\n" >&2
 }
 

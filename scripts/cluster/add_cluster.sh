@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Create a cluster config (scripts/cluster/<name>_config/) from the templates. Invoked by
+# Create a cluster config (scripts/cluster/config/<name>/) from the templates. Invoked by
 # `scripts/cluster.sh add-cluster` (and `just add-cluster`).
 set -euo pipefail
 cd "$(dirname "$0")/.."  # scripts/
 
 read -p "Cluster Nickname (leave blank for default): " cluster_name
 [ -z "$cluster_name" ] && cluster_name="default"
-outdir="cluster/${cluster_name}_config"
+outdir="cluster/config/${cluster_name}"
 if [ -d "$outdir" ]; then
     echo "[ERROR] Cluster config '$cluster_name' already exists. Delete it, edit it directly, or pick a different name." >&2
     exit 1

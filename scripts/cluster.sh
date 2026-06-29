@@ -4,7 +4,7 @@
 # Decoupled from the IsaacLab source tree -- the .sif is the SAME shared image Ray uses
 # (scripts/docker/), Apptainer-converted, so the two deploy paths share one image and the cluster build
 # no longer requires resources/IsaacLab. `CLUSTER=<name>` selects a cluster config under
-# scripts/cluster/<name>_config (default: "default").
+# scripts/cluster/config/<name> (default: "default").
 set -euo pipefail
 [ -z "${CLUSTER:-}" ] && CLUSTER="default"
 cd "$(dirname "$0")"  # scripts/
@@ -17,7 +17,7 @@ SIF_PATH="${SIF_DIR}/${IMAGE_NAME}.sif"
 SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${HOME}/.ssh/cm/%C" -o ControlPersist=48h -o ConnectTimeout=60)
 
 load_cluster_env() {
-    local env_file="cluster/${CLUSTER}_config/.env.cluster"
+    local env_file="cluster/config/${CLUSTER}/.env.cluster"
     [ -f "$env_file" ] || { echo "[ERROR] no $env_file -- run 'just add-cluster' first." >&2; exit 1; }
     # shellcheck disable=SC1090
     source "$env_file"
@@ -77,7 +77,7 @@ case "$cmd" in
         echo "  setup         build the shared .sif and rsync it to the cluster"
         echo "  build         build the .sif from the shared docker image (no push)"
         echo "  push/repush   rsync the built .sif to the cluster (reuses the SSH master; no 2FA)"
-        echo "  add-cluster   create a cluster config (scripts/cluster/<name>_config)"
+        echo "  add-cluster   create a cluster config (scripts/cluster/config/<name>)"
         echo "  job [args]    submit a job (delegates to cluster_interface.sh)"
         echo "  develop ...   manage a persistent dev node (delegates to cluster_interface.sh)"
         ;;
