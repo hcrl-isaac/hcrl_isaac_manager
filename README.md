@@ -26,11 +26,11 @@ isaaclab:
 just setup
 ```
 
-Resolves `workspace.yaml` into a flat, deduped set of repos under `resources/`, then builds the
-manager and Isaac Lab venvs. Adds two bash aliases:
+Resolves `workspace.yaml` into a flat, deduped set of repos under `resources/`, then builds a single
+uv venv (`ilab`) with the manager + Isaac Lab / Isaac Sim stack. Adds one bash alias:
 
-- `ilab` — the Isaac Lab extension dir + training venv.
-- `manager` — this dir + the manager venv.
+- `ilab` — activate the `ilab` venv and cd to the manager dir. From there, run any extension script
+  with `just run <script> <args>` (no need to cd into the extension).
 
 Scaffold a new project repo with `just new-tasks <name>` (registers under the `<name>/` namespace).
 
@@ -40,15 +40,18 @@ Scaffold a new project repo with `just new-tasks <name>` (registers under the `<
 
 **Local:**
 ```bash
-ilab
-python scripts/train.py --task <task-id> [--source <ssti|umrl>]
+ilab                                                   # activate the ilab venv + cd to the manager dir
+just run train --task <task-id> [--source <ssti|umrl>] # run any hcrl_isaaclab script from here
 ```
+`just run <script> <args>` runs any `hcrl_isaaclab/scripts/<script>.py` from the manager dir (no need
+to cd into the extension): `just run play --task <id> --checkpoint <path>`, `just run video_logger …`,
+`just run export …`, etc.
 
 **Ray:**
 ```bash
 just ray                       # one-time: write Ray config files
 just upload-artifacts --all    # one-time / when assets change: push large assets as W&B artifacts
-manager
+ilab
 scripts/ray.sh job --task <task-id> [train args]
 ```
 Large files (robot assets, motions, policies) are excluded from the job upload and fetched at runtime
@@ -99,10 +102,10 @@ records in-process instead).
 
 ### 2. Run the async video logger (on an RT-capable device)
 
-The unified logger is `hcrl_isaaclab/scripts/video_logger.py`; run it from the `ilab` venv.
+The unified logger is `hcrl_isaaclab/scripts/video_logger.py`; run it from the manager dir via `just run`:
 
 ```bash
-python scripts/video_logger.py --mode async --task <task_name> --wandb_project <entity>/<project> [options]
+just run video_logger --mode async --task <task_name> --wandb_project <entity>/<project> [options]
 ```
 
 Async mode scans `--wandb_project` for `log_videos_async`-tagged runs and records any checkpoints
@@ -149,7 +152,7 @@ to manage setup and deployment; environment dependencies are managed with the **
 
 - Installs system tools (uv, gitman) and the manager uv environment
 - Creates the W&B env file, if necessary
-- Adds the bash aliases (`ilab` / `manager`) to your RC file, if necessary
+- Adds the `ilab` bash alias (activate the venv + cd to the manager dir) to your RC file, if necessary
 
 > **Note**: called internally by `setup`, `cluster`, and `ray`.
 
@@ -167,6 +170,13 @@ to manage setup and deployment; environment dependencies are managed with the **
 ### `new-tasks <name>`
 
 - Scaffolds a new `<name>_tasks` extension repo under `resources/`, registered under the `<name>/` namespace
+
+### `run <script> [args]`
+
+- Runs `hcrl_isaaclab/scripts/<script>.py` with the `ilab` venv from the manager dir (no need to cd
+  into the extension), e.g. `just run train --task <id>`, `just run play …`, `just run video_logger …`
+- Executes the script *file* directly so Isaac Sim's `AppLauncher` runs before the package import
+  (the reason `python -m hcrl_isaaclab.scripts.<script>` can't work); auto-accepts the Isaac Sim EULA
 
 ### `clean`
 

@@ -171,3 +171,11 @@ resolve:
 # Scaffold a new <name>_tasks extension repo under resources/ (registers under the <name>/ namespace).
 new-tasks name:
     {{venv_py}} scripts/new_tasks.py {{name}}
+
+# Run any hcrl_isaaclab script from the manager dir (no need to cd into the extension), e.g.:
+#   just run train --task <id> --num_envs 4096
+#   just run play  --task <id> --checkpoint <path>
+#   just run video_logger --mode async --task <id> --wandb_project <entity>/<project>
+# Runs the script *file* directly (so AppLauncher runs before the package import) with the ilab venv.
+run script *args:
+    OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} resources/hcrl_isaaclab/scripts/{{script}}.py {{args}}
