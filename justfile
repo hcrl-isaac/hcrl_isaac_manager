@@ -108,11 +108,16 @@ docker *args:
     fi
     scripts/container.sh {{args}}
 
-# Cluster interface (passthrough to scripts/cluster.sh). CLUSTER=<name> selects a cluster config.
-#   just cluster setup        build the shared .sif and push it to the cluster
-#   just cluster job ...      submit a job;   just cluster develop ...   manage a dev node
+# Cluster interface (passthrough to scripts/cluster.sh). The first arg may be a cluster name (when a
+# matching scripts/cluster/<name>_config exists); otherwise CLUSTER env / "default" is used. e.g.:
+#   just cluster multi-delta repush      just cluster delta setup      CLUSTER=delta just cluster repush
 cluster *args:
-    scripts/cluster.sh {{args}}
+    @set -- {{args}}; \
+    if [ -n "${1:-}" ] && [ -d "scripts/cluster/${1}_config" ]; then \
+        name="$1"; shift; CLUSTER="$name" scripts/cluster.sh "$@"; \
+    else \
+        scripts/cluster.sh "$@"; \
+    fi
 
 # Create a cluster config (scripts/cluster/<name>_config) -- alias for `scripts/cluster.sh add-cluster`.
 add-cluster:
