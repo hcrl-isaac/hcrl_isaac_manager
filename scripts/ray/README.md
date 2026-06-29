@@ -149,46 +149,9 @@ artifact *versions* in W&B can be deleted via the API/UI to reclaim quota.
 ## Async video logging
 
 The Ray nodes (A100/H100) lack RT cores, so cameras can't run during training. To still get videos,
-the trainer logs to W&B and tags the run; a separate **async video logger** on any RT-capable box
-discovers the tagged run, pulls its checkpoints, renders the clips, and uploads them back to the same
-run. (On an RT-capable box, `--video` *alone* records in-process instead.)
-
-### 1. Tag the run
-
-Pass **both** `--video` and `--async` to `train.py`. `--async` tells the trainer it's on a headless
-no-RT box, so instead of spawning a local recorder it tags the W&B run `log_videos_async`.
-
-### 2. Run the logger (on an RT-capable device, from the `ilab` venv)
-
-```bash
-python video_logger.py --mode async --task <task_name> --wandb_project <entity>/<project> [options]
-```
-
-Async mode scans `--wandb_project` for tagged runs and records any checkpoints they haven't logged yet.
-
-| Arg | Default | Purpose |
-| --- | --- | --- |
-| `--task <id>` | — | env id to rebuild for rendering (required) |
-| `--wandb_project <entity>/<project>` | — | project to scan (required) |
-| `--num_envs <N>` | 64 | env count for the render sim |
-| `--video_length <steps>` | 400 | clip length, capped to one episode |
-| `--train_effective_envs <N>` | — | training `num_envs * world_size`, so the curriculum clock is restored (else the curriculum looks fully ramped) |
-| `--rerecord_from <iter>` / `--rerecord_all` | — | re-record checkpoints ≥ `iter` (or all), uploaded alongside existing videos |
-| `--max_runs_per_sweep <N>` | 0 (no limit) | record `N` runs then exit; use `1` under a keeper loop so each process renders one run with a fresh sim |
-| `--stochastic` | off | record the policy **sampling** actions instead of the deterministic mean |
-
-### Cron listener
-
-To run it automatically every 30 min:
-
-```bash
-scripts/video_listener.sh add    --task <task_name> --wandb_project <entity>/<project>
-scripts/video_listener.sh remove --task <task_name> --wandb_project <entity>/<project>
-```
-
-This installs a cron job running `hcrl_isaaclab/scripts/utils/log_videos_async.sh`, which activates
-the `ilab` venv, sources W&B credentials, skips the pass if GPU 0 is >50% busy, and invokes
-`video_logger.py --mode async`.
+tag the run with `--video --server` and run the async video logger on an RT-capable box. Full flow,
+options, and the cron listener are documented in the top-level README:
+[Asynchronous Video Logging](../../README.md#asynchronous-video-logging).
 
 ## Current Limitations
 
