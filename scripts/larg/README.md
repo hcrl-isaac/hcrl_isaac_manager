@@ -46,7 +46,7 @@ scripts/larg/train.sh <host> <task> <run_name> [run_group] [num_envs] [-- extra 
 scripts/larg/train.sh --log <host> <task>    # tail the run log + GPU usage
 ```
 
-Runs are sent with `--server`, so they tag the W&B run for **async video logging** (see below) rather than
+Runs are sent with `--video async`, so they tag the W&B run for **async video logging** (see below) rather than
 rendering in-process. `run_group` defaults to `larg`; `num_envs` is optional.
 
 | Env var | Purpose |

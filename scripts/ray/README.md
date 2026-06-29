@@ -149,7 +149,7 @@ artifact *versions* in W&B can be deleted via the API/UI to reclaim quota.
 ## Async video logging
 
 The Ray nodes (A100/H100) lack RT cores, so cameras can't run during training. To still get videos,
-tag the run with `--video --server` and run the async video logger on an RT-capable box. Full flow,
+tag the run with `--video async` and run the async video logger on an RT-capable box. Full flow,
 options, and the cron listener are documented in the top-level README:
 [Asynchronous Video Logging](../../README.md#asynchronous-video-logging).
 

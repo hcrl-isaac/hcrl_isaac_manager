@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the async video logger on a local RT-core capable box for
-# LARG A100 runs. The A100 training jobs run with --server: they log rollout
+# LARG A100 runs. The A100 training jobs run with --video async: they log rollout
 # states to W&B and tag the run for async video. This pulls those states,
 # renders the video locally, and uploads it back to the W&B run.
 #

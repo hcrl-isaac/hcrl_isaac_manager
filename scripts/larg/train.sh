@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Launch a single-node multi-GPU torchrun training job on a LARG box, under nohup.
 #
-# A100s lack RT cores, so we pass --server -> train.py defers video rendering to
+# A100s lack RT cores, so we pass --video async -> train.py defers video rendering to
 # the async logger (run scripts/larg/video_logger.sh on an RT-capable box). The
 # run is W&B-logged; other flags pass via `--`.
 #
@@ -49,7 +49,7 @@ remote_cmd="cd \$HOME/$LARG_REMOTE_DIR/$ILAB_REL && \
   ${cvd_export} \
   set -a; source \$HOME/$LARG_REMOTE_DIR/scripts/.env.wandb 2>/dev/null; set +a; \
   setsid ./ilab/bin/python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=$NPROC \
-    $TRAIN --distributed --server --task $task \
+    $TRAIN --distributed --video async --task $task \
     --run_name \"$run_name\" --run_group \"$run_group\" $envs_arg ${extra[*]} \
     > $log 2>&1 < /dev/null & \
   echo started pid \$!; echo log: $log"
