@@ -28,6 +28,7 @@ Manifest (``workspace.yaml`` at the manager root)::
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -108,17 +109,35 @@ def main() -> None:
     args = ap.parse_args()
 
     manifest = yaml.safe_load(Path(args.manifest).read_text())
-    resolved = resolve(manifest)
-    gitman_cfg = to_gitman(resolved, manifest)
     out = MANAGER_DIR / "gitman.yml"
-    out.write_text(yaml.safe_dump(gitman_cfg, sort_keys=False))
-    print(f"[resolve] wrote {out} with {len(resolved)} repos: {', '.join(sorted(resolved))}")
-    if manifest.get("isaaclab", {}).get("source"):
+    is_source = bool(manifest.get("isaaclab", {}).get("source"))
+
+    # In pip mode, remove an orphaned source clone left by a previous source-mode resolve so
+    # downstream source-vs-pip detection (and editable installs) don't pick it up.
+    if not is_source:
+        isaaclab_dir = RESOURCES / "IsaacLab"
+        if isaaclab_dir.exists():
+            print(f"[resolve] pip mode: removing orphaned IsaacLab source clone at {isaaclab_dir}")
+            shutil.rmtree(isaaclab_dir)
+
+    # A repo's transitive deps live in its own dependencies.yaml, which we can only read once that
+    # repo is checked out. So resolve -> gitman update -> re-resolve, looping until the repo set
+    # stops growing (fixpoint). Without --update we just write the first-pass gitman.yml and stop.
+    prev_names: set[str] | None = None
+    while True:
+        resolved = resolve(manifest)
+        out.write_text(yaml.safe_dump(to_gitman(resolved, manifest), sort_keys=False))
+        names = set(resolved)
+        print(f"[resolve] wrote {out} with {len(resolved)} repos: {', '.join(sorted(resolved))}")
+        if not args.update or names == prev_names:
+            break
+        subprocess.run(["gitman", "update", "--skip-changes"], cwd=MANAGER_DIR, check=True)
+        prev_names = names
+
+    if is_source:
         print("[resolve] IsaacLab: source mode (cloned into resources/IsaacLab)")
     else:
         print(f"[resolve] IsaacLab: pip mode (pin {manifest.get('isaaclab', {}).get('version', '?')})")
-    if args.update:
-        subprocess.run(["gitman", "update", "--skip-changes"], cwd=MANAGER_DIR, check=True)
 
 
 if __name__ == "__main__":

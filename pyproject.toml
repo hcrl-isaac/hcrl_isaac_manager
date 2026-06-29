@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "Environment for running Ray scripts from HCRL Isaac Manager"
 requires-python = ">=3.11,<3.14"
 
+# Manager-only dependencies (the lightweight base installed by `just deps`, used by `just ray`
+# and `just cluster`). The heavy Isaac Lab / Isaac Sim stack and the editable workspace packages
+# (hcrl_isaaclab, robot_rl, *_tasks, *_robots) are layered on top by `just setup` into the SAME
+# `ilab` venv -- see the justfile.
 dependencies = [
     "ray[default]==2.50.1",
     "rich==14.2.0",
@@ -12,9 +16,9 @@ dependencies = [
     # artifact uploads + checkpoint export (scripts/tools/upload_artifacts.py, scripts/export.py)
     "wandb",
     "pyyaml",
-    "robot-rl",
     "tensorboard",
 ]
 
-[tool.uv.sources]
-robot-rl = { path = "resources/IsaacLab/source/robot_rl", editable = true }
+# The manager itself is not an importable package (just scripts); don't try to build/install it.
+[tool.uv]
+package = false

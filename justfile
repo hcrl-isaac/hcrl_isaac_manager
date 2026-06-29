@@ -1,12 +1,23 @@
 venv_name := "ilab"
+venv_py := venv_name / "bin" / "python"
 
 rc_file := "$HOME/.bashrc"
 bash_utils := "$( pwd )/scripts/utils.sh"
 
 set shell := ["bash", "-c"]
 
+# Single uv-managed venv at the manager root (./ilab). `uv sync` / `uv run` target it via this var;
+# `uv pip install` targets it via `--python {{venv_py}}`.
+export UV_PROJECT_ENVIRONMENT := venv_name
+# Neutralize any venv the user's shell profile auto-activates, so uv never operates on it by accident
+# (a stray `VIRTUAL_ENV` + `uv sync --active` will prune that env to this project's deps).
+export VIRTUAL_ENV := ""
+
+# Manager-only dependencies (ray/cluster tooling). Creates the single `ilab` venv and installs the
+# lightweight base into it; fetches the workspace subrepos via gitman. Called by `setup`, `cluster`, `ray`.
 deps:
     if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi
+    uv venv --python 3.11 {{venv_name}}
     uv sync
     uv tool install gitman && gitman update --skip-changes
     @if [ ! -f "scripts/.env.wandb" ]; then \
@@ -19,32 +30,50 @@ deps:
         echo "[INFO] Adding $( basename {{bash_utils}} ) to $( basename {{rc_file}} )"; \
         echo "VENV_NAME={{venv_name}} source {{bash_utils}}" >> {{rc_file}}; \
         echo -e "[INFO] Successfully added $( basename {{bash_utils}} ) to $( basename {{rc_file}} )\n"; \
-        echo -e "\t\t1. For development in the main hcrl_isaaclab extension, run:   ilab"; \
-        echo -e "\t\t2. For manager use (e.g. cluster scripts), run:                manager"; \
-        echo -e "\n"; \
+        echo -e "\t\tRun  ilab  to activate the venv and enter the manager dir.\n"; \
     fi
 
+# Full local install: manager deps + the Isaac Lab / Isaac Sim stack + every workspace package,
+# all into the single `ilab` venv. Branches on whether IsaacLab was resolved as source or pip.
 setup:
     just deps
     just resolve            # workspace.yaml -> flat deduped gitman.yml + fetch repos as siblings under resources/
-    uv venv --python 3.11 resources/{{venv_name}}; \
-    source resources/{{venv_name}}/bin/activate; \
-    uv pip install --upgrade pip; \
-    uv pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com; \
-    uv pip install -U torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128; \
-    if [ -d resources/IsaacLab/source ]; then \
-        echo "[setup] IsaacLab source present -> editable install"; \
-        for d in resources/IsaacLab/source/isaaclab*/; do [ -d "$d" ] && uv pip install -e "$d"; done; \
+    @# Install the Blackwell-correct torch (cu128) FIRST so nothing downstream pulls a cu126 build that
+    @# then "satisfies" the torch>=2.7 constraint and sticks. Everything after sees torch already present.
+    uv pip install --python {{venv_py}} --torch-backend cu128 torch==2.7.0 torchvision==0.22.0
+    @# isaacsim/torch otherwise come transitively from isaaclab (pip mode) or explicitly (source mode).
+    if grep -Eq '^[[:space:]]*source:[[:space:]]*true' workspace.yaml; then \
+        echo "[setup] IsaacLab source mode -> editable install (+ explicit isaacsim; source isaaclab has no isaacsim extra)"; \
+        uv pip install --python {{venv_py}} "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com; \
+        for d in resources/IsaacLab/source/isaaclab*/; do [ -d "$d" ] && uv pip install --python {{venv_py}} --torch-backend cu128 -e "$d"; done; \
+        uv pip install --python {{venv_py}} --torch-backend cu128 -e resources/hcrl_isaaclab; \
     else \
-        echo "[setup] IsaacLab via pip (satisfied by hcrl_isaaclab's isaaclab* deps)"; \
-    fi; \
-    uv pip install rsl_rl-lib; \
-    for d in resources/hcrl_isaaclab resources/robot_rl resources/*_tasks resources/*_robots; do \
-        [ -d "$d" ] && uv pip install --extra-index-url https://pypi.nvidia.com -e "$d"; \
+        echo "[setup] IsaacLab via pip -> hcrl_isaaclab[isaacsim] pulls isaaclab[isaacsim]==2.3.2.post1 (isaacsim 5.1 + torch)"; \
+        uv pip install --python {{venv_py}} --torch-backend cu128 --extra-index-url https://pypi.nvidia.com --index-strategy unsafe-best-match -e "resources/hcrl_isaaclab[isaacsim]"; \
+    fi
+    uv pip install --python {{venv_py}} rsl_rl-lib
+    @# Editable-install only the Python packages; some *_robots repos are data/asset-only (no setup.py)
+    @# and are materialized by the artifact resolver, not pip-installed.
+    for d in resources/robot_rl resources/*_tasks resources/*_robots; do \
+        if [ -d "$d" ] && { [ -f "$d/setup.py" ] || [ -f "$d/pyproject.toml" ]; }; then \
+            uv pip install --python {{venv_py}} --torch-backend cu128 --extra-index-url https://pypi.nvidia.com -e "$d"; \
+        elif [ -d "$d" ]; then echo "[setup] skipping non-package data repo: $d"; fi; \
     done
+    just vscode
+
+# Generate VSCode settings so the workspace can be developed from the manager directory.
+# pip mode: the isaaclab pip package ships the generator; source mode: IsaacLab's setup_vscode.py tool.
+vscode:
+    @if grep -Eq '^[[:space:]]*source:[[:space:]]*true' workspace.yaml; then \
+        echo "[vscode] source mode -> setup_vscode.py"; \
+        ACCEPT_EULA=y {{venv_py}} resources/IsaacLab/.vscode/tools/setup_vscode.py || echo "[vscode][WARN] setup_vscode.py failed"; \
+    else \
+        echo "[vscode] pip mode -> python -m isaaclab --generate-vscode-settings"; \
+        ACCEPT_EULA=y {{venv_py}} -m isaaclab --generate-vscode-settings || echo "[vscode][WARN] generate-vscode-settings failed"; \
+    fi
 
 clean:
-    @venv_dir="$( pwd )/resources/IsaacLab/{{venv_name}}"; \
+    @venv_dir="$( pwd )/{{venv_name}}"; \
     if [ -d $venv_dir ]; then \
         echo "[INFO] Removing virtual environment at ${venv_dir}."; \
         rm -rf $venv_dir; \
@@ -135,13 +164,13 @@ upload-artifacts *args:
         exit 1; \
     fi; \
     set -a; source scripts/.env.wandb; set +a; \
-    .venv/bin/python \
-        resources/IsaacLab/source/hcrl_isaaclab/scripts/tools/upload_artifacts.py {{args}}
+    {{venv_py}} \
+        resources/hcrl_isaaclab/scripts/tools/upload_artifacts.py {{args}}
 
 # Resolve workspace.yaml -> flat deduped gitman.yml, then fetch all repos (flat under resources/).
 resolve:
-    .venv/bin/python scripts/resolve_workspace.py --manifest workspace.yaml --update
+    {{venv_py}} scripts/resolve_workspace.py --manifest workspace.yaml --update
 
 # Scaffold a new <name>_tasks extension repo under resources/ (registers under the <name>/ namespace).
 new-tasks name:
-    .venv/bin/python scripts/new_tasks.py {{name}}
+    {{venv_py}} scripts/new_tasks.py {{name}}
