@@ -42,60 +42,28 @@ ENV_FILE="${SCRIPT_DIR}/../config/${CLUSTER}/.env.cluster"
 [ -f "$ENV_FILE" ] && source "$ENV_FILE"
 
 CLUSTER_LOGIN="${CLUSTER_LOGIN:?CLUSTER_LOGIN not set (expected from config/${CLUSTER}/.env.cluster)}"
-CDEV_USER="${CLUSTER_LOGIN%@*}"
-CDEV_LOGIN_HOST="${CDEV_LOGIN_HOST:-${CLUSTER_LOGIN#*@}}"   # login host; round-robin DNS is fine since we always multiplex over one master.
+DEV_USER="${CLUSTER_LOGIN%@*}"
+CLUSTER_LOGIN_HOST="${CLUSTER_LOGIN_HOST:-${CLUSTER_LOGIN#*@}}"   # login host; round-robin DNS is fine since we always multiplex over one master.
 REMOTE_ISAACLAB_DIR="${CLUSTER_ISAACLAB_DIR:?CLUSTER_ISAACLAB_DIR not set}"
 
-# Sentinel job resources. These are cluster-agnostic: set whatever the target queue needs
-# in config/<cluster>/.env.cluster (CDEV_ACCOUNT, CDEV_PARTITION, CDEV_GPUS_PER_NODE,
-# CDEV_CPUS, CDEV_MEM, CDEV_EXCLUSIVE). Anything left UNSET emits no corresponding #SBATCH
-# directive, so SLURM falls back to the queue's own default rather than a forced value.
-CDEV_ACCOUNT="${CDEV_ACCOUNT:-}"          # e.g. an allocation/charge code; omit where not required
-CDEV_PARTITION="${CDEV_PARTITION:-}"      # e.g. gpuA40x4 (Delta), rtx-small (TACC); omit for queue default
-CDEV_TIME="${CDEV_TIME:-48:00:00}"        # walltime to hold the node; cap to the queue max
-CDEV_GPUS_PER_NODE="${CDEV_GPUS_PER_NODE:-}"  # set to force --gpus-per-node=N; unset -> queue default
-CDEV_CPUS="${CDEV_CPUS:-}"                # set to force --cpus-per-task=N; unset -> queue default
-CDEV_MEM="${CDEV_MEM:-}"                  # set to force --mem; unset -> queue default
-CDEV_EXCLUSIVE="${CDEV_EXCLUSIVE:-}"      # set 1/true/yes to request a whole node (--exclusive)
+# Sentinel resources reuse the #SBATCH config from this cluster's submit_job_slurm.sh (the same one the
+# `job` path uses), so the dev box matches it with no separate config.
+SUBMIT_SLURM="$(dirname "$ENV_FILE")/submit_job_slurm.sh"
+[ -f "$SUBMIT_SLURM" ] || { echo "[cluster_dev] no submit_job_slurm.sh next to $ENV_FILE" >&2; exit 1; }
+# its #SBATCH directives, minus job-name/output (the sentinel sets its own).
+SBATCH_DIRECTIVES="$(grep -E '^#SBATCH' "$SUBMIT_SLURM" | grep -vE -- '--job-name|--output')"
+# the few values srun --overlap (attach/exec) needs, pulled from those directives.
+_sbatch_val() { printf '%s\n' "$SBATCH_DIRECTIVES" | grep -oE -- "(^|[[:space:]])$1[= ][^[:space:]]+" | head -1 | sed -E "s/.*$1[= ]//" || true; }
+DEV_PARTITION="$(_sbatch_val -p)"; DEV_ACCOUNT="$(_sbatch_val -A)"
+DEV_TIME="$(_sbatch_val --time)"; DEV_GPUS="$(_sbatch_val --gpus-per-node)"
 
-# Build each #SBATCH directive line; an empty string means the directive is omitted entirely.
-# NB: use `[ -n "$X" ] && VAR=...` (not `VAR="$( ... && echo )"`) -- a top-level assignment
-# whose command substitution exits non-zero trips `set -e` and would abort the script silently.
-CDEV_ACCOUNT_DIRECTIVE=""
-CDEV_PARTITION_DIRECTIVE=""
-CDEV_GPUS_DIRECTIVE=""
-CDEV_CPUS_DIRECTIVE=""
-CDEV_MEM_DIRECTIVE=""
-CDEV_EXCLUSIVE_DIRECTIVE=""
-[ -n "$CDEV_ACCOUNT" ]       && CDEV_ACCOUNT_DIRECTIVE="#SBATCH -A ${CDEV_ACCOUNT}"
-[ -n "$CDEV_PARTITION" ]     && CDEV_PARTITION_DIRECTIVE="#SBATCH -p ${CDEV_PARTITION}"
-[ -n "$CDEV_GPUS_PER_NODE" ] && CDEV_GPUS_DIRECTIVE="#SBATCH --gpus-per-node=${CDEV_GPUS_PER_NODE}"
-[ -n "$CDEV_CPUS" ]          && CDEV_CPUS_DIRECTIVE="#SBATCH --cpus-per-task=${CDEV_CPUS}"
-[ -n "$CDEV_MEM" ]           && CDEV_MEM_DIRECTIVE="#SBATCH --mem=${CDEV_MEM}"
-case "$CDEV_EXCLUSIVE" in
-    1|true|TRUE|True|yes|YES|Yes) CDEV_EXCLUSIVE_DIRECTIVE="#SBATCH --exclusive" ;;
-esac
-
-# How to get onto the node for attach/exec: "auto" probes at job start whether
-# login->node ssh works without re-auth; else falls back to srun --overlap.
-# Override with CDEV_ATTACH_MODE=ssh|srun. For srun-mode GPU access we request the gres
-# only when a count is known; otherwise the --overlap step inherits the job's allocation.
-CDEV_ATTACH_MODE="${CDEV_ATTACH_MODE:-auto}"
-if [ -n "$CDEV_GPUS_PER_NODE" ]; then
-    CDEV_SRUN_GRES="${CDEV_SRUN_GRES:-gpu:${CDEV_GPUS_PER_NODE}}"
-fi
-CDEV_SRUN_GRES="${CDEV_SRUN_GRES:-}"
-if [ -n "$CDEV_SRUN_GRES" ]; then
-    CDEV_SRUN_GRES_OPT="--gres=${CDEV_SRUN_GRES}"
-else
-    CDEV_SRUN_GRES_OPT=""
-fi
-# Some sites (e.g. TACC) enforce a submit filter on EVERY srun step -- including an --overlap
-# step joining a running job -- requiring -p, -N and -n (and sometimes -A). Pass them through.
-# -N 1 -n 1 is correct for a single-node dev box; override the whole set via CDEV_SRUN_EXTRA.
-CDEV_SRUN_PART_OPT=""; [ -n "$CDEV_PARTITION" ] && CDEV_SRUN_PART_OPT="-p ${CDEV_PARTITION}"
-CDEV_SRUN_ACCT_OPT="";  [ -n "$CDEV_ACCOUNT" ]   && CDEV_SRUN_ACCT_OPT="-A ${CDEV_ACCOUNT}"
-CDEV_SRUN_OPTS="${CDEV_SRUN_PART_OPT} ${CDEV_SRUN_ACCT_OPT} -N 1 -n 1 -t ${CDEV_TIME} ${CDEV_SRUN_GRES_OPT} ${CDEV_SRUN_EXTRA:-}"
+# How to reach the node for attach/exec: "auto" probes login->node ssh, else srun --overlap.
+CLUSTER_ATTACH_MODE="${CLUSTER_ATTACH_MODE:-auto}"
+# Some sites' submit filters require -p/-A (and a gres for GPU) on the --overlap step too.
+SRUN_GRES_OPT=""; [ -n "$DEV_GPUS" ]      && SRUN_GRES_OPT="--gres=gpu:${DEV_GPUS}"
+SRUN_PART_OPT=""; [ -n "$DEV_PARTITION" ] && SRUN_PART_OPT="-p ${DEV_PARTITION}"
+SRUN_ACCT_OPT=""; [ -n "$DEV_ACCOUNT" ]   && SRUN_ACCT_OPT="-A ${DEV_ACCOUNT}"
+DEV_SRUN_OPTS="${SRUN_PART_OPT} ${SRUN_ACCT_OPT} -N 1 -n 1 -t ${DEV_TIME:-48:00:00} ${SRUN_GRES_OPT} ${CLUSTER_SRUN_EXTRA:-}"
 
 # Local code to mirror to the cluster (the manager workspace root -- flat layout: scripts/ + the
 # resources/<pkg> repos; the shared .sif provides isaacsim + Isaac Lab so no IsaacLab tree is required).
@@ -166,7 +134,7 @@ stage_node_exec() {
 
 # Stage the SELECTED cluster's .env.cluster into the IsaacLab tree so it rides the rsync and
 # node_exec.sh (which sources ../.env.cluster ON THE NODE) picks up THIS cluster's paths/modules
-# (CLUSTER_ISAACLAB_DIR, CLUSTER_SIF_PATH, CDEV_MODULE_LOAD, ...) -- not whatever another cluster's
+# (CLUSTER_ISAACLAB_DIR, CLUSTER_SIF_PATH, CLUSTER_MODULE_LOAD, ...) -- not whatever another cluster's
 # session last left in the shared staging slot. This is what makes node_exec cluster-agnostic.
 stage_env_cluster() {
     local env_dst="${LOCAL_ISAACLAB_DIR}/scripts/cluster/.env.cluster"
@@ -207,16 +175,11 @@ cmd_start() {
         stage_node_exec
         rsync_code || err "rsync failed (continuing; you can re-run './cluster_dev.sh sync')."
     fi
-    # 2) render + submit the sentinel sbatch from the template.
+    # 2) render + submit the sentinel sbatch from the template. Only $SBATCH_DIRECTIVES is substituted;
+    # runtime refs ($SLURM_JOB_ID, $HOME, $(hostname)) are left for the job to evaluate on the node.
     local sbatch_remote=".cluster_dev_sentinel.sbatch"
-    # IMPORTANT: pass an explicit allowlist to envsubst so it ONLY substitutes our config
-    # vars and leaves runtime refs ($SLURM_JOB_ID, $HOME, $(hostname), ${CDEV_TIME_SECONDS:-...})
-    # untouched for the job to evaluate on the node.
-    export CDEV_TIME CDEV_GPUS_PER_NODE \
-        CDEV_ACCOUNT_DIRECTIVE CDEV_PARTITION_DIRECTIVE CDEV_GPUS_DIRECTIVE \
-        CDEV_CPUS_DIRECTIVE CDEV_MEM_DIRECTIVE CDEV_EXCLUSIVE_DIRECTIVE
-    envsubst '$CDEV_TIME $CDEV_GPUS_PER_NODE $CDEV_ACCOUNT_DIRECTIVE $CDEV_PARTITION_DIRECTIVE $CDEV_GPUS_DIRECTIVE $CDEV_CPUS_DIRECTIVE $CDEV_MEM_DIRECTIVE $CDEV_EXCLUSIVE_DIRECTIVE' \
-        < "${SCRIPT_DIR}/sentinel.sbatch" | on_login "cat > ${sbatch_remote}"
+    export SBATCH_DIRECTIVES
+    envsubst '$SBATCH_DIRECTIVES' < "${SCRIPT_DIR}/sentinel.sbatch" | on_login "cat > ${sbatch_remote}"
     local jobid raw
     raw="$(on_login "sbatch --parsable ${sbatch_remote}")" || { err "sbatch failed."; exit 1; }
     # --parsable prints "<jobid>[;<cluster>]". Some login shells (e.g. TACC) emit banner/
@@ -227,7 +190,7 @@ cmd_start() {
     : > "$STATE_FILE"
     state_set JOBID "$jobid"; state_set JOB_STATE "SUBMITTED"; state_set NODE ""
     state_set SUBMIT_TS "$(date -u +%FT%TZ)"
-    log "Submitted sentinel job ${jobid} (partition=${CDEV_PARTITION:-queue-default}, gpus=${CDEV_GPUS_PER_NODE:-queue-default}, time=${CDEV_TIME})."
+    log "Submitted sentinel job ${jobid} (partition=${DEV_PARTITION:-default}, gpus=${DEV_GPUS:-default}, time=${DEV_TIME:-default})."
     # 3) background watcher tracks the (possibly long) queue wait.
     cmd_watch_start "$jobid"
     log "Watcher started. It may queue for hours -- check './cluster_dev.sh status' anytime."
@@ -264,7 +227,7 @@ cmd_watch_loop() {  # internal: poll squeue until RUNNING/terminal, record node
             # Auto-detect q4: can we ssh login->node WITHOUT interactive auth (2FA)?
             # BatchMode=yes makes ssh fail fast instead of prompting if creds are needed.
             if [ -n "$node" ] && ssh "${SSH_OPTS[@]}" -o BatchMode=yes -o ConnectTimeout=15 \
-                    -J "$CLUSTER_LOGIN" "${CDEV_USER}@${node}" true 2>/dev/null; then
+                    -J "$CLUSTER_LOGIN" "${DEV_USER}@${node}" true 2>/dev/null; then
                 state_set SSH_NODE_OK yes
                 echo "[$(date -u +%FT%TZ)] login->node ssh works passwordlessly -> attach via direct ssh" >> "$WATCH_LOG"
             else
@@ -297,11 +260,11 @@ cmd_status() {
 
 # Ensures job RUNNING + master up; sets DD_JOBID, DD_NODE, DD_MODE (ssh|srun).
 require_running() {
-    # CDEV_JOBID overrides the tracked state file: target any RUNNING job of this user (e.g. a
+    # DEV_JOBID overrides the tracked state file: target any RUNNING job of this user (e.g. a
     # second sentinel the watcher isn't tracking). Such jobs are always driven via srun --overlap
     # (no ssh-node probe), so it works even when the state file points at a different job.
-    if [ -n "${CDEV_JOBID:-}" ]; then
-        DD_JOBID="$CDEV_JOBID"
+    if [ -n "${DEV_JOBID:-}" ]; then
+        DD_JOBID="$DEV_JOBID"
         master_alive || { err "SSH master is down -- re-run './cluster_dev.sh start' (needs 2FA)."; exit 1; }
         local row state; row="$(on_login "squeue -j ${DD_JOBID} -h -o '%T %N' 2>/dev/null")"
         state="$(echo "$row" | awk '{print $1}')"
@@ -314,23 +277,23 @@ require_running() {
     [ "$(state_get JOB_STATE)" = "RUNNING" ] && [ -n "$DD_JOBID" ] || {
         err "No running job yet (state=$(state_get JOB_STATE)). Run './cluster_dev.sh status'."; exit 1; }
     master_alive || { err "SSH master is down -- re-run './cluster_dev.sh start' (needs 2FA)."; exit 1; }
-    DD_MODE="$CDEV_ATTACH_MODE"
+    DD_MODE="$CLUSTER_ATTACH_MODE"
     if [ "$DD_MODE" = "auto" ]; then
         [ "$(state_get SSH_NODE_OK)" = "yes" ] && [ -n "$DD_NODE" ] && DD_MODE="ssh" || DD_MODE="srun"
     fi
 }
 
 cmd_attach() {  # interactive shell on the compute node
-    [ "${1:-}" = "--ssh" ] && { CDEV_ATTACH_MODE="ssh"; shift; }
-    [ "${1:-}" = "--srun" ] && { CDEV_ATTACH_MODE="srun"; shift; }
+    [ "${1:-}" = "--ssh" ] && { CLUSTER_ATTACH_MODE="ssh"; shift; }
+    [ "${1:-}" = "--srun" ] && { CLUSTER_ATTACH_MODE="srun"; shift; }
     require_running
     if [ "$DD_MODE" = "ssh" ]; then
         log "ssh -> ${DD_NODE} (direct, proxied via master). Ctrl-D leaves node; job keeps running."
-        ssh "${SSH_OPTS[@]}" -t -J "$CLUSTER_LOGIN" "${CDEV_USER}@${DD_NODE}" "${@:-bash -l}"
+        ssh "${SSH_OPTS[@]}" -t -J "$CLUSTER_LOGIN" "${DEV_USER}@${DD_NODE}" "${@:-bash -l}"
     else
         log "srun --overlap onto job ${DD_JOBID}'s node (auth-safe). Ctrl-D leaves; job keeps running."
         ssh "${SSH_OPTS[@]}" -t "$CLUSTER_LOGIN" \
-            "srun --jobid=${DD_JOBID} --overlap ${CDEV_SRUN_OPTS} --pty bash -l"
+            "srun --jobid=${DD_JOBID} --overlap ${DEV_SRUN_OPTS} --pty bash -l"
     fi
 }
 
@@ -360,10 +323,10 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     if [ -z "$detach" ]; then
         log "[${DD_MODE}] container exec on job ${DD_JOBID}: $*"
         if [ "$DD_MODE" = "ssh" ]; then
-            ssh "${SSH_OPTS[@]}" -J "$CLUSTER_LOGIN" "${CDEV_USER}@${DD_NODE}" "$nodecmd"
+            ssh "${SSH_OPTS[@]}" -J "$CLUSTER_LOGIN" "${DEV_USER}@${DD_NODE}" "$nodecmd"
         else
             ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
-                "srun --jobid=${DD_JOBID} --overlap ${CDEV_SRUN_OPTS} bash -lc '${nodecmd}'"
+                "srun --jobid=${DD_JOBID} --overlap ${DEV_SRUN_OPTS} bash -lc '${nodecmd}'"
         fi
         return
     fi
@@ -375,9 +338,9 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     # ssh-mode we keep the detach point on the login node for consistency.
     local inner
     if [ "$DD_MODE" = "ssh" ]; then
-        inner="ssh -J ${CLUSTER_LOGIN} ${CDEV_USER}@${DD_NODE} bash -lc '${nodecmd}'"
+        inner="ssh -J ${CLUSTER_LOGIN} ${DEV_USER}@${DD_NODE} bash -lc '${nodecmd}'"
     else
-        inner="srun --jobid=${DD_JOBID} --overlap ${CDEV_SRUN_OPTS} bash -lc '${nodecmd}'"
+        inner="srun --jobid=${DD_JOBID} --overlap ${DEV_SRUN_OPTS} bash -lc '${nodecmd}'"
     fi
     log "[${DD_MODE} detached] container exec on job ${DD_JOBID}: $*"
     log "Log on login node: ${logfile}   (follow with: $(basename "${BASH_SOURCE[0]}") tail)"

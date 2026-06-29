@@ -13,15 +13,15 @@ source "${SCRIPT_DIR}/../../.env.base" 2>/dev/null || true
 : "${DOCKER_USER_HOME:=/root}"
 
 # Some sites ship the container runtime as an Lmod module (e.g. TACC: tacc-apptainer)
-# rather than on PATH. Load it if the cluster's .env.cluster sets CDEV_MODULE_LOAD.
-if [ -n "${CDEV_MODULE_LOAD:-}" ]; then
+# rather than on PATH. Load it if the cluster's .env.cluster sets CLUSTER_MODULE_LOAD.
+if [ -n "${CLUSTER_MODULE_LOAD:-}" ]; then
     set +u
     if ! type module >/dev/null 2>&1; then
         for init in /etc/profile.d/z00_lmod.sh /etc/profile.d/lmod.sh /usr/share/lmod/lmod/init/bash; do
             [ -f "$init" ] && source "$init" && break
         done
     fi
-    module load ${CDEV_MODULE_LOAD} || echo "[node_exec] WARNING: 'module load ${CDEV_MODULE_LOAD}' failed"
+    module load ${CLUSTER_MODULE_LOAD} || echo "[node_exec] WARNING: 'module load ${CLUSTER_MODULE_LOAD}' failed"
     set -u
 fi
 
