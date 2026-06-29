@@ -108,51 +108,15 @@ docker *args:
     fi
     scripts/container.sh {{args}}
 
-cluster name="default":
-    just deps
-    if ! command -v nvidia-container-toolkit >/dev/null 2>&1; then \
-        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
-            && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-            sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-            sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list \
-            && sudo apt-get update; \
-        sudo apt-get install -y nvidia-container-toolkit; \
-        sudo systemctl restart docker; \
-        sudo nvidia-ctk runtime configure --runtime=docker; \
-        sudo systemctl restart docker; \
-    fi;
-    if ! command -v apptainer >/dev/null 2>&1; then \
-        sudo apt update; \
-        sudo apt install -y software-properties-common; \
-        sudo add-apt-repository -y ppa:apptainer/ppa; \
-        sudo apt update; \
-        sudo apt install -y apptainer; \
-    fi;
-    just docker;
-    CLUSTER={{name}} scripts/cluster.sh push;
+# Cluster interface (passthrough to scripts/cluster.sh). CLUSTER=<name> selects a cluster config.
+#   just cluster setup        build the shared .sif and push it to the cluster
+#   just cluster job ...      submit a job;   just cluster develop ...   manage a dev node
+cluster *args:
+    scripts/cluster.sh {{args}}
 
+# Create a cluster config (scripts/cluster/<name>_config) -- alias for `scripts/cluster.sh add-cluster`.
 add-cluster:
-    @read -p "Cluster Nickname (leave blank for default): " cluster_name; \
-    if [ -z $cluster_name ]; then cluster_name="default"; fi; \
-    outdir="scripts/cluster/${cluster_name}_config"; \
-    if [ -d $outdir ]; then \
-        echo "[ERROR] Cluster config with nickname $cluster_name already exists. Delete it, edit it directly, or pick a different name."; \
-        exit 1; \
-    fi; \
-    read -p "Cluster Login (username@address): " cluster_login; \
-    read -p "Home Directory (`echo '$HOME'` from cluster machine): " home; \
-    read -p "Scratch Directory (`echo '$SCRATCH'` from cluster machine): " scratch; \
-    read -p "Email (for job notifications): " email; \
-    read -p "Queue Name: " queue; \
-    read -p "GPUs per Node: " num_procs; \
-    read -p "CPUs per Task/GPU: " num_cpus; \
-    case "$home" in /*) ;; *) home="/$home" ;; esac; \
-    case "$scratch" in /*) ;; *) scratch="/$scratch" ;; esac; \
-    mkdir $outdir; \
-    echo "[INFO] Writing cluster env file..."; \
-    HOME=$home SCRATCH=$scratch CLUSTER_LOGIN=$cluster_login NUM_PROCS=$num_procs NUM_CPUS=$num_cpus envsubst < scripts/cluster/tools/.env.cluster.template > $outdir/.env.cluster; \
-    echo "[INFO] Writing SLURM job config file..."; \
-    EMAIL=$email QUEUE=$queue NUM_PROCS=$num_procs NUM_CPUS=$num_cpus envsubst < scripts/cluster/tools/submit_job_slurm.template.sh > $outdir/submit_job_slurm.sh;
+    scripts/cluster.sh add-cluster
 
 # Ray interface (passthrough to scripts/ray.sh): `just ray setup` writes the configs, `just ray job ...`
 # submits, plus list/logs/stop/push. Run `just deps` first so the configs + venv exist.
