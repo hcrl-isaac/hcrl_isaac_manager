@@ -16,3 +16,8 @@ worktrees/
 .env
 .env.*
 !.env.*.template
+
+# HPC Apptainer (.sif) build artifacts
+scripts/cluster/exports/
+*.sif
+*.tar
