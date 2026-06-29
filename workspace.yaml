@@ -6,3 +6,8 @@ isaaclab:
   version: "5.1.0"
 projects: [ssti, umrl]   # -> ssti_tasks + umrl_tasks (and their transitive robot deps)
 always: [hcrl_isaaclab, robot_rl]
+# Per-repo ref overrides (default is main). The clean carved core lives on feature/reorg-core until it
+# lands on main; main is still the pre-reorg monolith and isn't cleanly runnable.
+refs:
+  hcrl_isaaclab: feature/reorg-core
+  robot_rl: umrl   # reorg-core's train.py needs OffPolicyRunner; robot_rl has no reorg branch, umrl has it

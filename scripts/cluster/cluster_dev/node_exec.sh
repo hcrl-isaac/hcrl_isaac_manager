@@ -12,7 +12,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 source "${SCRIPT_DIR}/../.env.cluster"
 source "${SCRIPT_DIR}/../../.env.wandb"  2>/dev/null || true
+# .env.base came from IsaacLab's docker tree (source mode); the decoupled image doesn't need it.
+# Default the container paths for the shared image (isaac-sim base) so `set -u` doesn't trip.
 source "${SCRIPT_DIR}/../../.env.base" 2>/dev/null || true
+: "${DOCKER_ISAACSIM_ROOT_PATH:=/isaac-sim}"
+: "${DOCKER_USER_HOME:=/root}"
 
 # Some sites ship the container runtime as an Lmod module (e.g. TACC: tacc-apptainer)
 # rather than on PATH. Load it if the cluster's .env.cluster sets CDEV_MODULE_LOAD.
@@ -64,12 +68,13 @@ mkdir -p \
     "${STAGE}/docker-isaac-sim/data" \
     "${STAGE}/docker-isaac-sim/documents"
 cmd="$*"; [ -n "$cmd" ] || cmd="/isaac-sim/python.sh --version"
-# Bind the flat workspace packages into /workspace/ext (+ IsaacLab source overlay in source mode); the
-# container has Isaac Lab from pip baked in, and the entrypoint adds these to PYTHONPATH.
+# Bind ALL flat workspace repos into /workspace/ext -- packages AND data/asset repos (e.g. hcrl_robots),
+# since the in-repo resource symlinks (hcrl_isaaclab/resources/<name> -> ../../<name>) need the asset
+# repos mounted too. The entrypoint adds only the Python packages to PYTHONPATH. (+ source overlay below.)
 EXT_BINDS=""
 for d in "${CLUSTER_ISAACLAB_DIR}"/resources/*/; do
     name="$(basename "$d")"
-    { [ -f "${d}setup.py" ] || [ -f "${d}pyproject.toml" ]; } || continue
+    [ "$name" = "IsaacLab" ] && continue   # handled by the source overlay below, not /workspace/ext
     EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:rw"
 done
 [ -d "${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source" ] && \

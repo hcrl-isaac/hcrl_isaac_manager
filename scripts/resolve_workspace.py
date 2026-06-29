@@ -66,18 +66,22 @@ def resolve(manifest: dict) -> dict[str, dict]:
         SystemExit: Two repos request the same dependency name at different refs (unresolved conflict).
     """
     org = manifest.get("org", "hcrl-isaac")
+    # Per-repo ref overrides (workspace.yaml `refs: {name: ref}`) win over the default "main" and over
+    # any ref a dependency declares -- so e.g. `refs: {hcrl_isaaclab: feature/reorg-core}` pins the core
+    # without tripping the conflict check when a dep requests it at main.
+    refs = manifest.get("refs", {}) or {}
     resolved: dict[str, dict] = {}
 
     # seed roots: the always-present repos + each selected project's task repo
     roots = list(manifest.get("always", ["hcrl_isaaclab", "robot_rl"]))
     roots += [f"{p}_tasks" for p in manifest.get("projects", [])]
 
-    queue = [{"name": n, "git": None, "ref": "main"} for n in roots]
+    queue = [{"name": n, "git": None, "ref": refs.get(n, "main")} for n in roots]
     while queue:
         dep = queue.pop(0)
         name = dep["name"]
         url = _git_url(name, org, dep.get("git"))
-        ref = dep.get("ref", "main")
+        ref = refs.get(name, dep.get("ref", "main"))
         if name in resolved:
             if resolved[name]["ref"] != ref:
                 sys.exit(

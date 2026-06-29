@@ -85,7 +85,7 @@ EXT_BINDS=""
 SYNC_DIR="$JOB_TMPDIR/$dir_name"
 for d in "$SYNC_DIR"/resources/*/; do
     name="$(basename "$d")"
-    { [ -f "${d}setup.py" ] || [ -f "${d}pyproject.toml" ]; } || continue
+    [ "$name" = "IsaacLab" ] && continue   # handled by the source overlay below, not /workspace/ext
     EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:rw"
 done
 [ -d "$SYNC_DIR/resources/IsaacLab/source" ] && EXT_BINDS="$EXT_BINDS -B $SYNC_DIR/resources/IsaacLab/source:/workspace/isaaclab_source:rw"

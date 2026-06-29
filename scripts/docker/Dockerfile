@@ -35,6 +35,13 @@ RUN ${ISAAC_PY} -m pip install --upgrade pip && \
     ${ISAAC_PY} -m pip install "isaaclab==2.3.2.post1" "rsl-rl-lib" && \
     ${ISAAC_PY} -m pip install "ray[default,tune]==2.50.1" optuna bayesian-optimization gitman
 
+# Workspace package runtime deps. The workspace packages (hcrl_isaaclab, robot_rl, *_tasks) are mounted
+# + PYTHONPATH'd at runtime (not pip-installed), so their *dependencies* must be baked here. Keep in sync
+# with resources/robot_rl + resources/hcrl_isaaclab deps (TODO: auto-extract from their pyproject/setup).
+RUN ${ISAAC_PY} -m pip install \
+    "tensordict>=0.7.0" GitPython onnx "POT==0.9.6" "onnxscript>=0.5.4" \
+    psutil "wandb>=0.19.9" onnxruntime urdfpy usd-core "networkx>=3.3" rtree
+
 # git-lfs (robot assets / motion datasets / policies are pulled via LFS during code sync).
 COPY install-git-lfs.sh /tmp/install-git-lfs.sh
 RUN bash /tmp/install-git-lfs.sh && git lfs version
