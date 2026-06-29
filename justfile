@@ -95,6 +95,11 @@ clean:
     fi
     @echo "[INFO] Successfully cleaned up environment."
 
+# Build the shared Isaac docker image (isaacsim from the nvcr base + Isaac Lab from pip; workspace code
+# mounted + editable-installed at job start). Reused by BOTH Ray and the HPC .sif -- see scripts/docker/.
+image:
+    scripts/docker/build_image.sh
+
 docker:
     if ! command -v docker >/dev/null 2>&1; then \
         curl -fsSL https://get.docker.com -o get-docker.sh; \
