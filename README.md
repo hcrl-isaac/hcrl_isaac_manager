@@ -49,19 +49,18 @@ to cd into the extension): `just run play --task <id> --checkpoint <path>`, `jus
 
 **Ray:**
 ```bash
-just ray                       # one-time: write Ray config files
-just upload-artifacts --all    # one-time / when assets change: push large assets as W&B artifacts
+just ray setup                 # one-time / when assets change: write Ray configs + upload large assets as W&B artifacts
 ilab
 just ray job --task <task-id> [train args]
 ```
 Large files (robot assets, motions, policies) are excluded from the job upload and fetched at runtime
-as W&B artifacts, so `upload-artifacts` must run before the first job. See the
-[Ray README](scripts/ray/README.md).
+as W&B artifacts; `just ray setup` uploads them (it calls `just upload-artifacts`) before the first job.
+See the [Ray README](scripts/ray/README.md).
 
 **HPC:**
 ```bash
 just add-cluster               # one-time per cluster (CLUSTER=<name>)
-just cluster                   # build + push the .sif (when deps change)
+just cluster setup             # build + push the .sif (when deps change)
 just cluster job --task <task-id> [train args]
 ```
 See the [Cluster README](scripts/cluster/README.md).
@@ -187,25 +186,24 @@ to manage setup and deployment; environment dependencies are managed with the **
 - Installs and configures Docker if necessary
 - Builds and starts the Isaac Lab Docker container
 
-### `cluster [name]`
+### `cluster [name] <subcommand>`
 
-- Installs general dependencies (`just deps`)
-- Installs nvidia-container-toolkit and Apptainer, if necessary
-- Builds and starts the Isaac Lab Docker container (`just docker`)
-- Builds and pushes the Apptainer image to the cluster
+- A subcommand is required: `setup` builds + pushes the Apptainer `.sif`; plus `job`/`develop`/`repush`/…
+- Optional leading cluster name selects `config/<name>` (else `CLUSTER` env / "default")
 
 ### `add-cluster`
 
 - Creates cluster configuration files from template
 
-### `ray`
+### `ray <subcommand>`
 
-- Installs general dependencies (`just deps`)
-- Creates Ray configuration files from template
+- A subcommand is required: `setup` writes the Ray config files **and** uploads large assets (`just upload-artifacts`)
+- Plus `job`/`bench`/`list`/`logs`/`stop`/`push`. Run `just deps` first so the venv + `.env.wandb` exist.
 
 ### `upload-artifacts [args]`
 
 - Uploads managed large-file resources (robot assets, motion datasets, exported policies) to W&B as versioned artifacts
+- Also run automatically by `just ray setup`
 - `--list` shows the registry + local presence; `--all` uploads everything; or pass specific resource keys
 - Dedups unchanged content by hash (cheap to re-run); reads W&B credentials from `scripts/.env.wandb`
 - Fetched back at runtime by the in-script resolver — see [Large-file resources](scripts/ray/README.md#large-file-resources)

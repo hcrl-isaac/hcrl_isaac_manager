@@ -15,7 +15,9 @@ export VIRTUAL_ENV := ""
 # lightweight base into it; fetches the workspace subrepos via gitman. Called by `setup`, `cluster`, `ray`.
 deps:
     if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi
-    uv venv --python 3.11 {{venv_name}}
+    @# --relocatable: console scripts + activate derive the interpreter from their own path, so a
+    @# dir rename doesn't break them (editable finders still bake abs paths -> re-run setup after a move).
+    uv venv --relocatable --python 3.11 {{venv_name}}
     uv sync
     uv tool install gitman && gitman update --skip-changes
     @if [ ! -f "scripts/.env.wandb" ]; then \
@@ -88,24 +90,31 @@ docker *args:
     fi
     scripts/container.sh {{args}}
 
-# Cluster interface (-> scripts/cluster/cluster_interface.sh). First arg may be a cluster name (if config/<name> exists),
-# else CLUSTER env / "default". E.g. `just cluster multi-delta repush` or `CLUSTER=delta just cluster setup`.
+# Cluster interface (-> scripts/cluster/cluster_interface.sh). A subcommand is required (e.g. `setup` to build+push
+# the .sif). First arg may be a cluster name (if config/<name> exists), else CLUSTER env / "default".
+# E.g. `just cluster setup`, `just cluster multi-delta repush`, or `CLUSTER=delta just cluster setup`.
 cluster *args:
     @set -- {{args}}; \
-    if [ -n "${1:-}" ] && [ -d "scripts/cluster/config/${1}" ]; then \
-        name="$1"; shift; CLUSTER="$name" scripts/cluster/cluster_interface.sh "$@"; \
-    else \
-        scripts/cluster/cluster_interface.sh "$@"; \
-    fi
+    name=""; \
+    if [ -n "${1:-}" ] && [ -d "scripts/cluster/config/${1}" ]; then name="$1"; shift; fi; \
+    if [ -z "${1:-}" ]; then echo "usage: just cluster [<name>] <setup|job|develop|repush|...> [args]" >&2; exit 1; fi; \
+    if [ -n "$name" ]; then CLUSTER="$name" scripts/cluster/cluster_interface.sh "$@"; \
+    else scripts/cluster/cluster_interface.sh "$@"; fi
 
 # Create a cluster config (scripts/cluster/config/<name>) -- alias for `just cluster add-cluster`.
 add-cluster:
     scripts/cluster/cluster_interface.sh add-cluster
 
-# Ray interface (passthrough to scripts/ray/ray_interface.sh): `just ray setup` writes the configs, `just ray job ...`
-# submits, plus list/logs/stop/push. Run `just deps` first so the configs + venv exist.
+# Ray interface (scripts/ray/ray_interface.sh). A subcommand is required: `just ray setup` writes the
+# configs + uploads large assets as W&B artifacts; `just ray job ...` submits; plus bench/list/logs/stop/push.
 ray *args:
-    scripts/ray/ray_interface.sh {{args}}
+    @set -- {{ args }}; \
+    if [ -z "${1:-}" ]; then echo "usage: just ray <setup|job|bench|push|list|logs|stop> [args]" >&2; exit 1; fi; \
+    if [ "$1" = "setup" ]; then \
+        shift; scripts/ray/ray_interface.sh setup && just upload-artifacts "$@"; \
+    else \
+        scripts/ray/ray_interface.sh "$@"; \
+    fi
 
 # Upload managed large-file resources (assets, datasets, policies) to W&B as versioned artifacts.
 # Args: none/--auto (present resources >=50MB), --list, --all, or specific <key>...

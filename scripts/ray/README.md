@@ -54,8 +54,8 @@ This should display a blank table, like so:
 ### Upload large assets (first time)
 
 Robot assets, motion datasets, and exported policies are excluded from the per-job upload (they would
-blow Ray's size limit) and fetched at runtime as W&B artifacts instead. Push them once before your
-first job — and again whenever they change:
+blow Ray's size limit) and fetched at runtime as W&B artifacts instead. `just ray setup` uploads them
+(it calls `just upload-artifacts`); re-run it whenever they change, or upload directly:
 
 ```bash
 just upload-artifacts --all     # or --list to see the registry, or pass specific keys
