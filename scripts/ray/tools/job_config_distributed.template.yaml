@@ -1,4 +1,4 @@
-# Distributed-training variant of job_config.yaml -- used by `scripts/ray.sh job_distributed`.
+# Distributed-training variant of job_config.yaml -- used by `just ray job_distributed`.
 #
 # Differences from job_config.yaml:
 #   * python_script is "WRAPPER+WRAPPER" so wrap_resources.py creates *two* sub-jobs from one

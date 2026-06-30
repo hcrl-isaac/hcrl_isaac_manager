@@ -169,14 +169,14 @@ def main() -> None:
     name = args.name.removesuffix("_tasks")
     dest = Path(args.dest) if args.dest else MANAGER_DIR / "resources" / f"{name}_tasks"
     if dest.exists():
-        raise SystemExit(f"[new-tasks] {dest} already exists; refusing to overwrite.")
+        raise SystemExit(f"[new] {dest} already exists; refusing to overwrite.")
 
     for rel, content in _files(name, args.org).items():
         p = dest / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
-    print(f"[new-tasks] scaffolded {dest} ({name}/ namespace).")
-    print(f"[new-tasks] next: git init it, push to {args.org}/{name}_tasks, add '{name}' to workspace.yaml projects.")
+    print(f"[new] scaffolded {dest} ({name}/ namespace).")
+    print(f"[new] next: git init it, push to {args.org}/{name}_tasks, add '{name}' to workspace.yaml projects.")
 
 
 if __name__ == "__main__":

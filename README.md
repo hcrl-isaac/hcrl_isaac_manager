@@ -32,7 +32,7 @@ uv venv (`ilab`) with the manager + Isaac Lab / Isaac Sim stack. Adds one bash a
 - `ilab` — activate the `ilab` venv and cd to the manager dir. From there, run any extension script
   with `just run <script> <args>` (no need to cd into the extension).
 
-Scaffold a new project repo with `just new-tasks <name>` (registers under the `<name>/` namespace).
+Scaffold a new project repo with `just new <name>` (registers under the `<name>/` namespace).
 
 ## Run
 
@@ -52,7 +52,7 @@ to cd into the extension): `just run play --task <id> --checkpoint <path>`, `jus
 just ray                       # one-time: write Ray config files
 just upload-artifacts --all    # one-time / when assets change: push large assets as W&B artifacts
 ilab
-scripts/ray.sh job --task <task-id> [train args]
+just ray job --task <task-id> [train args]
 ```
 Large files (robot assets, motions, policies) are excluded from the job upload and fetched at runtime
 as W&B artifacts, so `upload-artifacts` must run before the first job. See the
@@ -62,7 +62,7 @@ as W&B artifacts, so `upload-artifacts` must run before the first job. See the
 ```bash
 just add-cluster               # one-time per cluster (CLUSTER=<name>)
 just cluster                   # build + push the .sif (when deps change)
-scripts/cluster.sh job --task <task-id> [train args]
+just cluster job --task <task-id> [train args]
 ```
 See the [Cluster README](scripts/cluster/README.md).
 
@@ -95,10 +95,9 @@ the same W&B run.
 
 ### 1. Tag the training run
 
-When sending a cluster job, pass **both** `--video` and `--server` to `train.py`. `--server` tells
-the trainer it is on a headless (no-RT) box, so instead of spawning a local recorder it tags the W&B
-run with `log_videos_async` for the async logger to pick up (`--video` alone, on an RT-capable box,
-records in-process instead).
+When sending a cluster job, pass `--video async` to `train.py` (for headless no-RT boxes). It tags the
+W&B run with `log_videos_async` for the async logger to pick up, instead of spawning a local recorder
+(the default `--video on`, on an RT-capable box, records in-process out-of-band; `--video off` disables).
 
 ### 2. Run the async video logger (on an RT-capable device)
 
@@ -167,7 +166,7 @@ to manage setup and deployment; environment dependencies are managed with the **
 - Resolves `workspace.yaml` into a flat, deduped `gitman.yml`, then fetches all repos as siblings under `resources/`
 - Re-run after editing `workspace.yaml` (which projects / IsaacLab mode to compose)
 
-### `new-tasks <name>`
+### `new <name>`
 
 - Scaffolds a new `<name>_tasks` extension repo under `resources/`, registered under the `<name>/` namespace
 

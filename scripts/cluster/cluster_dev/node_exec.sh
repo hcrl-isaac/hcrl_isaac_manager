@@ -67,7 +67,7 @@ for d in "${CLUSTER_ISAACLAB_DIR}"/resources/*/; do
 done
 [ -d "${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source" ] && \
     EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source:/workspace/isaaclab_source:rw"
-# Bind list mirrors docker/cluster/run_singularity.sh -- with extra `-B ...:/u/esturman` so HOME is
+# Bind list mirrors scripts/cluster/run_singularity.sh -- with extra `-B ...:/u/esturman` so HOME is
 # writable inside the container.
 apptainer exec \
     -B ${STAGE}/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \

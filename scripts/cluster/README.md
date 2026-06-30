@@ -25,7 +25,7 @@ This performs the following steps:
 
 ## Cluster Interface
 
-Cluster names can be specified with `CLUSTER=<name> scripts/cluster.sh <cmd>`. If no name is specified, it will be set to `default`.
+Cluster names can be specified with `CLUSTER=<name> just cluster <cmd>` (or `just cluster <name> <cmd>`). If no name is specified, it will be set to `default`.
 
 ### `scripts/cluster.sh job`
 

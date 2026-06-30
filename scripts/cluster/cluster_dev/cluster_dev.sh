@@ -111,9 +111,8 @@ ensure_master() {
 # Run a command on the cluster login node over the master (no 2FA).
 on_login() { ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "$@"; }
 
-# node_exec.sh must live INSIDE the IsaacLab tree (so it rides the rsync to the cluster and can
-# source the staged docker/cluster/.env.* like run_singularity.sh does). Copy it in from
-# our source-of-truth before each sync.
+# node_exec.sh must live inside the synced workspace (so it rides the rsync to the cluster and can
+# source the staged scripts/cluster/.env.cluster). Copy it in from our source-of-truth before each sync.
 stage_node_exec() {
     local dst="${LOCAL_ISAACLAB_DIR}/scripts/cluster/cluster_dev"
     local src="${SCRIPT_DIR}/node_exec.sh"
@@ -145,15 +144,13 @@ stage_env_cluster() {
 }
 
 rsync_code() {
-    # Match cluster_interface.sh: honor .dockerignore (prunes docker/cluster/exports = 50GB,
-    # .git, logs, wandb, etc.). No -z: assets are large/incompressible, compression just
-    # bottlenecks CPU. -t preserves mtimes so re-syncs skip the 22GB of unchanged assets.
-    # --info=progress2 gives a visible overall progress bar.
+    # Honor .dockerignore + prune git/venv/logs/wandb/exports/sif. No -z (assets are incompressible);
+    # -t preserves mtimes so re-syncs skip unchanged assets; --info=progress2 shows overall progress.
     rsync -rlptvh --delete --info=progress2 \
         --filter=':- .dockerignore' \
         --exclude='*.git*' --exclude='ilab/' --exclude='.venv/' \
         --exclude='wandb/' --exclude='logs/' --exclude='.vscode/' \
-        --exclude='**/__pycache__/' --exclude='docker/cluster/exports/' --exclude='scripts/cluster/exports/' --exclude='*.sif' --exclude='*.tar' \
+        --exclude='**/__pycache__/' --exclude='scripts/cluster/exports/' --exclude='*.sif' --exclude='*.tar' \
         -e "ssh ${SSH_OPTS[*]}" \
         "${LOCAL_ISAACLAB_DIR}/" "${CLUSTER_LOGIN}:${REMOTE_ISAACLAB_DIR}/"
 }

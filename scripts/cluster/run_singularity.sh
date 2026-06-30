@@ -65,7 +65,7 @@ echo "(run_singularity.py) Copied $1 to $JOB_TMPDIR"
 # Get the directory name
 dir_name=$(basename "$1")
 
-# copy the shared decoupled container (.sif, built by `scripts/cluster.sh setup`) to the compute node
+# copy the shared decoupled container (.sif, built by `just cluster setup`) to the compute node
 SIF_SRC="$CLUSTER_SIF_PATH/$2.sif"
 [ -f "$SIF_SRC" ] || SIF_SRC="$CLUSTER_SIF_PATH/hcrl-isaac.sif"
 if [ -f "$SIF_SRC" ]; then
