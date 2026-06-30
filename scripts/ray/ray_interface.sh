@@ -13,6 +13,10 @@ tabs 4
 # get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
+# Prefer the ilab venv's python/ray so commands work without activating it first.
+VENV_BIN="$( cd "$SCRIPT_DIR/../.." && pwd )/ilab/bin"
+[ -d "$VENV_BIN" ] && export PATH="$VENV_BIN:$PATH"
+
 #==
 # Functions
 #==
