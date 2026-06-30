@@ -20,6 +20,10 @@ isaaclab:
   source: false          # false → IsaacLab from pip; true → clone IsaacLab source under resources/IsaacLab
 ```
 
+To pull in or update the workspace repos at any time, run **`just resolve`** (see [`resolve`](#resolve)) —
+after editing `workspace.yaml`, after a repo adds a dependency in its `dependencies.yaml`, or to fetch
+each repo up to its pinned ref.
+
 ## Install (local)
 
 ```bash
@@ -162,8 +166,8 @@ to manage setup and deployment; environment dependencies are managed with the **
 
 ### `resolve`
 
-- Resolves `workspace.yaml` into a flat, deduped `gitman.yml`, then fetches all repos as siblings under `resources/`
-- Re-run after editing `workspace.yaml` (which projects / IsaacLab mode to compose)
+- Resolves `workspace.yaml` (and each repo's `dependencies.yaml`) into a flat, deduped `gitman.yml`, then fetches/updates all repos as siblings under `resources/` (via `gitman update`)
+- This is how you **pull and update workspace dependencies**. Re-run it after editing `workspace.yaml` (which projects / IsaacLab mode), after a repo declares a new dependency in its `dependencies.yaml`, or to pull every repo up to its pinned ref. Repos with uncommitted local changes are skipped (commit or stash first to update them).
 
 ### `new <name>`
 
