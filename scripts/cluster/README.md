@@ -27,19 +27,19 @@ This performs the following steps:
 
 Cluster names can be specified with `CLUSTER=<name> just cluster <cmd>` (or `just cluster <name> <cmd>`). If no name is specified, it will be set to `default`.
 
-### `scripts/cluster.sh job`
+### `just cluster job`
 
 - Sends a training job to the cluster (runs `hcrl_isaaclab/scripts/train.py`).
 - Can be followed by any arguments you'd like to pass to the script (e.g. `--task reach-v0`)
 - Unlike with the Ray clusters, this copies *all* Isaac Lab code to the cluster, and will therefore include any changes made to Isaac Lab itself (not just the extensions)
 
-### `scripts/cluster.sh push`
+### `just cluster push`
 
 - Builds the Apptainer image from an existing Isaac Lab Docker image
     - This expects that the Docker image already exists. To create both the Docker and Apptainer image, use `just cluster`.
 - Note that the Apptainer image only needs to be rebuilt if the Docker image changes (e.g. if updating top-level dependencies). Code changes are synced on job deployment.
 
-### `scripts/cluster.sh repush`
+### `just cluster repush`
 
 - Pushes an *existing* tarred Apptainer image to the cluster.
 - It can be used if the SSH request from the `push` command times out, or if you have an existing .sif image that you'd like to copy to a new cluster.
