@@ -30,6 +30,19 @@ check_docker_version() {
     fi
 }
 
+# Sync managed large-file resources to W&B before a job so the cluster fetches the current versions.
+# Idempotent (W&B dedups unchanged content); non-fatal so a sync hiccup never blocks a submit.
+sync_resources() {
+    local mgr up
+    mgr="$( cd "$SCRIPT_DIR/../.." && pwd )"
+    up="$mgr/resources/hcrl_isaaclab/scripts/tools/upload_artifacts.py"
+    if [ ! -f "$mgr/scripts/.env.wandb" ] || [ ! -f "$up" ]; then
+        return 0
+    fi
+    echo "[INFO] Syncing managed resources to W&B (refresh)..."
+    ( set -a; . "$mgr/scripts/.env.wandb"; set +a; python "$up" ) || echo "[WARN] resource sync failed; submitting with existing artifacts."
+}
+
 #==
 # Main
 #==
@@ -77,6 +90,12 @@ fi
 
 command=$1
 shift
+
+# Any subcommand that submits work to the cluster first syncs managed resources to W&B, so the job
+# fetches current asset versions. Add new job-submitting subcommands to this list.
+case "$command" in
+    job|job_distributed|bench) sync_resources ;;
+esac
 
 case $command in
     setup)

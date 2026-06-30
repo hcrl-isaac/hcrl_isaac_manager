@@ -19,6 +19,18 @@ deps:
     @# dir rename doesn't break them (editable finders still bake abs paths -> re-run setup after a move).
     uv venv --relocatable --python 3.11 {{venv_name}}
     uv sync
+    @# git-lfs: LFS assets (MCP/crab policies, USDs, motion clips) must materialize as real files -- the
+    @# Ray mount ships the working tree as-is, so unsmudged pointers would fail to load on the cluster.
+    @if ! command -v git-lfs >/dev/null 2>&1; then \
+        echo "[deps] git-lfs not found; attempting install..."; \
+        if command -v brew >/dev/null 2>&1; then brew install git-lfs; \
+        elif command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y git-lfs; \
+        elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y git-lfs; \
+        elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --noconfirm git-lfs; \
+        fi; \
+    fi
+    @if command -v git-lfs >/dev/null 2>&1; then git lfs install; \
+        else echo "[deps][WARN] git-lfs missing -- LFS assets (e.g. crab/MCP policies) will be pointers and fail on the cluster; install git-lfs and re-run."; fi
     uv tool install gitman && gitman update --skip-changes
     @if [ ! -f "scripts/.env.wandb" ]; then \
         read -p "W&B Username: " wandb_username; \
@@ -110,11 +122,7 @@ add-cluster:
 ray *args:
     @set -- {{ args }}; \
     if [ -z "${1:-}" ]; then echo "usage: just ray <setup|job|bench|push|list|logs|stop> [args]" >&2; exit 1; fi; \
-    if [ "$1" = "setup" ]; then \
-        shift; scripts/ray/ray_interface.sh setup && just upload-artifacts "$@"; \
-    else \
-        scripts/ray/ray_interface.sh "$@"; \
-    fi
+    scripts/ray/ray_interface.sh "$@"
 
 # Upload managed large-file resources (assets, datasets, policies) to W&B as versioned artifacts.
 # Args: none/--auto (present resources >=50MB), --list, --all, or specific <key>...
@@ -130,6 +138,10 @@ upload-artifacts *args:
 # Resolve workspace.yaml -> flat deduped gitman.yml, then fetch all repos (flat under resources/).
 resolve:
     {{venv_py}} scripts/resolve_workspace.py --manifest workspace.yaml --update
+    @# materialize LFS in every fetched repo (repos cloned before git-lfs was active hold pointers)
+    @if command -v git-lfs >/dev/null 2>&1; then \
+        for d in resources/*/; do [ -d "$d/.git" ] && (echo "[resolve] git lfs pull $d"; git -C "$d" lfs pull) || true; done; \
+    else echo "[resolve][WARN] git-lfs missing -- LFS files stay as pointers; run 'just deps' to install it."; fi
 
 # Scaffold a new <name>_tasks extension repo under resources/ (registers under the <name>/ namespace).
 new name:
