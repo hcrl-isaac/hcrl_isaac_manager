@@ -8,7 +8,7 @@ sources:
   rev: main
 - repo: git@github.com:hcrl-isaac/robot_rl.git
   name: robot_rl
-  rev: umrl
+  rev: main
 - repo: git@github.com:hcrl-isaac/ssti_robots.git
   name: ssti_robots
   rev: main

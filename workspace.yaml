@@ -6,6 +6,5 @@ isaaclab:
   version: "5.1.0"
 projects: [ssti, umrl]   # -> ssti_tasks + umrl_tasks (and their transitive robot deps)
 always: [hcrl_isaaclab, robot_rl]
-# Per-repo ref overrides (default is main). reorg-core was promoted to main.
-refs:
-  robot_rl: umrl   # train.py needs OffPolicyRunner; pin umrl until the umrl->main PR merges, then drop this
+# Per-repo ref overrides (default is main). All repos now track main (umrl merged into robot_rl main).
+refs: {}
