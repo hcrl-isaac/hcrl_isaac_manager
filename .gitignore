@@ -21,3 +21,7 @@ worktrees/
 scripts/cluster/exports/
 *.sif
 *.tar
+
+# Claude working docs (local, not shared)
+/CLAUDE.md
+/.claude/
