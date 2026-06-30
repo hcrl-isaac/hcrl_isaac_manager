@@ -6,6 +6,9 @@ sources:
 - repo: git@github.com:hcrl-isaac/hcrl_robots.git
   name: hcrl_robots
   rev: main
+- repo: git@github.com:hcrl-isaac/motion_datasets.git
+  name: motion_datasets
+  rev: main
 - repo: git@github.com:hcrl-isaac/robot_rl.git
   name: robot_rl
   rev: main
