@@ -2,7 +2,7 @@ location: resources
 sources:
 - repo: git@github.com:hcrl-isaac/hcrl_isaaclab.git
   name: hcrl_isaaclab
-  rev: feature/reorg-core
+  rev: main
 - repo: git@github.com:hcrl-isaac/hcrl_robots.git
   name: hcrl_robots
   rev: main
