@@ -34,7 +34,9 @@ def _source_mode() -> bool:
         with open(manifest) as f:
             for line in f:
                 stripped = line.strip()
-                if stripped.startswith("source:"):
+                if stripped.startswith("mode:"):
+                    return stripped.split("#", 1)[0].split(":", 1)[1].strip() == "source"
+                if stripped.startswith("source:"):  # legacy `source: bool` form
                     return stripped.split("#", 1)[0].split(":", 1)[1].strip() == "true"
     except OSError:
         pass

@@ -4,7 +4,7 @@
 # `resolve_workspace.py` merges this file with that selection into a flat gitman.yaml.
 org: hcrl-isaac
 isaaclab:
-  source: false        # default IsaacLab mode; overridable per-user (pip isaacsim/isaaclab vs. source clone)
+  mode: pip            # default IsaacLab mode, overridable per-user: pip | source | none (don't install)
   version: "5.1.0"
 always: [hcrl_isaaclab, robot_rl]   # repos always present (core extension + RL package)
 refs: {}                            # per-repo ref overrides (default is main)

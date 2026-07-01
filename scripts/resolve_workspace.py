@@ -10,7 +10,7 @@ nested copy of a shared dep per consumer, so a dep two projects share would be c
 
 The effective manifest is the committed ``workspace.defaults.yaml`` (org, always, refs, isaaclab
 version, and the ``available_projects`` catalog) overlaid with a per-user, gitignored
-``workspace.yaml`` (just ``projects`` + ``isaaclab.source``, written by ``configure_workspace.py``).
+``workspace.yaml`` (just ``projects`` + ``isaaclab.mode``, written by ``configure_workspace.py``).
 When no per-user file exists, the catalog's ``default: true`` projects are used.
 
 Defaults (``workspace.defaults.yaml``)::
@@ -46,15 +46,22 @@ RESOURCES = MANAGER_DIR / "resources"
 DEFAULTS = MANAGER_DIR / "workspace.defaults.yaml"
 
 
+def _isaaclab_mode(isaaclab: dict) -> str:
+    """Return the IsaacLab install mode (pip/source/none), accepting the legacy ``source: bool`` form."""
+    if "mode" in isaaclab:
+        return isaaclab["mode"]
+    return "source" if isaaclab.get("source") else "pip"
+
+
 def load_manifest(overrides_path: Path) -> dict:
     """Merge the committed defaults with a per-user selection into one flat manifest.
 
     Args:
-        overrides_path: Per-user ``workspace.yaml`` (``projects`` + ``isaaclab.source``); may be absent.
+        overrides_path: Per-user ``workspace.yaml`` (``projects`` + ``isaaclab.mode``); may be absent.
 
     Returns:
-        A manifest with ``org``, ``always``, ``refs``, ``isaaclab`` and a flat ``projects`` name list --
-        the shape ``resolve()``/``to_gitman()`` consume.
+        A manifest with ``org``, ``always``, ``refs``, ``isaaclab`` (normalized to carry ``mode``:
+        pip/source/none) and a flat ``projects`` name list -- the shape ``resolve()``/``to_gitman()`` consume.
     """
     defaults = yaml.safe_load(DEFAULTS.read_text()) if DEFAULTS.is_file() else {}
     defaults = defaults or {}
@@ -66,6 +73,9 @@ def load_manifest(overrides_path: Path) -> dict:
         projects = [p["name"] for p in catalog if p.get("default")]
 
     isaaclab = {**defaults.get("isaaclab", {}), **overrides.get("isaaclab", {})}
+    # Mode precedence: an explicit per-user choice (mode, or the legacy source bool) wins over the default.
+    ov_il = overrides.get("isaaclab", {})
+    isaaclab["mode"] = _isaaclab_mode(ov_il if ("mode" in ov_il or "source" in ov_il) else defaults.get("isaaclab", {}))
     return {
         "org": overrides.get("org", defaults.get("org", "hcrl-isaac")),
         "always": defaults.get("always", ["hcrl_isaaclab", "robot_rl"]),
@@ -135,7 +145,7 @@ def resolve(manifest: dict) -> dict[str, dict]:
 def to_gitman(resolved: dict[str, dict], manifest: dict) -> dict:
     """Render the resolved map as a flat gitman config (everything a sibling under ``resources/``)."""
     sources = []
-    if manifest.get("isaaclab", {}).get("source"):
+    if manifest.get("isaaclab", {}).get("mode") == "source":
         sources.append({"repo": "https://github.com/isaac-sim/IsaacLab.git", "name": "IsaacLab", "rev": "main"})
     for name, info in sorted(resolved.items()):
         sources.append({"repo": info["git"], "name": name, "rev": info["ref"]})
@@ -152,7 +162,7 @@ def main() -> None:
     manifest = load_manifest(Path(args.manifest))
     out = MANAGER_DIR / "gitman.yaml"
     (MANAGER_DIR / "gitman.yml").unlink(missing_ok=True)  # drop a stale .yml so it can't shadow .yaml
-    is_source = bool(manifest.get("isaaclab", {}).get("source"))
+    is_source = manifest.get("isaaclab", {}).get("mode") == "source"
 
     # In pip mode, remove an orphaned source clone left by a previous source-mode resolve so
     # downstream source-vs-pip detection (and editable installs) don't pick it up.
@@ -175,8 +185,11 @@ def main() -> None:
         subprocess.run(["gitman", "update", "--skip-changes"], cwd=MANAGER_DIR, check=True)
         prev_names = names
 
-    if is_source:
+    mode = manifest.get("isaaclab", {}).get("mode", "pip")
+    if mode == "source":
         print("[resolve] IsaacLab: source mode (cloned into resources/IsaacLab)")
+    elif mode == "none":
+        print("[resolve] IsaacLab: none (repos fetched; IsaacLab will not be installed by setup)")
     else:
         print(f"[resolve] IsaacLab: pip mode (pin {manifest.get('isaaclab', {}).get('version', '?')})")
 

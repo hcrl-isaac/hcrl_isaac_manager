@@ -46,12 +46,16 @@ setup:
     @# Re-open the project/IsaacLab picker pre-filled (plain `just setup` reconfigures); no TTY keeps it.
     {{venv_py}} scripts/configure_workspace.py --interactive
     just resolve            # merge selection + defaults -> gitman.yaml + fetch repos under resources/
-    @{{venv_py}} scripts/tools/ui.py section "PyTorch (CUDA 12.8)"
-    @# Install cu128 torch FIRST, else something later pulls a cu126 build that "satisfies" torch>=2.7 and sticks.
-    uv pip install --python {{venv_py}} --torch-backend cu128 torch==2.7.0 torchvision==0.22.0
-    @{{venv_py}} scripts/tools/ui.py section "Isaac Lab / Isaac Sim"
-    @# isaacsim/torch otherwise come transitively from isaaclab (pip mode) or explicitly (source mode).
-    if grep -Eq '^[[:space:]]*source:[[:space:]]*true' workspace.yaml; then \
+    @# Install torch + IsaacLab/Sim + workspace packages -- one gated block so `mode: none` skips it all.
+    @mode=$(grep -E '^[[:space:]]*mode:' workspace.yaml | head -1 | sed -E 's/.*mode:[[:space:]]*//; s/[[:space:]#].*//'); \
+    if [ "$mode" = "none" ]; then \
+        echo "[setup] IsaacLab mode 'none': repos fetched under resources/; skipping IsaacLab + package installs."; \
+        exit 0; \
+    fi; \
+    {{venv_py}} scripts/tools/ui.py section "PyTorch (CUDA 12.8)"; \
+    uv pip install --python {{venv_py}} --torch-backend cu128 torch==2.7.0 torchvision==0.22.0; \
+    {{venv_py}} scripts/tools/ui.py section "Isaac Lab / Isaac Sim"; \
+    if [ "$mode" = "source" ]; then \
         echo "[setup] IsaacLab source mode -> editable install (+ explicit isaacsim; source isaaclab has no isaacsim extra)"; \
         uv pip install --python {{venv_py}} "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com; \
         for d in resources/IsaacLab/source/isaaclab*/; do [ -d "$d" ] && uv pip install --python {{venv_py}} --torch-backend cu128 -e "$d"; done; \
@@ -59,15 +63,14 @@ setup:
     else \
         echo "[setup] IsaacLab via pip -> hcrl_isaaclab[isaacsim] pulls isaaclab[isaacsim]==2.3.2.post1 (isaacsim 5.1 + torch)"; \
         uv pip install --python {{venv_py}} --torch-backend cu128 --extra-index-url https://pypi.nvidia.com --index-strategy unsafe-best-match -e "resources/hcrl_isaaclab[isaacsim]"; \
-    fi
-    uv pip install --python {{venv_py}} rsl_rl-lib
-    @{{venv_py}} scripts/tools/ui.py section "Workspace packages"
-    @# Editable-install the Python packages only; data-only *_robots repos are fetched as artifacts.
+    fi; \
+    uv pip install --python {{venv_py}} rsl_rl-lib; \
+    {{venv_py}} scripts/tools/ui.py section "Workspace packages"; \
     for d in resources/robot_rl resources/*_tasks resources/*_robots; do \
         if [ -d "$d" ] && { [ -f "$d/setup.py" ] || [ -f "$d/pyproject.toml" ]; }; then \
             uv pip install --python {{venv_py}} --torch-backend cu128 --extra-index-url https://pypi.nvidia.com -e "$d"; \
         elif [ -d "$d" ]; then echo "[setup] skipping non-package data repo: $d"; fi; \
-    done
+    done; \
     just vscode
 
 # Generate .vscode/settings.json by booting headless Isaac Sim to snapshot the Kit extension paths.

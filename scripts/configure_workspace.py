@@ -3,7 +3,7 @@
 
 Reads the committed catalog (``workspace.defaults.yaml``), prompts the user (arrow keys + space to
 toggle projects, enter to confirm), and writes the per-user selection to a gitignored
-``workspace.yaml`` (just ``projects`` + ``isaaclab.source``). ``resolve_workspace.py`` merges the two.
+``workspace.yaml`` (just ``projects`` + ``isaaclab.mode``: pip/source/none). ``resolve_workspace.py`` merges the two.
 
 Modes:
     (default, "ensure")  Write a selection from the catalog defaults if ``workspace.yaml`` is absent;
@@ -30,10 +30,28 @@ def _load(path: Path) -> dict:
     return yaml.safe_load(path.read_text()) or {} if path.is_file() else {}
 
 
+def _default_mode(defaults: dict) -> str:
+    """Default IsaacLab mode from the catalog (accepts the legacy ``source: bool`` form)."""
+    il = defaults.get("isaaclab", {})
+    if "mode" in il:
+        return il["mode"]
+    return "source" if il.get("source") else "pip"
+
+
+def _current_mode(current: dict, defaults: dict) -> str:
+    """The user's current IsaacLab mode (accepts the legacy ``source: bool`` form), else the default."""
+    il = current.get("isaaclab", {})
+    if "mode" in il:
+        return il["mode"]
+    if "source" in il:
+        return "source" if il["source"] else "pip"
+    return _default_mode(defaults)
+
+
 def _default_selection(defaults: dict) -> dict:
     """The selection used with no user input: catalog ``default: true`` projects + default IsaacLab mode."""
     projects = [p["name"] for p in defaults.get("available_projects", []) if p.get("default")]
-    return {"projects": projects, "isaaclab": {"source": bool(defaults.get("isaaclab", {}).get("source", False))}}
+    return {"projects": projects, "isaaclab": {"mode": _default_mode(defaults)}}
 
 
 def _write(selection: dict) -> None:
@@ -43,8 +61,7 @@ def _write(selection: dict) -> None:
     )
     OUT.write_text(header + yaml.safe_dump(selection, sort_keys=False))
     proj = ", ".join(selection["projects"]) or "(none)"
-    mode = "source" if selection["isaaclab"]["source"] else "pip"
-    print(f"[configure] wrote {OUT.name}: projects=[{proj}], isaaclab={mode}")
+    print(f"[configure] wrote {OUT.name}: projects=[{proj}], isaaclab={selection['isaaclab']['mode']}")
 
 
 def _prompt(defaults: dict, current: dict) -> dict:
@@ -65,19 +82,19 @@ def _prompt(defaults: dict, current: dict) -> dict:
     if projects is None:  # Ctrl-C / EOF
         sys.exit("[configure] cancelled")
 
-    cur_source = current.get("isaaclab", {}).get("source", defaults.get("isaaclab", {}).get("source", False))
-    source = questionary.select(
-        "Install IsaacLab from:",
+    mode = questionary.select(
+        "IsaacLab:",
         choices=[
-            questionary.Choice("pip     (isaacsim + isaaclab wheels)", value=False),
-            questionary.Choice("source  (clone IsaacLab under resources/)", value=True),
+            questionary.Choice("pip     (install isaacsim + isaaclab wheels)", value="pip"),
+            questionary.Choice("source  (clone IsaacLab under resources/ and install editable)", value="source"),
+            questionary.Choice("none    (don't install IsaacLab; just fetch the project repos)", value="none"),
         ],
-        default=cur_source,
+        default=_current_mode(current, defaults),
     ).ask()
-    if source is None:
+    if mode is None:
         sys.exit("[configure] cancelled")
 
-    return {"projects": projects, "isaaclab": {"source": bool(source)}}
+    return {"projects": projects, "isaaclab": {"mode": mode}}
 
 
 def main() -> None:

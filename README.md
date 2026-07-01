@@ -12,11 +12,18 @@ quickstart; per-cluster READMEs ([Ray](scripts/ray/README.md), [Cluster](scripts
 
 ## Configure the workspace
 
-Every `just setup` opens a picker (arrow keys, space to toggle) for **which projects** to install and
-whether to get **IsaacLab from pip or source**, pre-filled with your current selection — so re-running
-`just setup` doubles as reconfiguration. It's part of `setup` (not a standalone command) because changing
-the selection changes which repos are pulled and which packages installed, so it always flows through the
-full pull+install. On a non-interactive shell (CI) it keeps your existing selection without prompting.
+**Always run `just setup`** — whether or not you want a local IsaacLab install. It opens a picker (arrow
+keys, space to toggle) for **which projects** to install and how to handle **IsaacLab**, pre-filled with
+your current selection, so re-running `just setup` doubles as reconfiguration. The IsaacLab choice is:
+
+- **pip** — install `isaacsim` + `isaaclab` wheels (the usual local setup).
+- **source** — clone IsaacLab under `resources/` and install it editable.
+- **none** — don't install IsaacLab (or torch / the workspace packages); just fetch the project repos under
+  `resources/`. Use this to browse/edit the projects locally and run training on a cluster or Ray instead.
+
+The picker is part of `setup` (not a standalone command) because changing the selection changes which repos
+are pulled and which packages installed, so it always flows through the full pull+install. On a
+non-interactive shell (CI) it keeps your existing selection without prompting.
 
 Your selection is written to a gitignored `workspace.yaml` (just the projects + IsaacLab mode); the
 shared catalog of selectable projects and the defaults (org, refs, IsaacLab version) live in the
@@ -33,7 +40,8 @@ just setup
 ```
 
 Resolves `workspace.yaml` into a flat, deduped set of repos under `resources/`, then builds a single
-uv venv (`ilab`) with the manager + Isaac Lab / Isaac Sim stack. Adds one bash alias:
+uv venv (`ilab`) with the manager + Isaac Lab / Isaac Sim stack (unless you picked IsaacLab **none**, which
+stops after fetching the repos). Adds one bash alias:
 
 - `ilab` — activate the `ilab` venv and cd to the manager dir. From there, run any extension script
   with `just run <script> <args>` (no need to cd into the extension).
@@ -163,9 +171,9 @@ to manage setup and deployment; environment dependencies are managed with the **
 ### `setup`
 
 - Installs general dependencies (`just deps`)
-- Opens the project + IsaacLab-mode picker (arrow keys + space), pre-filled with your current selection, so re-running `setup` reconfigures; writes the gitignored `workspace.yaml` (keeps the existing selection on a non-interactive shell)
+- Opens the project + IsaacLab-mode (pip/source/**none**) picker (arrow keys + space), pre-filled with your current selection, so re-running `setup` reconfigures; writes the gitignored `workspace.yaml` (keeps the existing selection on a non-interactive shell)
 - Resolves the selection + defaults and fetches the workspace repos (`just resolve`)
-- Installs Isaac Lab + Isaac Sim and editable-installs every workspace package into the local uv env
+- Installs Isaac Lab + Isaac Sim and editable-installs every workspace package into the local uv env — **skipped entirely for IsaacLab `none`** (repos are just fetched, for editing locally + running elsewhere)
 
 ### `resolve`
 
