@@ -127,7 +127,7 @@ case $command in
         echo "Building and pushing the shared Isaac image for Ray"
         check_docker_version
         # Build the shared decoupled image (isaacsim base + pip isaaclab) and push it for the cluster to pull.
-        "$SCRIPT_DIR/../container.sh" build
+        "$SCRIPT_DIR/../docker/docker_interface.sh" build
         docker tag hcrl-isaac:latest esturman/isaac-ray:latest
         docker push esturman/isaac-ray:latest
         ;;

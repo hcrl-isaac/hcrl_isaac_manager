@@ -20,7 +20,7 @@ WANDB_ENV="${MANAGER_DIR}/scripts/.env.wandb"
 # the manager dir. From there the hcrl_isaaclab scripts run from anywhere (e.g. `uv run` / `python -m`),
 # so there's no separate extension-dir alias.
 if [ -f "$VENV_ACTIVATE" ]; then
-    alias ilab="{ [ -f '${WANDB_ENV}' ] && source '${WANDB_ENV}'; }; source '${VENV_ACTIVATE}' && cd ${MANAGER_DIR}"
+    alias ilab="{ [ -f '${WANDB_ENV}' ] && source '${WANDB_ENV}'; }; cd ${MANAGER_DIR} && source '${VENV_ACTIVATE}'"
 else
     alias ilab="cd ${MANAGER_DIR}"
 fi

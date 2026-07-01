@@ -1,0 +1,20 @@
+# Committed workspace defaults + the catalog of selectable projects. This is the shared, version-
+# controlled source of truth; a per-user `workspace.yaml` (gitignored) records the local selection
+# (which projects + IsaacLab pip/source). `just setup` opens a picker to generate/change it;
+# `resolve_workspace.py` merges this file with that selection into a flat gitman.yaml.
+org: hcrl-isaac
+isaaclab:
+  source: false        # default IsaacLab mode; overridable per-user (pip isaacsim/isaaclab vs. source clone)
+  version: "5.1.0"
+always: [hcrl_isaaclab, robot_rl]   # repos always present (core extension + RL package)
+refs: {}                            # per-repo ref overrides (default is main)
+
+# Selectable project task repos (each -> <name>_tasks + its transitive robot/data deps). `default`
+# marks the ones pre-checked in the selector and used when no per-user workspace.yaml exists.
+available_projects:
+  - name: ssti
+    description: SSTI traversal + MCP crab tasks
+    default: true
+  - name: umrl
+    description: UMRL FB-CPR humanoid motion tasks
+    default: true

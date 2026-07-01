@@ -16,7 +16,7 @@ SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${HOME}/.ssh/cm/%C" -o ControlPe
 
 source_cluster_env() {
     if [ ! -f "$CLUSTER_ENV_FILE" ]; then
-        echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'just add-cluster'). Available:" \
+        echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'just cluster add'). Available:" \
             "$(ls "$SCRIPT_DIR/config" 2>/dev/null | paste -sd, -)." >&2
         exit 1
     fi
@@ -33,7 +33,7 @@ ensure_ssh_master() {
 build_sif() {
     command -v apptainer >/dev/null 2>&1 || { echo "[cluster] apptainer not found (see README)." >&2; exit 1; }
     local image="${IMAGE_NAME}:${HCRL_IMAGE_TAG:-latest}"
-    docker image inspect "$image" >/dev/null 2>&1 || { echo "[cluster] image $image missing; building"; "${SCRIPT_DIR}/../container.sh" build; }
+    docker image inspect "$image" >/dev/null 2>&1 || { echo "[cluster] image $image missing; building"; "${SCRIPT_DIR}/../docker/docker_interface.sh" build; }
     mkdir -p "$SIF_DIR"
     echo "[cluster] apptainer build ${SIF_PATH} from docker-daemon://${image}"
     apptainer build --force "$SIF_PATH" "docker-daemon://${image}"
@@ -80,7 +80,7 @@ cmd="${1:-help}"
 [ $# -gt 0 ] && shift || true
 
 case "$cmd" in
-    add-cluster) "${SCRIPT_DIR}/add_cluster.sh" "$@" ;;
+    add)         "${SCRIPT_DIR}/add_cluster.sh" "$@" ;;
     build)       build_sif ;;
     push | repush)
         [ -f "$SIF_PATH" ] || build_sif
@@ -94,7 +94,7 @@ case "$cmd" in
         echo "  setup         build the shared .sif and rsync it to the cluster"
         echo "  build         build the .sif from the shared docker image (no push)"
         echo "  push/repush   rsync the built .sif to the cluster (reuses the SSH master; no 2FA)"
-        echo "  add-cluster   create a cluster config (scripts/cluster/config/<name>)"
+        echo "  add           create a cluster config (scripts/cluster/config/<name>)"
         echo "  job [args]    rsync the workspace + submit a batch job"
         echo "  develop ...   manage a persistent dev node (start/status/attach/exec/sync/stop)"
         ;;

@@ -1,3 +1,10 @@
+# Per-user workspace selection + the resolved gitman config (generated from workspace.defaults.yaml
+# via `just configure` / `just resolve`). The committed source of truth is workspace.defaults.yaml.
+/workspace.yaml
+/gitman.yaml
+/gitman.yml
+**/__pycache__/
+*.pyc
 **IsaacLab/
 **artifacts/
 scripts/.env.wandb

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Create a cluster config (scripts/cluster/config/<name>/) from the templates. Invoked by
-# `scripts/cluster.sh add-cluster` (and `just add-cluster`).
+# `just cluster add`.
 set -euo pipefail
 cd "$(dirname "$0")/.."  # scripts/
 

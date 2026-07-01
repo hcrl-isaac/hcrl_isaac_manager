@@ -1,7 +1,7 @@
 # Shared Isaac image, reused by BOTH the Ray worker and the HPC Apptainer (.sif). Decoupled from the
 # IsaacLab source tree: nvcr isaacsim/Kit base + pip Isaac Lab; the workspace extensions are NOT baked in
 # -- they're mounted + PYTHONPATH'd at job start (see entrypoint.sh) so code syncs without a rebuild.
-# Build: scripts/docker/build_image.sh.
+# Build: scripts/docker/docker_interface.sh build  (or `just docker build`).
 
 ARG ISAACSIM_BASE_IMAGE=nvcr.io/nvidia/isaac-sim
 ARG ISAACSIM_VERSION=5.1.0

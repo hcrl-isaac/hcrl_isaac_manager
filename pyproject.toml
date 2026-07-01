@@ -11,6 +11,10 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "ray[default]==2.50.1",
     "rich==14.2.0",
+    "questionary==2.1.0",   # interactive workspace selector (just configure) + pretty just prompts
+    # questionary 2.1.0 breaks on prompt_toolkit >=3.0.51 (its _fix_unecessary_blank_lines reaches into
+    # layout internals that changed): AttributeError 'VSplit' object has no attribute 'content'. Pin below.
+    "prompt_toolkit==3.0.48",
     "dotenv==0.9.9",
     "argparse==1.1",
     # artifact uploads + checkpoint export (scripts/tools/upload_artifacts.py, scripts/export.py)

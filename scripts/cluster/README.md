@@ -6,7 +6,7 @@ This repo provides some utility scripts for deploying to HPC clusters, following
 
 To set up cluster configuration files, run
 ```bash
-just add-cluster
+just cluster add
 ```
 and fill out the following prompts. This will create `.env.cluster` and `submit_job_slurm.sh` files in `scripts/cluster/<name>_config`. If no name is provided, it will be set to `default`.
 

@@ -3,19 +3,25 @@
 
 Each repo (core ``hcrl_isaaclab``, ``robot_rl``, shared ``hcrl_robots``, per-project ``*_tasks`` /
 ``*_robots``) declares only its *direct* deps in a ``dependencies.yaml``; this resolves them into one
-flat ``gitman.yml`` (all repos siblings under ``resources/``) for ``gitman update`` to fetch.
+flat ``gitman.yaml`` (all repos siblings under ``resources/``) for ``gitman update`` to fetch.
 
 The dedup-by-name pass is the reason this exists rather than plain gitman: gitman alone vendors a
 nested copy of a shared dep per consumer, so a dep two projects share would be checked out twice.
 
-Manifest (``workspace.yaml`` at the manager root)::
+The effective manifest is the committed ``workspace.defaults.yaml`` (org, always, refs, isaaclab
+version, and the ``available_projects`` catalog) overlaid with a per-user, gitignored
+``workspace.yaml`` (just ``projects`` + ``isaaclab.source``, written by ``configure_workspace.py``).
+When no per-user file exists, the catalog's ``default: true`` projects are used.
+
+Defaults (``workspace.defaults.yaml``)::
 
     org: hcrl-isaac                      # default GitHub org for bare repo names
     isaaclab:
       source: false                      # true -> check out IsaacLab source under resources/IsaacLab
       version: "5.1.0"                    # pin for pip mode (informational here)
-    projects: [ssti, umrl]               # which project task repos to include (-> <name>_tasks)
     always: [hcrl_isaaclab, robot_rl]     # repos always present (the core + RL package)
+    available_projects:                  # selectable <name>_tasks repos
+      - {name: ssti, default: true}
 
 ``dependencies.yaml`` (in each repo)::
 
@@ -37,6 +43,36 @@ import yaml
 
 MANAGER_DIR = Path(__file__).resolve().parent.parent
 RESOURCES = MANAGER_DIR / "resources"
+DEFAULTS = MANAGER_DIR / "workspace.defaults.yaml"
+
+
+def load_manifest(overrides_path: Path) -> dict:
+    """Merge the committed defaults with a per-user selection into one flat manifest.
+
+    Args:
+        overrides_path: Per-user ``workspace.yaml`` (``projects`` + ``isaaclab.source``); may be absent.
+
+    Returns:
+        A manifest with ``org``, ``always``, ``refs``, ``isaaclab`` and a flat ``projects`` name list --
+        the shape ``resolve()``/``to_gitman()`` consume.
+    """
+    defaults = yaml.safe_load(DEFAULTS.read_text()) if DEFAULTS.is_file() else {}
+    defaults = defaults or {}
+    overrides = (yaml.safe_load(overrides_path.read_text()) or {}) if overrides_path.is_file() else {}
+
+    catalog = defaults.get("available_projects", [])
+    projects = overrides.get("projects")
+    if projects is None:  # no per-user selection -> catalog defaults
+        projects = [p["name"] for p in catalog if p.get("default")]
+
+    isaaclab = {**defaults.get("isaaclab", {}), **overrides.get("isaaclab", {})}
+    return {
+        "org": overrides.get("org", defaults.get("org", "hcrl-isaac")),
+        "always": defaults.get("always", ["hcrl_isaaclab", "robot_rl"]),
+        "refs": {**defaults.get("refs", {}), **overrides.get("refs", {})},
+        "isaaclab": isaaclab,
+        "projects": projects,
+    }
 
 
 def _git_url(name: str, org: str, explicit: str | None) -> str:
@@ -108,12 +144,14 @@ def to_gitman(resolved: dict[str, dict], manifest: dict) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--manifest", default=str(MANAGER_DIR / "workspace.yaml"))
+    ap.add_argument("--manifest", default=str(MANAGER_DIR / "workspace.yaml"),
+                    help="Per-user selection overlaid on workspace.defaults.yaml (may be absent).")
     ap.add_argument("--update", action="store_true", help="Run `gitman update --skip-changes` after writing.")
     args = ap.parse_args()
 
-    manifest = yaml.safe_load(Path(args.manifest).read_text())
-    out = MANAGER_DIR / "gitman.yml"
+    manifest = load_manifest(Path(args.manifest))
+    out = MANAGER_DIR / "gitman.yaml"
+    (MANAGER_DIR / "gitman.yml").unlink(missing_ok=True)  # drop a stale .yml so it can't shadow .yaml
     is_source = bool(manifest.get("isaaclab", {}).get("source"))
 
     # In pip mode, remove an orphaned source clone left by a previous source-mode resolve so

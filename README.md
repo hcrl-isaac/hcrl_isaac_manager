@@ -12,17 +12,19 @@ quickstart; per-cluster READMEs ([Ray](scripts/ray/README.md), [Cluster](scripts
 
 ## Configure the workspace
 
-Pick which projects and IsaacLab mode to include in [`workspace.yaml`](workspace.yaml):
+Every `just setup` opens a picker (arrow keys, space to toggle) for **which projects** to install and
+whether to get **IsaacLab from pip or source**, pre-filled with your current selection — so re-running
+`just setup` doubles as reconfiguration. It's part of `setup` (not a standalone command) because changing
+the selection changes which repos are pulled and which packages installed, so it always flows through the
+full pull+install. On a non-interactive shell (CI) it keeps your existing selection without prompting.
 
-```yaml
-projects: [ssti, umrl]   # the *_tasks repos to install (their robot deps are pulled automatically)
-isaaclab:
-  source: false          # false → IsaacLab from pip; true → clone IsaacLab source under resources/IsaacLab
-```
+Your selection is written to a gitignored `workspace.yaml` (just the projects + IsaacLab mode); the
+shared catalog of selectable projects and the defaults (org, refs, IsaacLab version) live in the
+committed [`workspace.defaults.yaml`](workspace.defaults.yaml). To add a new selectable project, add it
+to `available_projects` there. This replaces the old per-project git branches — selection is now local.
 
 To pull in or update the workspace repos at any time, run **`just resolve`** (see [`resolve`](#resolve)) —
-after editing `workspace.yaml`, after a repo adds a dependency in its `dependencies.yaml`, or to fetch
-each repo up to its pinned ref.
+after a repo adds a dependency in its `dependencies.yaml`, or to fetch each repo up to its pinned ref.
 
 ## Install (local)
 
@@ -63,7 +65,7 @@ See the [Ray README](scripts/ray/README.md).
 
 **HPC:**
 ```bash
-just add-cluster               # one-time per cluster (CLUSTER=<name>)
+just cluster add               # one-time per cluster (CLUSTER=<name>)
 just cluster setup             # build + push the .sif (when deps change)
 just cluster job --task <task-id> [train args]
 ```
@@ -161,13 +163,14 @@ to manage setup and deployment; environment dependencies are managed with the **
 ### `setup`
 
 - Installs general dependencies (`just deps`)
-- Resolves `workspace.yaml` and fetches the workspace repos (`just resolve`)
+- Opens the project + IsaacLab-mode picker (arrow keys + space), pre-filled with your current selection, so re-running `setup` reconfigures; writes the gitignored `workspace.yaml` (keeps the existing selection on a non-interactive shell)
+- Resolves the selection + defaults and fetches the workspace repos (`just resolve`)
 - Installs Isaac Lab + Isaac Sim and editable-installs every workspace package into the local uv env
 
 ### `resolve`
 
-- Resolves `workspace.yaml` (and each repo's `dependencies.yaml`) into a flat, deduped `gitman.yml`, then fetches/updates all repos as siblings under `resources/` (via `gitman update`)
-- This is how you **pull and update workspace dependencies**. Re-run it after editing `workspace.yaml` (which projects / IsaacLab mode), after a repo declares a new dependency in its `dependencies.yaml`, or to pull every repo up to its pinned ref. Repos with uncommitted local changes are skipped (commit or stash first to update them).
+- Merges your selection (`workspace.yaml`) with the committed `workspace.defaults.yaml` and each repo's `dependencies.yaml` into a flat, deduped `gitman.yaml`, then fetches/updates all repos as siblings under `resources/` (via `gitman update`)
+- This is how you **pull and update workspace dependencies**. Re-run it after a repo declares a new dependency in its `dependencies.yaml`, or to pull every repo up to its pinned ref. Repos with uncommitted local changes are skipped (commit or stash first to update them). (To *change* which projects are installed, re-run `just setup`, which also installs the new deps.)
 
 ### `new <name>`
 
@@ -192,12 +195,9 @@ to manage setup and deployment; environment dependencies are managed with the **
 
 ### `cluster [name] <subcommand>`
 
-- A subcommand is required: `setup` builds + pushes the Apptainer `.sif`; plus `job`/`develop`/`repush`/…
+- A subcommand is required: `add` creates a cluster config from template; `setup` builds + pushes the Apptainer `.sif`; plus `job`/`develop`/`repush`/…
 - Optional leading cluster name selects `config/<name>` (else `CLUSTER` env / "default")
-
-### `add-cluster`
-
-- Creates cluster configuration files from template
+- Bare `just cluster` (no subcommand) shows an arrow-key picker
 
 ### `ray <subcommand>`
 
