@@ -11,6 +11,7 @@ scripts/ray/*job_config*.yaml
 resources/
 wandb/
 worktrees/
+logs/
 
 # Local env files with secrets -- commit only the *.template versions
 .env
