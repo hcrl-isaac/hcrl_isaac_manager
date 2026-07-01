@@ -163,3 +163,8 @@ new name:
 #   just run train --task <id> --num_envs 4096   |   just run play --task <id> --checkpoint <path>
 run script *args:
     OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} resources/hcrl_isaaclab/scripts/{{script}}.py {{args}}
+
+# Run a workspace repo's CPU smoke tests (task registration + env-cfg build; skips `-m gpu`). Launches
+# Isaac Sim, so it needs the ilab venv + a GPU. e.g. `just test ssti_tasks` (default: the core repo).
+test repo="hcrl_isaaclab" *args:
+    cd "{{justfile_directory()}}/resources/{{repo}}" && OMNI_KIT_ACCEPT_EULA=YES PYTHONPATH= "{{justfile_directory()}}/{{venv_py}}" -m pytest -m "not gpu" {{args}}
