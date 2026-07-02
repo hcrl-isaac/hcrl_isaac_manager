@@ -147,9 +147,11 @@ upload-artifacts *args:
         resources/hcrl_isaaclab/scripts/tools/upload_artifacts.py {{args}}
 
 # Merge selection + committed defaults -> gitman.yaml, then fetch all repos under resources/ (defaults if none).
-resolve:
+# Dirty repos: prompts per repo to merge working changes (stash -> update -> pop); --force merges all,
+# --skip-changes leaves them untouched.
+resolve *args:
     {{venv_py}} scripts/configure_workspace.py   # ensure a workspace.yaml exists (no prompt)
-    {{venv_py}} scripts/resolve_workspace.py --manifest workspace.yaml --update
+    {{venv_py}} scripts/resolve_workspace.py --manifest workspace.yaml --update {{args}}
     @# materialize LFS in every fetched repo (repos cloned before git-lfs was active hold pointers)
     @if command -v git-lfs >/dev/null 2>&1; then \
         for d in resources/*/; do [ -d "$d/.git" ] && (echo "[resolve] git lfs pull $d"; git -C "$d" lfs pull) || true; done; \

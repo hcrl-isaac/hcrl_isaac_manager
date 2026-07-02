@@ -157,7 +157,13 @@ def main() -> None:
     ap.add_argument("--manifest", default=str(MANAGER_DIR / "workspace.yaml"),
                     help="Per-user selection overlaid on workspace.defaults.yaml (may be absent).")
     ap.add_argument("--update", action="store_true", help="Run `gitman update --skip-changes` after writing.")
+    ap.add_argument("--force", action="store_true",
+                    help="Merge working changes in dirty repos without prompting (stash -> update -> stash pop).")
+    ap.add_argument("--skip-changes", action="store_true",
+                    help="Leave repos with working changes untouched (no prompt).")
     args = ap.parse_args()
+    if args.force and args.skip_changes:
+        ap.error("--force and --skip-changes are mutually exclusive")
 
     manifest = load_manifest(Path(args.manifest))
     out = MANAGER_DIR / "gitman.yaml"
@@ -172,18 +178,56 @@ def main() -> None:
             print(f"[resolve] pip mode: removing orphaned IsaacLab source clone at {isaaclab_dir}")
             shutil.rmtree(isaaclab_dir)
 
+    # Repos with working changes: gitman update --skip-changes silently leaves them behind. Unless
+    # --skip-changes is passed, offer (or with --force, just do) a merge: stash, let gitman update to the
+    # locked rev, then stash pop -- conflicts are left in the tree for the user to resolve.
+    stashed: list[Path] = []
+    if args.update and not args.skip_changes:
+        for name in sorted(resolve(manifest)):
+            repo = RESOURCES / name
+            if not (repo / ".git").exists():
+                continue
+            dirty = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=no"],
+                cwd=repo, capture_output=True, text=True,
+            ).stdout.strip()
+            if not dirty:
+                continue
+            if args.force:
+                merge = True
+            elif sys.stdin.isatty():
+                ans = input(f"[resolve] {name} has working changes; merge them onto the updated rev? [y/N] ")
+                merge = ans.strip().lower().startswith("y")
+            else:
+                print(f"[resolve] {name} has working changes; non-interactive -> skipping (use --force to merge).")
+                merge = False
+            if merge:
+                subprocess.run(["git", "stash", "push", "-m", "resolve: pre-update merge"], cwd=repo, check=True)
+                stashed.append(repo)
+            else:
+                print(f"[resolve] leaving {name} untouched (gitman will skip it).")
+
     # A repo's transitive deps are in its own dependencies.yaml, readable only once it's checked out --
     # so resolve -> gitman update -> re-resolve to a fixpoint. Without --update, write the first pass + stop.
     prev_names: set[str] | None = None
-    while True:
-        resolved = resolve(manifest)
-        out.write_text(yaml.safe_dump(to_gitman(resolved, manifest), sort_keys=False))
-        names = set(resolved)
-        print(f"[resolve] wrote {out} with {len(resolved)} repos: {', '.join(sorted(resolved))}")
-        if not args.update or names == prev_names:
-            break
-        subprocess.run(["gitman", "update", "--skip-changes"], cwd=MANAGER_DIR, check=True)
-        prev_names = names
+    try:
+        while True:
+            resolved = resolve(manifest)
+            out.write_text(yaml.safe_dump(to_gitman(resolved, manifest), sort_keys=False))
+            names = set(resolved)
+            print(f"[resolve] wrote {out} with {len(resolved)} repos: {', '.join(sorted(resolved))}")
+            if not args.update or names == prev_names:
+                break
+            subprocess.run(["gitman", "update", "--skip-changes"], cwd=MANAGER_DIR, check=True)
+            prev_names = names
+    finally:
+        for repo in stashed:
+            pop = subprocess.run(["git", "stash", "pop"], cwd=repo)
+            if pop.returncode != 0:
+                print(
+                    f"[resolve] MERGE CONFLICTS in {repo.name}: resolve them, then `git stash drop` "
+                    "(the stash is preserved)."
+                )
 
     mode = manifest.get("isaaclab", {}).get("mode", "pip")
     if mode == "source":
