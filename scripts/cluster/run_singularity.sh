@@ -45,6 +45,10 @@ source $SCRIPT_DIR/.env.cluster
 source $SCRIPT_DIR/.env.wandb
 # .env.base is only present in source mode; default the container paths so `set -u` doesn't trip.
 [ -f "$SCRIPT_DIR/../.env.base" ] && source "$SCRIPT_DIR/../.env.base"
+# some clusters ship the container runtime as an Lmod module (e.g. TACC's tacc-apptainer)
+if [ -n "${CLUSTER_MODULE_LOAD:-}" ] && command -v module >/dev/null 2>&1; then
+    module load $CLUSTER_MODULE_LOAD
+fi
 : "${DOCKER_ISAACSIM_ROOT_PATH:=/isaac-sim}"
 : "${DOCKER_USER_HOME:=/root}"
 
@@ -54,6 +58,18 @@ echo "(run_singularity.py): Created directory: $JOB_TMPDIR"
 setup_directories
 # copy all cache files
 cp -r $CLUSTER_ISAAC_SIM_CACHE_DIR $JOB_TMPDIR
+
+# Stage a full container home from the cache layout and bind it over ${DOCKER_USER_HOME} as ONE mount.
+# Binding the individual dot-dirs fails on clusters whose apptainer cannot create bind points that are
+# missing from the image (e.g. TACC compute nodes); the home dir itself always exists in the image.
+HOME_DIR="$JOB_TMPDIR/home"
+mkdir -p "$HOME_DIR/.cache/nvidia" "$HOME_DIR/.nv" "$HOME_DIR/.nvidia-omniverse" "$HOME_DIR/.local/share/ov"
+mv "$JOB_TMPDIR/docker-isaac-sim/cache/ov" "$HOME_DIR/.cache/ov"
+mv "$JOB_TMPDIR/docker-isaac-sim/cache/pip" "$HOME_DIR/.cache/pip"
+mv "$JOB_TMPDIR/docker-isaac-sim/cache/glcache" "$HOME_DIR/.cache/nvidia/GLCache"
+mv "$JOB_TMPDIR/docker-isaac-sim/cache/computecache" "$HOME_DIR/.nv/ComputeCache"
+mv "$JOB_TMPDIR/docker-isaac-sim/logs" "$HOME_DIR/.nvidia-omniverse/logs"
+mv "$JOB_TMPDIR/docker-isaac-sim/data" "$HOME_DIR/.local/share/ov/data"
 
 # make sure logs directory exists (in the permanent isaaclab directory)
 mkdir -p "$CLUSTER_ISAACLAB_DIR/logs"
@@ -91,24 +107,25 @@ done
 # execute command in singularity container
 # NOTE: ISAACLAB_PATH is normally set in `isaaclab.sh` but we directly call the isaac-sim python because we sync the entire
 # Isaac Lab directory to the compute node and remote the symbolic link to isaac-sim
-apptainer exec \
+apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B $JOB_TMPDIR/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
-    -B $JOB_TMPDIR/docker-isaac-sim/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
-    -B $JOB_TMPDIR/docker-isaac-sim/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw \
-    -B $JOB_TMPDIR/docker-isaac-sim/cache/glcache:${DOCKER_USER_HOME}/.cache/nvidia/GLCache:rw \
-    -B $JOB_TMPDIR/docker-isaac-sim/cache/computecache:${DOCKER_USER_HOME}/.nv/ComputeCache:rw \
-    -B $JOB_TMPDIR/docker-isaac-sim/logs:${DOCKER_USER_HOME}/.nvidia-omniverse/logs:rw \
-    -B $JOB_TMPDIR/docker-isaac-sim/data:${DOCKER_USER_HOME}/.local/share/ov/data:rw \
-    -B $JOB_TMPDIR/docker-isaac-sim/documents:${DOCKER_USER_HOME}/Documents:rw \
+    -B $HOME_DIR:${DOCKER_USER_HOME}:rw \
     $EXT_BINDS \
     -B $JOB_TMPDIR/tmp:/tmp:rw \
     -B $CLUSTER_ISAACLAB_DIR/logs:/workspace/ext/hcrl_isaaclab/logs:rw \
     --nv --writable-tmpfs --containall --no-home $JOB_TMPDIR/$2.sif \
-    bash -c "export OMP_NUM_THREADS=$OMP_NUM_THREADS && export OMNI_KIT_ACCEPT_EULA=YES && export WANDB_USERNAME=$WANDB_USERNAME && export WANDB_API_KEY=$WANDB_API_KEY && cd /workspace/ext/hcrl_isaaclab && /usr/local/bin/hcrl-entrypoint /isaac-sim/python.sh ${CLUSTER_PYTHON_EXECUTABLE} ${@:3}"
+    bash -c "export HOME=${DOCKER_USER_HOME} && export OMP_NUM_THREADS=$OMP_NUM_THREADS && export OMNI_KIT_ACCEPT_EULA=YES && export WANDB_USERNAME=$WANDB_USERNAME && export WANDB_API_KEY=$WANDB_API_KEY && cd /workspace/ext/hcrl_isaaclab && /usr/local/bin/hcrl-entrypoint /isaac-sim/python.sh ${CLUSTER_PYTHON_EXECUTABLE} ${@:3}"
 
 EXIT_CODE=$?
 
 # copy resulting cache files back to host
+# restore the persistent cache layout from the staged home before syncing it back
+mv "$HOME_DIR/.cache/ov" "$JOB_TMPDIR/docker-isaac-sim/cache/ov"
+mv "$HOME_DIR/.cache/pip" "$JOB_TMPDIR/docker-isaac-sim/cache/pip"
+mv "$HOME_DIR/.cache/nvidia/GLCache" "$JOB_TMPDIR/docker-isaac-sim/cache/glcache"
+mv "$HOME_DIR/.nv/ComputeCache" "$JOB_TMPDIR/docker-isaac-sim/cache/computecache"
+mv "$HOME_DIR/.nvidia-omniverse/logs" "$JOB_TMPDIR/docker-isaac-sim/logs"
+mv "$HOME_DIR/.local/share/ov/data" "$JOB_TMPDIR/docker-isaac-sim/data"
 rsync -azPv $JOB_TMPDIR/docker-isaac-sim $CLUSTER_ISAAC_SIM_CACHE_DIR/..
 # clean up tmpdir
 rm -rf $JOB_TMPDIR

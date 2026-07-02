@@ -72,6 +72,17 @@ cmd_job() {
         --exclude="ilab/" --exclude="wandb/" --exclude="logs/" --exclude=".vscode/" --exclude="__pycache__" \
         --exclude="scripts/cluster/exports/" --exclude="*.sif" \
         "$SCRIPT_DIR/../.." "$CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR"
+    # Stage THIS cluster's env over the synced workspace-level copy -- run_singularity.sh on the compute
+    # node sources scripts/cluster/.env.cluster, which otherwise holds whatever cluster was set up last.
+    echo "[INFO] Staging ${CLUSTER} env + W&B creds into the synced workspace..."
+    rsync -vh -e "ssh ${SSH_OPTS[*]}" "$CLUSTER_ENV_FILE" \
+        "$CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR/scripts/cluster/.env.cluster"
+    if [ -f "$SCRIPT_DIR/../.env.wandb" ]; then
+        rsync -vh -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/../.env.wandb" \
+            "$CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR/scripts/cluster/.env.wandb"
+    else
+        echo "[WARN] scripts/.env.wandb not found -- the job will run without W&B credentials."
+    fi
     echo "[INFO] Submitting job..."
     submit_job "$@"
 }
