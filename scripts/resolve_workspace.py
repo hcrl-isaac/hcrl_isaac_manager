@@ -181,7 +181,7 @@ def main() -> None:
     # Repos with working changes: gitman update --skip-changes silently leaves them behind. Unless
     # --skip-changes is passed, offer (or with --force, just do) a merge: stash, let gitman update to the
     # locked rev, then stash pop -- conflicts are left in the tree for the user to resolve.
-    stashed: list[Path] = []
+    stashed: list[tuple[Path, str | None]] = []
     if args.update and not args.skip_changes:
         for name in sorted(resolve(manifest)):
             repo = RESOURCES / name
@@ -202,8 +202,11 @@ def main() -> None:
                 print(f"[resolve] {name} has working changes; non-interactive -> skipping (use --force to merge).")
                 merge = False
             if merge:
+                branch = subprocess.run(
+                    ["git", "symbolic-ref", "--short", "-q", "HEAD"], cwd=repo, capture_output=True, text=True
+                ).stdout.strip() or None
                 subprocess.run(["git", "stash", "push", "-m", "resolve: pre-update merge"], cwd=repo, check=True)
-                stashed.append(repo)
+                stashed.append((repo, branch))
             else:
                 print(f"[resolve] leaving {name} untouched (gitman will skip it).")
 
@@ -221,7 +224,15 @@ def main() -> None:
             subprocess.run(["gitman", "update", "--skip-changes"], cwd=MANAGER_DIR, check=True)
             prev_names = names
     finally:
-        for repo in stashed:
+        for repo, branch in stashed:
+            # gitman may have left a detached/pinned checkout; return to the user's branch before popping
+            # so the stash lands on the base it was taken from
+            if branch:
+                cur = subprocess.run(
+                    ["git", "symbolic-ref", "--short", "-q", "HEAD"], cwd=repo, capture_output=True, text=True
+                ).stdout.strip()
+                if cur != branch and subprocess.run(["git", "checkout", branch], cwd=repo).returncode != 0:
+                    print(f"[resolve] WARNING: could not return {repo.name} to branch {branch!r}.")
             pop = subprocess.run(["git", "stash", "pop"], cwd=repo)
             if pop.returncode != 0:
                 print(
