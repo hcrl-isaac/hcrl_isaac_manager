@@ -146,9 +146,10 @@ upload-artifacts *args:
     {{venv_py}} \
         resources/hcrl_isaaclab/scripts/tools/upload_artifacts.py {{args}}
 
-# Merge selection + committed defaults -> gitman.yaml, then fetch all repos under resources/ (defaults if none).
-# Dirty repos: prompts per repo to merge working changes (stash -> update -> pop); --force merges all,
-# --skip-changes leaves them untouched.
+# Merge selection + committed defaults -> gitman.yaml, then fetch all repos under resources/ (defaults if
+# none); afterwards each repo is returned to the branch it was on. Dirty repos: prompts per repo to merge
+# working changes (stash -> update -> pop); --force merges all, --skip-changes leaves them untouched,
+# --checkout-pin ends on the pinned rev instead (dirty repos stashed; popped only if already on the pin).
 resolve *args:
     {{venv_py}} scripts/configure_workspace.py   # ensure a workspace.yaml exists (no prompt)
     {{venv_py}} scripts/resolve_workspace.py --manifest workspace.yaml --update {{args}}

@@ -161,9 +161,16 @@ def main() -> None:
                     help="Merge working changes in dirty repos without prompting (stash -> update -> stash pop).")
     ap.add_argument("--skip-changes", action="store_true",
                     help="Leave repos with working changes untouched (no prompt).")
+    ap.add_argument("--checkout-pin", action="store_true",
+                    help="End with every repo checked out at its gitman-pinned rev instead of restoring the "
+                         "branch you were on. Working changes are stashed (no prompt) so the checkout can "
+                         "move; the stash is popped only if your branch already matches the pin, otherwise "
+                         "it is kept and a recovery command is printed.")
     args = ap.parse_args()
     if args.force and args.skip_changes:
         ap.error("--force and --skip-changes are mutually exclusive")
+    if args.checkout_pin and args.force:
+        ap.error("--force is implied by --checkout-pin (dirty repos are stashed without prompting)")
 
     manifest = load_manifest(Path(args.manifest))
     out = MANAGER_DIR / "gitman.yaml"
@@ -181,7 +188,8 @@ def main() -> None:
     # Repos with working changes: gitman update --skip-changes silently leaves them behind. Unless
     # --skip-changes is passed, offer (or with --force, just do) a merge: stash, let gitman update to the
     # locked rev, then stash pop -- conflicts are left in the tree for the user to resolve.
-    stashed: list[tuple[Path, str | None]] = []
+    # --checkout-pin stashes without prompting and pops only if the repo was already on the pinned ref.
+    stashed: list[tuple[Path, str, bool]] = []  # (repo, pre-update branch, pop after update?)
     branches: list[tuple[Path, str]] = []  # every repo's pre-update branch, restored after the update
     if args.update:
         for name in sorted(resolve(manifest)):
@@ -194,7 +202,9 @@ def main() -> None:
             if branch:
                 branches.append((repo, branch))
     if args.update and not args.skip_changes:
-        for name in sorted(resolve(manifest)):
+        resolved_refs = resolve(manifest)
+        branch_of = dict(branches)
+        for name in sorted(resolved_refs):
             repo = RESOURCES / name
             if not (repo / ".git").exists():
                 continue
@@ -204,7 +214,12 @@ def main() -> None:
             ).stdout.strip()
             if not dirty:
                 continue
-            if args.force:
+            branch = branch_of.get(repo, "")
+            pop = True
+            if args.checkout_pin:
+                merge = True
+                pop = branch == resolved_refs[name]["ref"]  # popping onto a moved checkout would misplace the changes
+            elif args.force:
                 merge = True
             elif sys.stdin.isatty():
                 ans = input(f"[resolve] {name} has working changes; merge them onto the updated rev? [y/N] ")
@@ -214,7 +229,7 @@ def main() -> None:
                 merge = False
             if merge:
                 subprocess.run(["git", "stash", "push", "-m", "resolve: pre-update merge"], cwd=repo, check=True)
-                stashed.append((repo, None))  # branch restore is handled uniformly below
+                stashed.append((repo, branch, pop))
             else:
                 print(f"[resolve] leaving {name} untouched (gitman will skip it).")
 
@@ -233,19 +248,30 @@ def main() -> None:
             prev_names = names
     finally:
         # gitman leaves the pinned checkout; return every repo to the branch the user was on (no-op for
-        # anyone who never switched), then pop stashes so they land on the base they were taken from
-        for repo, branch in branches:
-            cur = subprocess.run(
-                ["git", "symbolic-ref", "--short", "-q", "HEAD"], cwd=repo, capture_output=True, text=True
-            ).stdout.strip()
-            if cur != branch:
-                if subprocess.run(["git", "checkout", branch], cwd=repo).returncode == 0:
-                    print(f"[resolve] returned {repo.name} to branch {branch!r} (gitman had checked out the pin).")
-                else:
-                    print(f"[resolve] WARNING: could not return {repo.name} to branch {branch!r}.")
-        for repo, _ in stashed:
-            pop = subprocess.run(["git", "stash", "pop"], cwd=repo)
-            if pop.returncode != 0:
+        # anyone who never switched), then pop stashes so they land on the base they were taken from.
+        # With --checkout-pin the pinned checkout IS the goal, so skip the restore.
+        if not args.checkout_pin:
+            for repo, branch in branches:
+                cur = subprocess.run(
+                    ["git", "symbolic-ref", "--short", "-q", "HEAD"], cwd=repo, capture_output=True, text=True
+                ).stdout.strip()
+                if cur != branch:
+                    if subprocess.run(["git", "checkout", branch], cwd=repo).returncode == 0:
+                        print(f"[resolve] returned {repo.name} to branch {branch!r} (gitman had checked out the pin).")
+                    else:
+                        print(f"[resolve] WARNING: could not return {repo.name} to branch {branch!r}.")
+        for repo, branch, pop in stashed:
+            if not pop:
+                where = f"branch {branch!r}" if branch else "a detached HEAD"
+                print(
+                    f"[resolve] {repo.name}: working changes from {where} were stashed and NOT popped "
+                    f"(--checkout-pin moved the checkout). Recover with:\n"
+                    f"          git -C resources/{repo.name} checkout {branch or '<your base>'} && "
+                    f"git -C resources/{repo.name} stash pop"
+                )
+                continue
+            popped = subprocess.run(["git", "stash", "pop"], cwd=repo)
+            if popped.returncode != 0:
                 print(
                     f"[resolve] MERGE CONFLICTS in {repo.name}: resolve them, then `git stash drop` "
                     "(the stash is preserved)."

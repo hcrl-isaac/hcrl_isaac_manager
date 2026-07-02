@@ -178,7 +178,12 @@ to manage setup and deployment; environment dependencies are managed with the **
 ### `resolve`
 
 - Merges your selection (`workspace.yaml`) with the committed `workspace.defaults.yaml` and each repo's `dependencies.yaml` into a flat, deduped `gitman.yaml`, then fetches/updates all repos as siblings under `resources/` (via `gitman update`)
-- This is how you **pull and update workspace dependencies**. Re-run it after a repo declares a new dependency in its `dependencies.yaml`, or to pull every repo up to its pinned ref. Repos with uncommitted local changes are skipped (commit or stash first to update them). (To *change* which projects are installed, re-run `just setup`, which also installs the new deps.)
+- This is how you **pull and update workspace dependencies**. Re-run it after a repo declares a new dependency in its `dependencies.yaml`, or to pull every repo up to its pinned ref. (To *change* which projects are installed, re-run `just setup`, which also installs the new deps.)
+- Afterwards every repo is **returned to the branch it was on** — updating fetches the pinned rev without silently moving your checkout
+- Repos with **uncommitted local changes** get a per-repo `[y/N]` prompt to merge them onto the updated rev (stash → update → stash pop; conflicts are left in the tree with the stash preserved). Flags:
+  - `--force` — merge all dirty repos without prompting
+  - `--skip-changes` — leave all dirty repos untouched (they won't be updated)
+  - `--checkout-pin` — end with every repo checked out at its **pinned rev** instead of restoring your branch. Dirty repos are stashed (no prompt) so the checkout can move; the stash is popped only if the repo was already on the pin, otherwise it is kept and the console prints the `git checkout <branch> && git stash pop` command to recover it
 
 ### `new <name>`
 
