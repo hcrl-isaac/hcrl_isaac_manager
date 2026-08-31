@@ -70,6 +70,7 @@ cmd_job() {
     rsync -rvh -e "ssh ${SSH_OPTS[*]}" --rsync-path="mkdir -p $CLUSTER_ISAACLAB_DIR && rsync" \
         --include="resources/IsaacLab/source/*/.git/***" --exclude="*.git*" \
         --exclude="ilab/" --exclude="wandb/" --exclude="logs/" --exclude=".vscode/" --exclude="__pycache__" \
+        --exclude="artifacts/" --exclude="**/worktrees/" \
         --exclude="scripts/cluster/exports/" --exclude="*.sif" \
         "$SCRIPT_DIR/../.." "$CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR"
     # Stage THIS cluster's env over the synced workspace-level copy -- run_singularity.sh on the compute
