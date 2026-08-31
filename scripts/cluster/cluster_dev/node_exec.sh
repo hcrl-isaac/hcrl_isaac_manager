@@ -74,6 +74,10 @@ for d in "${CLUSTER_ISAACLAB_DIR}"/resources/*/; do
 done
 [ -d "${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source" ] && \
     EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source:/workspace/isaaclab_source:rw"
+# artifacts/ is the structural out-of-sync tree (see cluster_dev.sh rsync_code): cluster-only INPUT
+# data staged there still has to be readable inside the container, which the resources/* glob misses.
+[ -d "${CLUSTER_ISAACLAB_DIR}/artifacts" ] && \
+    EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/artifacts:/workspace/artifacts:rw"
 # Bind list mirrors scripts/cluster/run_singularity.sh -- with extra `-B ...:/u/esturman` so HOME is
 # writable inside the container. CLUSTER_APPTAINER_FLAGS carries site quirks (TACC: --fakeroot, which
 # unprivileged apptainer needs to create bind points like /root/Documents that don't exist in the image).
