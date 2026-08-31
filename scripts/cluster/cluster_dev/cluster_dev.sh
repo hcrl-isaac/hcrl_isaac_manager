@@ -164,6 +164,10 @@ rsync_code() {
     rsync -rlptvh --delete --info=progress2 \
         `# legacy pre-reorg tree: un-protect it so --delete can clear it despite excluded contents` \
         --filter='R /source/***' \
+        `# artifacts/ is the structural out-of-sync tree, both ways: local review videos/exports are` \
+        `# never shipped, and anything cluster-only (staged datasets, run outputs) lives under the` \
+        `# remote artifacts/ where --delete cannot touch it. New excludable data goes THERE, not here.` \
+        --exclude='/artifacts' \
         `# FIRST match wins, so per-cluster protection must precede the allowlist below -- an include` \
         `# that matched first would mark cluster-only state as syncable and --delete would erase it` \
         "${extra_excludes[@]}" \
