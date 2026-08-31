@@ -1,3 +1,0 @@
-# Cluster-only training data: staged directly from mckennie, never present locally, so the
-# motion_datasets .pt allowlist + --delete would erase it. Bare dir entry: no include can match it.
-amass_omomo
