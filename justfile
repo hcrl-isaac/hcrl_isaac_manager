@@ -181,6 +181,8 @@ run script *args:
     # main checkout (via PYTHONPATH, which precedes the editable installs); the rest fall back.
     set -euo pipefail
     eval "$({{venv_py}} scripts/worktree_env.py "${WT:-}")"
+    # a worktree checkout's parent is worktrees/, not resources/ -- pin asset resolution explicitly
+    export HCRL_RESOURCES_DIR="{{justfile_directory()}}/resources"
     export PYTHONPATH="${WT_PYTHONPATH:+$WT_PYTHONPATH:}${PYTHONPATH:-}"
     OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} "$WT_CORE/scripts/{{script}}.py" {{args}}
 
