@@ -3,7 +3,7 @@ env_file: ${MANAGER_DIR}/scripts/ray/.env.ray
 # UT EID (for tracking ownership of Ray jobs)
 user_id: ${UT_EID}
 # Working directory during job, should contain your scripts
-ext_dir: ${MANAGER_DIR}/resources/hcrl_isaaclab/scripts
+ext_dir: ${WORKSPACE_EXT_DIR}
 # Train script to execute on cluster
 python_script: "/workspace/ext/hcrl_isaaclab/scripts/train.py"
 # Additional dependencies to mount at runtime (will also auto-install module dependencies if setup.py is present at root level)
@@ -17,6 +17,7 @@ init_commands: []
 # patterns to exclude when copying dependencies (file_mounts) and working directory (ext_dir)
 "excludes":
   - "**/resources/**"
+  - "**/worktrees/**"
   - "**/wandb/**"
   - "**/logs/**"
   - "**/.git/objects/**"
@@ -25,4 +26,4 @@ init_commands: []
   - "nohup.out"
   # the large exported BFM-Zero policy dir (fetched as a W&B artifact at runtime; >100MB blows
   # Ray's upload limit). Small git-tracked policies (e.g. g1_locomotion_jit.pt) ship with the job.
-  - "**/policies/g1_bfmzero_*"
+  - "**/policies/*_bfmzero_*"

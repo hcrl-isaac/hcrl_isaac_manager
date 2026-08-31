@@ -110,10 +110,19 @@ case $command in
         read -p "UT EID: " ut_eid
         source "$MANAGER_DIR/scripts/.env.wandb"
         UT_EID=$ut_eid envsubst < "$SCRIPT_DIR/tools/.env.ray.template" > "$SCRIPT_DIR/.env.ray"
+        # WT=<name> (or HCRL_WT) selects a worktree set: mounts + ext_dir come from
+        # resources/<repo>/worktrees/<name> wherever one exists, so the job ships only that code line.
+        export HCRL_WT="${HCRL_WT:-${WT:-}}"
         export WORKSPACE_FILE_MOUNTS="$("$VENV_PY" "$SCRIPT_DIR/build_file_mounts.py")"
+        WORKSPACE_EXT_DIR="$MANAGER_DIR/resources/hcrl_isaaclab/scripts"
+        if [ -n "$HCRL_WT" ] && [ -d "$MANAGER_DIR/resources/hcrl_isaaclab/worktrees/$HCRL_WT" ]; then
+            WORKSPACE_EXT_DIR="$MANAGER_DIR/resources/hcrl_isaaclab/worktrees/$HCRL_WT/scripts"
+            echo "[INFO] Worktree set '$HCRL_WT': ext_dir + mounts resolved through resources/<repo>/worktrees/$HCRL_WT" >&2
+        fi
+        export WORKSPACE_EXT_DIR
         for cfg in job_config bench_job_config job_config_distributed; do
             UT_EID=$ut_eid MANAGER_DIR="$MANAGER_DIR" \
-                envsubst '$UT_EID $MANAGER_DIR $WORKSPACE_FILE_MOUNTS' \
+                envsubst '$UT_EID $MANAGER_DIR $WORKSPACE_FILE_MOUNTS $WORKSPACE_EXT_DIR' \
                 < "$SCRIPT_DIR/tools/$cfg.template.yaml" > "$SCRIPT_DIR/$cfg.yaml"
         done
         echo "[INFO] Created Ray config files in $SCRIPT_DIR (.env.ray + job_config/bench_job_config/job_config_distributed .yaml)."
