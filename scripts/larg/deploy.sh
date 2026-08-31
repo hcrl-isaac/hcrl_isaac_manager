@@ -25,7 +25,7 @@ for host in "$@"; do
   echo "########## DEPLOY $host ##########"
   "$HERE/sync.sh" "$host"
   echo "=== launching remote_setup.sh (nohup) on $host ==="
-  larg_ssh "$host" "cd \$HOME/$LARG_REMOTE_DIR && nohup bash scripts/larg/remote_setup.sh > $REMOTE_LOG 2>&1 & echo started pid \$! ; echo log: $REMOTE_LOG"
+  larg_ssh "$host" "cd $(larg_remote_path) && MANAGER_DIR=$(larg_remote_path) LARG_GPU=${LARG_GPU:-0} nohup bash scripts/larg/remote_setup.sh > $REMOTE_LOG 2>&1 & echo started pid \$! ; echo log: $REMOTE_LOG"
 done
 echo
 echo "Poll with: $0 --log $*"
