@@ -12,8 +12,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/common.sh"
 
 MANAGER_DIR="${LARG_LOCAL_DIR}"
-SCRIPTS_DIR="$MANAGER_DIR/resources/IsaacLab/source/hcrl_isaaclab/scripts"
-VENV_PY="$MANAGER_DIR/resources/IsaacLab/ilab/bin/python"
+SCRIPTS_DIR="$MANAGER_DIR/resources/hcrl_isaaclab/scripts"
+VENV_PY="$MANAGER_DIR/ilab/bin/python"
 ENV_WANDB="$MANAGER_DIR/scripts/.env.wandb"
 DEFAULT_PROJECT="sturman-university-of-texas-at-austin/G1_Meta_LocoManipulation"
 

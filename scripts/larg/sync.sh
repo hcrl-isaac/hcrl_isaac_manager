@@ -8,10 +8,11 @@
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/common.sh"
 
-# Exclude .venv and big motion datasets / FB-CPR checkpoints / docker images /
-# local run logs (not needed for locomanipulation meta-RL).
+# LARG home is one NFS share across every box, under a hard quota of a few tens of GB -- a single
+# unexcluded dataset dir overruns it and rsync dies mid-transfer with "Disk quota exceeded". Keep
+# this list matched to the CURRENT flat resources/ layout: stale pre-reorg paths exclude nothing.
 EXCLUDES=(
-  # virtualenvs (rebuilt on remote)
+  # virtualenvs (rebuilt per box on /var/local scratch)
   --exclude='.venv/'
   --exclude='ilab/'
   # git metadata + lfs (code-state not needed on remote; store_code_state=False)
@@ -19,15 +20,14 @@ EXCLUDES=(
   # local run outputs / logs / wandb
   --exclude='wandb/'
   --exclude='outputs/'
+  --exclude='logs/'
   --exclude='worktrees/'
-  --exclude='resources/IsaacLab/logs/'
-  --exclude='resources/IsaacLab/wandb/'
-  --exclude='resources/IsaacLab/outputs/'
-  --exclude='resources/IsaacLab/source/hcrl_isaaclab/logs/'
-  # docker images (50G; venv install, no containers)
+  --exclude='artifacts/'
+  # container images: the cluster .sif alone is ~9G and LARG runs in a venv, not a container
+  --exclude='scripts/cluster/'
   --exclude='resources/IsaacLab/docker/'
-  # large datasets for OTHER tasks (FB-CPR / GRAB / GigaHands / loco_mujoco)
-  --exclude='resources/IsaacLab/source/hcrl_isaaclab/resources/motion_datasets/'
+  # large datasets for OTHER tasks (FB-CPR motions / GRAB / GigaHands / loco_mujoco)
+  --exclude='resources/motion_datasets/'
   --exclude='resources/gigahands/'
   --exclude='resources/gigahands_leap_csv/'
   --exclude='resources/grab/'
@@ -35,8 +35,6 @@ EXCLUDES=(
   --exclude='resources/loco_mujoco_g1/'
   --exclude='resources/lafan1_lvhaidong/'
   --exclude='resources/robot_rl-cudagraph/'
-  # not needed for locomanip; saves ~1G
-  --exclude='resources/IsaacLab/source/hcrl_isaaclab/resources/ssti_robots/'
   # onnx duplicates of the .pt policies (training loads .pt only)
   --exclude='*.onnx'
   # python caches
@@ -53,7 +51,7 @@ for host in "$@"; do
   echo "=== rsync -> ${target}:${LARG_REMOTE_DIR}/ ==="
   # -a archive, -z compress, -L copy-unsafe symlinks as files? No: keep symlinks
   # (the locomanip policy symlinks point within the synced tree, so they resolve).
-  rsync -az --partial --info=stats1,progress2 \
+  rsync -az --partial --mkpath --info=stats1,progress2 \
     "${EXCLUDES[@]}" \
     -e "ssh -o ConnectTimeout=10" \
     "${LARG_LOCAL_DIR}/" \
