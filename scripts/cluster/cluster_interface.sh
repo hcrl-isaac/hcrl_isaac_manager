@@ -107,7 +107,7 @@ case "$cmd" in
         echo "  push/repush   rsync the built .sif to the cluster (reuses the SSH master; no 2FA)"
         echo "  add           create a cluster config (scripts/cluster/config/<name>)"
         echo "  job [args]    rsync the workspace + submit a batch job"
-        echo "  develop ...   manage a persistent dev node (start/status/attach/exec/sync/stop)"
+        echo "  develop ...   manage a persistent dev node (start/status/attach/exec/sync/kill/stop)"
         ;;
     *) echo "[ERROR] unknown command '$cmd' (try: help)" >&2; exit 1 ;;
 esac
