@@ -38,9 +38,12 @@ stage_once() {
     mkdir -p "$STAGE"
     echo "[node_exec] staging container + caches into ${STAGE} (sif new/updated)..."
     cp -rn "$CLUSTER_ISAAC_SIM_CACHE_DIR" "$STAGE/" 2>/dev/null || true
-    # temp + rename: a plain cp truncates the image under running containers, which loop-mount $SIF
+    # temp + atomic rename: RUNNING containers loop-mount $SIF, and truncating it in place (plain cp)
+    # corrupts their rootfs (observed: live recorders dying with ENOENT on /isaac-sim/*). A rename swaps
+    # the dentry; running mounts keep the old (deleted-but-open) inode and stay intact.
     cp "$src" "${SIF}.staging.$$" || { rm -f "${SIF}.staging.$$"; echo "[node_exec] could not stage ${src}"; exit 1; }
-    # keep the source mtime so the -nt freshness check only fires for a genuinely newer sif
+    # carry the source mtime so the -nt freshness check stays false until a genuinely newer sif is pushed
+    # (cp stamps 'now', which can leave -nt true forever -> a corrupting re-copy on EVERY exec)
     touch -r "$src" "${SIF}.staging.$$"
     mv -f "${SIF}.staging.$$" "$SIF"
     echo "[node_exec] staged."
@@ -71,11 +74,9 @@ for d in "${CLUSTER_ISAACLAB_DIR}"/resources/*/; do
 done
 [ -d "${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source" ] && \
     EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source:/workspace/isaaclab_source:rw"
-# artifacts/ holds cluster-only input data that the resources/* binds miss
-[ -d "${CLUSTER_ISAACLAB_DIR}/artifacts" ] && \
-    EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/artifacts:/workspace/artifacts:rw"
-# Bind list mirrors scripts/cluster/run_singularity.sh, plus a writable HOME. CLUSTER_APPTAINER_FLAGS
-# carries site quirks (TACC needs --fakeroot for bind points missing from the image).
+# Bind list mirrors scripts/cluster/run_singularity.sh -- with extra `-B ...:/u/esturman` so HOME is
+# writable inside the container. CLUSTER_APPTAINER_FLAGS carries site quirks (TACC: --fakeroot, which
+# unprivileged apptainer needs to create bind points like /root/Documents that don't exist in the image).
 apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B ${STAGE}/docker-isaac-sim/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \

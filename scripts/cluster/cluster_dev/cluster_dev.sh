@@ -23,8 +23,10 @@
 #                                                                      master drops; log on login
 #                                                                      node, follow with `tail`)
 #                           ./cluster_dev.sh tail             (follow the latest --detach log)
-# Stop launched runs:       ./cluster_dev.sh kill [--all | <step>...]   (scancel run steps only;
-#                                                                        sentinel + master stay up)
+# Stop launched runs:       ./cluster_dev.sh kill             (list running steps)
+#                           ./cluster_dev.sh kill --all | <step>...   (scancel steps; the job,
+#                                                                      sentinel, and SSH master
+#                                                                      all keep running)
 # Tear down:                ./cluster_dev.sh stop
 #
 # Everything except the first 2FA is non-interactive, so a Claude session can drive
@@ -67,7 +69,9 @@ CLUSTER_ATTACH_MODE="${CLUSTER_ATTACH_MODE:-auto}"
 SRUN_GRES_OPT=""; [ -n "$DEV_GPUS" ]      && SRUN_GRES_OPT="--gres=gpu:${DEV_GPUS}"
 SRUN_PART_OPT=""; [ -n "$DEV_PARTITION" ] && SRUN_PART_OPT="-p ${DEV_PARTITION}"
 SRUN_ACCT_OPT=""; [ -n "$DEV_ACCOUNT" ]   && SRUN_ACCT_OPT="-A ${DEV_ACCOUNT}"
-# steps inherit the sentinel's cpu count; srun --overlap otherwise pins each one to a single core
+# Without an explicit cpu request srun --overlap binds each step to ONE cpu, so every exec (training
+# included) ran pinned to core 0 of the whole allocation -- measured ~2.9x slower. Reuse the sentinel's
+# own --cpus-per-task so a step gets the same share the batch job asked for.
 SRUN_CPUS_OPT=""; [ -n "$DEV_CPUS" ]      && SRUN_CPUS_OPT="--cpus-per-task=${DEV_CPUS}"
 DEV_SRUN_OPTS="${SRUN_PART_OPT} ${SRUN_ACCT_OPT} -N 1 -n 1 -t ${DEV_TIME:-48:00:00} ${SRUN_GRES_OPT} ${SRUN_CPUS_OPT} ${CLUSTER_SRUN_EXTRA:-}"
 
@@ -152,17 +156,14 @@ stage_env_cluster() {
 rsync_code() {
     # Honor .dockerignore + prune git/venv/logs/wandb/exports/sif. No -z (assets are incompressible);
     # -t preserves mtimes so re-syncs skip unchanged assets; --info=progress2 shows overall progress.
-    # per-cluster config/<name>/.rsync-exclude: repos that must not deploy to this cluster
+    # A per-cluster config/<name>/.rsync-exclude (rsync exclude patterns, one per line) prunes repos that
+    # must not deploy to THIS cluster (e.g. another session's *_pbfm forks, which shadow package names).
     local extra_excludes=()
     [ -f "${SCRIPT_DIR}/../config/${CLUSTER}/.rsync-exclude" ] && \
         extra_excludes=(--exclude-from="${SCRIPT_DIR}/../config/${CLUSTER}/.rsync-exclude")
     rsync -rlptvh --delete --info=progress2 \
         `# legacy pre-reorg tree: un-protect it so --delete can clear it despite excluded contents` \
         --filter='R /source/***' \
-        `# artifacts/ is the structural out-of-sync tree, both ways: local review videos/exports are` \
-        `# never shipped, and anything cluster-only (staged datasets, run outputs) lives under the` \
-        `# remote artifacts/ where --delete cannot touch it. New excludable data goes THERE, not here.` \
-        --exclude='/artifacts' \
         `# FIRST match wins, so per-cluster protection must precede the allowlist below -- an include` \
         `# that matched first would mark cluster-only state as syncable and --delete would erase it` \
         "${extra_excludes[@]}" \
@@ -370,7 +371,8 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     local wrapped="${inner//\"/\\\"}"
     ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
         "nohup setsid bash -c \"${wrapped}\" > ${logfile} 2>&1 < /dev/null & disown; sleep 0.3; echo \"[cluster_dev] login-side wrapper pid=\$(pgrep -nf 'nohup setsid bash' || echo ?)\""
-    # an ad-hoc DEV_JOBID target is usually another session's job: print the log path, don't record it
+    # DEV_JOBID means an ad-hoc target, typically ANOTHER session's job -- recording the log path would
+    # overwrite the tracked session's LAST_RUN_LOG, so print it instead and leave shared state alone.
     if [ -n "${DEV_JOBID:-}" ]; then
         log "DEV_JOBID set: not recording LAST_RUN_LOG. Follow with: tail -f ${logfile} on ${CLUSTER_LOGIN}."
     else
@@ -400,11 +402,12 @@ cmd_open() {  # open (or confirm) the SSH control master only -- no sync, no job
 }
 
 cmd_kill() {  # cluster_dev.sh kill [--all | STEP...] : scancel launched run steps, keep the dev job alive
-    # each exec is its own SLURM step in a fresh PID namespace, so scancel by step is the only reliable kill
+    # `exec` runs live in their own SLURM step but a fresh container (own PID namespace), so pkill
+    # from a later exec can NOT see them -- step-scoped scancel from the login node is the reliable kill.
     local jobid; jobid="$(state_get JOBID)"
     [ -z "$jobid" ] && { err "No dev job on record. Use 'start' first."; exit 1; }
     ensure_master
-    # every step but batch (the sentinel) and extern (slurm bookkeeping) is a launched run
+    # every step except batch (the sentinel holding the node) and extern (slurm bookkeeping) is a launched run
     local steps
     steps="$(on_login "squeue -s -j $jobid -h -o '%i %M'" | grep -vE "\.(batch|extern) " || true)"
     if [ $# -eq 0 ]; then
@@ -439,7 +442,7 @@ cmd_stop() {
 }
 
 usage() {
-    sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in

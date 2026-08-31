@@ -1,0 +1,11 @@
+/resources/hcrl_isaaclab_pbfm
+/resources/robot_rl_pbfm
+/resources/umrl_tasks_pbfm
+/resources/gmr
+/resources/hcrl_isaaclab_edge
+
+# artifacts/ is OUTPUT: review videos, exports, retarget intermediates, and W&B-redownloadable
+# checkpoints. Nothing under it is read as INPUT by any cluster script, and the cluster creates
+# what it writes, so the whole tree is excluded rather than chased dir-by-dir (listing only
+# subdirs is what let corpus_retarget_v1 keep syncing).
+/artifacts
