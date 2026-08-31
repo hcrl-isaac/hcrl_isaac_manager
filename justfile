@@ -73,11 +73,16 @@ setup:
     done; \
     just vscode
 
-# Generate .vscode/settings.json by booting headless Isaac Sim to snapshot the Kit extension paths.
-vscode:
-    @OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} scripts/tools/ui.py spin \
-        "Booting headless Isaac Sim to snapshot VS Code extension paths (~1 min)" \
-        -- {{venv_py}} scripts/tools/setup_vscode.py || echo "[vscode][WARN] settings generation failed"
+# Generate .vscode/settings.json. Boots headless Isaac Sim for the Kit paths; `just vscode no-kit`
+# reuses the cached ones and refreshes only the workspace package paths (instant, after a `just setup`).
+vscode *args:
+    @if [ "{{args}}" = "no-kit" ] || [ "{{args}}" = "--no-kit" ]; then \
+        {{venv_py}} scripts/tools/setup_vscode.py --no-kit; \
+    else \
+        OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} scripts/tools/ui.py spin \
+            "Booting headless Isaac Sim to snapshot VS Code extension paths (~1 min)" \
+            -- {{venv_py}} scripts/tools/setup_vscode.py || echo "[vscode][WARN] settings generation failed"; \
+    fi
 
 # Remove the ilab venv, generated workspace config (workspace.yaml/gitman.yaml), and shell alias (prompts first).
 clean:
