@@ -25,16 +25,20 @@ RUN --mount=type=cache,target=/var/cache/apt \
 
 # Isaac Lab (pip) + RL + Ray + tuning + tooling, into Kit's python. No source COPY, no [isaacsim] extra
 # (isaacsim is provided by the base image's Kit). flatdict pinned first to avoid a known resolution quirk.
+# Pins here are INLINE: constraints.workspace.txt covers only the generated deps below.
+# rsl-rl-lib is explicit on purpose -- isaaclab gates it behind its "rsl-rl" extra AT 3.0.1, but the
+# bundled isaaclab_rl.rsl_rl is imported by hcrl_isaaclab.robot_rl and we run 5.4.1 to match robot_rl.
 RUN ${ISAAC_PY} -m pip install --upgrade pip && \
     ${ISAAC_PY} -m pip install flatdict==4.0.0 && \
-    ${ISAAC_PY} -m pip install "isaaclab==2.3.2.post1" "rsl-rl-lib" && \
+    ${ISAAC_PY} -m pip install "isaaclab==2.3.2.post1" "rsl-rl-lib==5.4.1" && \
     ${ISAAC_PY} -m pip install "ray[default,tune]==2.50.1" optuna bayesian-optimization gitman
 
-# Runtime deps of the mounted workspace packages (PYTHONPATH'd, not pip-installed, so their deps must be
-# baked). Keep in sync with resources/robot_rl + resources/hcrl_isaaclab (TODO: auto-extract from pyproject).
-RUN ${ISAAC_PY} -m pip install \
-    "tensordict>=0.7.0" GitPython onnx "POT==0.9.6" "onnxscript>=0.5.4" \
-    psutil "wandb>=0.19.9" onnxruntime urdfpy usd-core "networkx>=3.3" rtree
+# Runtime deps of the mounted workspace packages (PYTHONPATH'd, not pip-installed, so their deps must
+# be baked). Generated from each repo's own pyproject/setup.py by collect_workspace_deps.py, so it
+# cannot drift; the constraints file holds the pins a loose transitive requirement would silently break.
+# No --upgrade: the base image's torch/torchvision are +cu128 builds that PyPI wheels would replace.
+COPY requirements.workspace.txt constraints.workspace.txt /tmp/
+RUN ${ISAAC_PY} -m pip install -r /tmp/requirements.workspace.txt -c /tmp/constraints.workspace.txt
 
 # git-lfs (robot assets / motion datasets / policies are pulled via LFS during code sync).
 COPY install-git-lfs.sh /tmp/install-git-lfs.sh
