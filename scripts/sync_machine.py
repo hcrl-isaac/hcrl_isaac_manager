@@ -37,6 +37,7 @@ HOME = Path.home()
 # gitignored paths the code needs on the other side (relative to each checkout root)
 REPO_EXTRAS = [".claude"]
 MANAGER_EXTRAS = [
+    "CLAUDE.md",  # the manager gitignores its own (/CLAUDE.md), so it is a plain file, not a tracked one
     ".claude",
     "scripts/.env.wandb",
     "scripts/ray/.env.ray",
