@@ -1,24 +1,17 @@
-"""Push this machine's workspace + Claude state to a peer box (``just sync <host>``).
+"""Push this workspace + Claude state to a peer box (``just sync <host>``). One-way: run it from the machine
+you are leaving.
 
-The peer is authoritative for nothing: this is a one-way push from here to ``<host>``. Run it from the
-machine you are leaving. It ships, in order:
+- **Code, git-aware.** Each checkout (manager, ``resources/*``, their worktrees, ``~/booster-deploy``) is put on
+  the same branch+commit on the peer -- commits are pushed into its repo directly, so unpushed work travels --
+  then only dirty files and the gitignored extras the code needs (``.claude/``, ``.env.*``, ``models/``) go on
+  top. ``workspace.yaml`` is per-machine and never shipped.
+- **Claude state, path-rewritten.** Transcripts, memory, ``SESSIONS.md``, scratchpads, ``~/.cluster_dev``, with
+  absolute paths translated to the peer's home / manager dir / ``/tmp/claude-<uid>/<slug>``; newer-only, so a
+  session continued over there is not clobbered.
+- **Deps, incrementally.** uv re-sync of the peer's venvs; a full ``just setup`` only if ``ilab`` is missing.
 
-1. **Code, git-aware.** Every checkout (the manager, each ``resources/<repo>``, each
-   ``resources/<repo>/worktrees/<name>``) is brought to the same branch + commit on the peer -- commits
-   are pushed straight into the peer's repo (``refs/sync/<branch>``), so unpushed work travels -- then
-   only the dirty files (modified/untracked, deletions too) are rsynced on top. Gitignored extras that
-   the code needs (per-repo ``.claude/``, ``.env.*``) ride along. ``workspace.yaml`` never does: it is
-   per-machine by design.
-2. **Claude state, path-rewritten.** Session transcripts, memory, ``SESSIONS.md``, scratchpads and
-   ``~/.cluster_dev`` are copied with every absolute path translated to the peer's layout (home,
-   manager dir, ``/tmp/claude-<uid>/<project-slug>``), and only where this side is newer, so a session
-   continued over there is not clobbered by a stale copy from here.
-3. **Deps, incrementally.** The peer's ``ilab`` (and ``booster-deploy/.venv``) are re-synced with uv --
-   fast when nothing changed, a full ``just setup`` only when the venv is missing.
-
-Safety: if the peer has TRACKED modifications in files this side is NOT also changing, the code step
-refuses (``--force`` overrides); its untracked files are never touched, so they are not guarded.
-``--dry-run`` prints every action without touching the peer.
+Refuses if the peer has tracked modifications this side is not also carrying (``--force`` overrides).
+``--dry-run`` prints every action; ``--artifacts`` adds the large exported policies.
 """
 
 from __future__ import annotations
