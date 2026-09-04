@@ -109,6 +109,11 @@ docker *args:
     fi
     scripts/docker/docker_interface.sh {{args}}
 
+# Push this workspace + Claude sessions to a peer box (`just sync hcrl2`, `just sync ebuntu`): git-aware code
+# sync, path-rewritten transcripts/memory/scratchpads, incremental venv update. `--dry-run` / `--force` / `--artifacts`.
+sync host *args:
+    python3 scripts/sync_machine.py {{host}} {{args}}
+
 # Cluster interface (scripts/cluster/): `add`/`setup`/`job`/`develop`/...; bare picks; leading name -> config/<name>.
 cluster *args:
     @set -- {{args}}; \
