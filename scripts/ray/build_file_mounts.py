@@ -19,9 +19,13 @@ from __future__ import annotations
 
 import glob
 import os
+import sys
 
 MANAGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CONTAINER_EXT = "/workspace/ext"
+
+sys.path.insert(0, os.path.join(MANAGER_DIR, "scripts"))
+from worktree_env import workspace_repos  # noqa: E402
 
 
 def _is_package(path: str) -> bool:
@@ -45,13 +49,8 @@ def _source_mode() -> bool:
 
 def main() -> None:
     resources = os.path.join(MANAGER_DIR, "resources")
-    # Deterministic order: core, RL package, then task/robot packages.
-    candidates = [
-        os.path.join(resources, "hcrl_isaaclab"),
-        os.path.join(resources, "robot_rl"),
-        *sorted(glob.glob(os.path.join(resources, "*_tasks"))),
-        *sorted(glob.glob(os.path.join(resources, "*_robots"))),
-    ]
+    # the same repo list `just run WT=` selects, so a Ray job ships the same worktree set
+    candidates = [os.path.join(resources, repo) for repo in workspace_repos(resources)]
     # HCRL_WT=<name>: ship the named worktree instead of the main checkout for any repo that has one,
     # so a Ray job carries exactly the code line it is meant to run and nothing else.
     wt = os.environ.get("HCRL_WT", "")

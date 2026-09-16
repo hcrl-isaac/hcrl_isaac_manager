@@ -19,6 +19,22 @@ import glob
 import os
 
 MANAGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+RESOURCES_DIR = os.path.join(MANAGER_DIR, "resources")
+
+
+def workspace_repos(resources: str = RESOURCES_DIR) -> list[str]:
+    """Name the repos that form a worktree set, in a fixed order: core, RL package, ``*_tasks``, ``*_robots``.
+
+    Args:
+        resources: The workspace ``resources/`` directory to glob the per-project repos from.
+
+    Returns:
+        Repo directory names (not checked for existence).
+    """
+    repos = ["hcrl_isaaclab", "robot_rl"]
+    for pattern in ("*_tasks", "*_robots"):
+        repos += sorted(os.path.basename(p) for p in glob.glob(os.path.join(resources, pattern)))
+    return repos
 
 
 def resolve(name: str) -> tuple[dict[str, str], list[str]]:
@@ -30,12 +46,9 @@ def resolve(name: str) -> tuple[dict[str, str], list[str]]:
     Returns:
         ``(paths, overridden)``: repo name -> resolved root, and the repos taken from a worktree.
     """
-    resources = os.path.join(MANAGER_DIR, "resources")
-    repos = ["hcrl_isaaclab", "robot_rl"]
-    repos += sorted(os.path.basename(p) for p in glob.glob(os.path.join(resources, "*_tasks")))
     paths, overridden = {}, []
-    for repo in repos:
-        main = os.path.join(resources, repo)
+    for repo in workspace_repos():
+        main = os.path.join(RESOURCES_DIR, repo)
         if not os.path.isdir(main):
             continue
         wt = os.path.join(main, "worktrees", name) if name else ""
