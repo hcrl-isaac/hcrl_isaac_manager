@@ -5,13 +5,14 @@ you are leaving.
   the same branch+commit on the peer -- commits are pushed into its repo directly, so unpushed work travels --
   then only dirty files and the gitignored extras the code needs (``.claude/``, ``.env.*``, ``models/``) go on
   top. ``workspace.yaml`` is per-machine and never shipped.
-- **Claude state, path-rewritten.** Transcripts, memory, ``SESSIONS.md``, scratchpads, ``~/.cluster_dev``, with
-  absolute paths translated to the peer's home / manager dir / ``/tmp/claude-<uid>/<slug>``; newer-only, so a
-  session continued over there is not clobbered.
+- **Claude state, path-rewritten.** Transcripts, memory, settings, scratchpads, with absolute paths translated
+  to the peer's home / manager dir / ``<tmpdir>/claude-<uid>/<slug>``; newer-only, so a session continued over
+  there is not clobbered. Live per-machine state (``SESSIONS.md``, ``~/.cluster_dev``) never travels.
 - **Deps, incrementally.** uv re-sync of the peer's venvs; a full ``just setup`` only if ``ilab`` is missing.
 
-Refuses if the peer has tracked modifications this side is not also carrying (``--force`` overrides).
-``--dry-run`` prints every action; ``--artifacts`` adds the large exported policies.
+Refuses if the peer has tracked modifications this side is not also carrying, or its branch is ahead of /
+diverged from ours (``--force`` overrides both). ``--dry-run`` prints every action; ``--artifacts`` adds the
+large exported policies.
 """
 
 from __future__ import annotations
@@ -102,37 +103,48 @@ def slug(path: str) -> str:
 
 
 @dataclass
-class Peer:
+class Machine:
+    """One side of the sync; ``tmp`` is that machine's temp dir (TMPDIR-aware), where Claude keeps scratchpads."""
+
     host: str
     home: str
     uid: str
     manager: str
+    tmp: str
 
     @property
     def scratch_root(self) -> str:
-        return f"/tmp/claude-{self.uid}/{slug(self.manager)}"
+        return f"{self.tmp}/claude-{self.uid}/{slug(self.manager)}"
 
     @property
     def projects_dir(self) -> str:
         return f"{self.home}/.claude/projects/{slug(self.manager)}"
 
 
-@dataclass
-class Local:
-    home: str = str(HOME)
-    uid: str = str(os.getuid())
-    manager: str = str(MANAGER_DIR)
-
-    @property
-    def scratch_root(self) -> str:
-        return f"/tmp/claude-{self.uid}/{slug(self.manager)}"
-
-    @property
-    def projects_dir(self) -> str:
-        return f"{self.home}/.claude/projects/{slug(self.manager)}"
+def local_machine() -> Machine:
+    """Describe this machine the way :func:`probe_peer` describes the peer."""
+    return Machine("localhost", str(HOME), str(os.getuid()), str(MANAGER_DIR), tempfile.gettempdir())
 
 
-def path_map(local: Local, peer: Peer) -> list[tuple[str, str]]:
+def probe_peer(host: str) -> Machine:
+    """Read the peer's home, uid and temp dir over ssh (login shell, so a profile-set TMPDIR counts).
+
+    Args:
+        host: ssh host of the peer.
+
+    Returns:
+        The peer as a :class:`Machine`; its manager dir defaults to ``~/<manager-name>`` (``SYNC_REMOTE_MANAGER``).
+    """
+    script = (
+        'echo "$HOME"; id -u; '
+        "python3 -c 'import tempfile; print(tempfile.gettempdir())' 2>/dev/null || echo \"${TMPDIR:-/tmp}\""
+    )
+    out = sh(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", host, f"bash -lc {shlex.quote(script)}"])
+    home, uid, tmpdir = out.splitlines()[-3:]  # last three: a login shell may print a banner first
+    return Machine(host, home, uid, os.environ.get("SYNC_REMOTE_MANAGER", f"{home}/{MANAGER_DIR.name}"), tmpdir)
+
+
+def path_map(local: Machine, peer: Machine) -> list[tuple[str, str]]:
     """Longest-first substitutions that translate this machine's absolute paths into the peer's."""
     pairs = [
         (local.scratch_root, peer.scratch_root),
@@ -143,6 +155,15 @@ def path_map(local: Local, peer: Peer) -> list[tuple[str, str]]:
 
 
 def rewrite(text: str, pmap: list[tuple[str, str]]) -> str:
+    """Apply the ``path_map`` substitutions to ``text``.
+
+    Args:
+        text: Text carrying this machine's absolute paths.
+        pmap: Longest-first ``(local, peer)`` path pairs.
+
+    Returns:
+        ``text`` with every local prefix replaced by the peer's.
+    """
     for src, dst in pmap:
         text = text.replace(src, dst)
     return text
@@ -168,12 +189,32 @@ class Checkout:
 
 
 def git(path: Path, *args: str) -> str:
+    """Run ``git -C path *args`` and return its stdout.
+
+    Args:
+        path: Checkout to run in.
+        args: git arguments.
+
+    Returns:
+        Stripped stdout.
+    """
     return sh(["git", "-C", str(path), *args])
 
 
 def scan_checkout(
     rel: str, repo_rel: str, root: Path = MANAGER_DIR, extras: list[str] | None = None
 ) -> Checkout | None:
+    """Describe one checkout: branch, sha, dirty/deleted files, extras to ship.
+
+    Args:
+        rel: Path relative to ``root`` ("" for ``root`` itself).
+        repo_rel: The main checkout owning the object store (== ``rel`` unless a worktree).
+        root: Local dir the checkout lives under.
+        extras: Gitignored paths shipped alongside the dirty files (default ``REPO_EXTRAS``).
+
+    Returns:
+        The checkout, or ``None`` if ``root/rel`` is not a git checkout.
+    """
     path = root / rel if rel else root
     if not (path / ".git").exists():
         return None
@@ -196,6 +237,7 @@ def scan_checkout(
 
 
 def scan_all() -> list[Checkout]:
+    """Every checkout to sync: the manager, the extra repos, ``resources/*`` and their worktrees."""
     cos = [c for c in [scan_checkout("", "", extras=MANAGER_EXTRAS)] if c]
     for name, extras in EXTRA_REPOS.items():
         if (c := scan_checkout("", "", root=HOME / name, extras=REPO_EXTRAS + extras)) is not None:
@@ -213,7 +255,16 @@ def scan_all() -> list[Checkout]:
     return cos
 
 
-def sync_checkout(co: Checkout, peer: Peer, pmap: list[tuple[str, str]], *, force: bool, dry: bool) -> None:
+def sync_checkout(co: Checkout, peer: Machine, pmap: list[tuple[str, str]], *, force: bool, dry: bool) -> None:
+    """Put the peer's copy of ``co`` on the same branch+sha, then ship its dirty files and extras.
+
+    Args:
+        co: The local checkout.
+        peer: The peer machine.
+        pmap: Path substitutions from :func:`path_map`.
+        force: Overwrite the peer's own uncommitted changes and divergent branch commits.
+        dry: Print the actions instead of running them.
+    """
     rroot = rewrite(str(co.root), pmap)
     rpath = f"{rroot}/{co.rel}" if co.rel else rroot
     rrepo = f"{rroot}/{co.repo_rel}" if co.repo_rel else rroot
@@ -248,25 +299,48 @@ def sync_checkout(co: Checkout, peer: Peer, pmap: list[tuple[str, str]], *, forc
         )
     # 2) checkout: create the worktree if needed, then land on the branch at exactly this sha
     is_wt = co.rel != co.repo_rel
+    branch, sha = shlex.quote(co.branch), co.sha
     ours = "\\n".join(co.dirty + co.deleted)
+    skip = (
+        "^(resources/|worktrees/|ilab/|\\.venv/|logs/|wandb/|artifacts/|workspace\\.yaml$)"
+        "|__pycache__|\\.pyc$|\\.egg-info/"
+    )
     guard = (
         ""
         if force
         else f"""
-        theirs=$(git status --porcelain | grep -v '^??' | cut -c4- | sed 's/.* -> //' \\
-            | grep -v -E '^(resources/|worktrees/|ilab/|\\.venv/|logs/|wandb/|artifacts/|workspace\\.yaml$)|__pycache__|\\.pyc$|\\.egg-info/' || true)
+        theirs=$(git status --porcelain | grep -v '^??' | cut -c4- | sed 's/.* -> //' | grep -v -E '{skip}' || true)
         extra=$(printf '%s\\n' "$theirs" | grep -vxF -f <(printf '%b\\n' {shlex.quote(ours)}) | grep -v '^$' || true)
-        if [ -n "$extra" ]; then echo "REFUSE: peer has its own uncommitted changes in {label}:"; echo "$extra"; exit 3; fi"""
+        if [ -n "$extra" ]; then
+            echo "REFUSE: peer has its own uncommitted changes in {label}:"; echo "$extra"; exit 3
+        fi"""
     )
+    # the peer's branch may carry commits of its own; -B would drop them to the reflog
+    ancestor = (
+        ""
+        if force
+        else f"""
+        if head=$(git rev-parse -q --verify refs/heads/{branch}) && ! git merge-base --is-ancestor "$head" {sha}; then
+            echo "REFUSE: peer's {co.branch} in {label} is ahead of or diverged from ours (peer $head, ours {sha})"
+            exit 3
+        fi"""
+    )
+    if is_wt:
+        create = f"git -C {shlex.quote(rrepo)} worktree add -q {shlex.quote(rpath)} -B {branch} refs/sync/{branch}"
+    else:
+        create = "false"
     script = f"""
         set -e
         if [ ! -d {shlex.quote(rpath)} ]; then
-            {"git -C " + shlex.quote(rrepo) + " worktree add -q " + shlex.quote(rpath) + " -B " + shlex.quote(co.branch) + " refs/sync/" + shlex.quote(co.branch) if is_wt else "false"}
+            cd {shlex.quote(rrepo)}
+            {ancestor}
+            {create}
         fi
         cd {shlex.quote(rpath)}
         {guard}
-        if [ "$(git rev-parse HEAD)" != "{co.sha}" ] || [ "$(git rev-parse --abbrev-ref HEAD)" != {shlex.quote(co.branch)} ]; then
-            git checkout -q -f -B {shlex.quote(co.branch)} {co.sha}
+        if [ "$(git rev-parse HEAD)" != "{sha}" ] || [ "$(git rev-parse --abbrev-ref HEAD)" != {branch} ]; then
+            {ancestor}
+            git checkout -q -f -B {branch} {sha}
         fi
         {" ".join("rm -f " + shlex.quote(p) + ";" for p in co.deleted)}
     """
@@ -307,8 +381,19 @@ def sync_checkout(co: Checkout, peer: Peer, pmap: list[tuple[str, str]], *, forc
         retarget_symlinks(co.path, rpath, files, peer, pmap, dry=dry)
 
 
-def retarget_symlinks(local_root: Path, remote_root: str, subpaths: list[str], peer: Peer, pmap, *, dry: bool) -> None:
-    """Absolute symlinks that point into a mapped tree are re-pointed at the peer's copy of that tree."""
+def retarget_symlinks(
+    local_root: Path, remote_root: str, subpaths: list[str], peer: Machine, pmap, *, dry: bool
+) -> None:
+    """Absolute symlinks that point into a mapped tree are re-pointed at the peer's copy of that tree.
+
+    Args:
+        local_root: Local checkout root the ``subpaths`` are relative to.
+        remote_root: The peer's path of that checkout.
+        subpaths: Files/dirs just shipped; dirs are walked for links.
+        peer: The peer machine.
+        pmap: Path substitutions from :func:`path_map`.
+        dry: Print the actions instead of running them.
+    """
     cmds = []
     for sub in subpaths:
         base = local_root / sub
@@ -327,6 +412,7 @@ def retarget_symlinks(local_root: Path, remote_root: str, subpaths: list[str], p
 
 
 def is_text(p: Path) -> bool:
+    """Whether ``p`` gets path-rewritten (known text suffixes, transcripts, suffix-less files)."""
     return p.suffix in TEXT_SUFFIXES or p.suffix == ".jsonl" or not p.suffix
 
 
@@ -352,8 +438,17 @@ def rewrite_tree(src: Path, pmap: list[tuple[str, str]], staging: Path) -> Path:
     return dst
 
 
-def push_tree(local_dir: Path, remote_dir: str, peer: Peer, pmap, staging: Path, *, dry: bool) -> None:
-    """Two passes so multi-GB scratch binaries stream straight from source and never hit a staging copy."""
+def push_tree(local_dir: Path, remote_dir: str, peer: Machine, pmap, staging: Path, *, dry: bool) -> None:
+    """Two passes so multi-GB scratch binaries stream straight from source and never hit a staging copy.
+
+    Args:
+        local_dir: Tree to ship.
+        remote_dir: Its path on the peer.
+        peer: The peer machine.
+        pmap: Path substitutions from :func:`path_map`.
+        staging: Where rewritten text copies are staged.
+        dry: Print the actions instead of running them.
+    """
     if not local_dir.exists():
         return
     print(f"[sync] claude: {local_dir} -> {peer.host}:{remote_dir}")
@@ -363,10 +458,19 @@ def push_tree(local_dir: Path, remote_dir: str, peer: Peer, pmap, staging: Path,
     if not dry:
         staged = rewrite_tree(local_dir, pmap, staging)
         if staged.exists():
-            sh(["rsync", "-a", "--update", "-e", SSH_CMD, f"{staged}/", f"{peer.host}:{remote_dir}/"])
+            # -c: suffix-less files also went raw in pass 1; same mtime+size would skip the rewritten copy
+            sh(["rsync", "-ac", "--update", "-e", SSH_CMD, f"{staged}/", f"{peer.host}:{remote_dir}/"])
 
 
-def sync_claude(local: Local, peer: Peer, pmap, *, dry: bool) -> None:
+def sync_claude(local: Machine, peer: Machine, pmap, *, dry: bool) -> None:
+    """Ship transcripts, memory, settings, prompt history and scratchpads; live per-machine state stays.
+
+    Args:
+        local: This machine.
+        peer: The peer machine.
+        pmap: Path substitutions from :func:`path_map`.
+        dry: Print the actions instead of running them.
+    """
     with tempfile.TemporaryDirectory(prefix="sync-claude-") as tmp:
         staging = Path(tmp)
         proj = Path(local.projects_dir)
@@ -380,7 +484,8 @@ def sync_claude(local: Local, peer: Peer, pmap, *, dry: bool) -> None:
             if (proj / "memory").is_dir():
                 sh(["cp", "-a", str(proj / "memory"), str(sel / "memory")])
             push_tree(sel, peer.projects_dir, peer, pmap, staging / "s1", dry=dry)
-        for name in ("SESSIONS.md", "settings.json", "history.jsonl"):
+        # not SESSIONS.md: the peer's sessions write that board live
+        for name in ("settings.json", "history.jsonl"):
             f = HOME / ".claude" / name
             if f.exists():
                 sel = staging / f"f-{name}"
@@ -394,14 +499,6 @@ def sync_claude(local: Local, peer: Peer, pmap, *, dry: bool) -> None:
                     staging / f"s-{name}",
                     dry=dry,
                 )
-        push_tree(
-            HOME / ".cluster_dev",
-            f"{peer.home}/.cluster_dev",
-            peer,
-            pmap,
-            staging / "s2",
-            dry=dry,
-        )
         scratch = Path(local.scratch_root)
         if scratch.is_dir():
             push_tree(scratch, peer.scratch_root, peer, pmap, staging / "s3", dry=dry)
@@ -410,14 +507,14 @@ def sync_claude(local: Local, peer: Peer, pmap, *, dry: bool) -> None:
 # --------------------------------------------------------------------------------------------- deps
 
 
-def ensure_deps(peer: Peer, *, dry: bool) -> None:
+def ensure_deps(peer: Machine, *, dry: bool) -> None:
     """Bring the peer's venvs up to date without a rebuild: uv is a no-op when nothing changed."""
     m = shlex.quote(peer.manager)
     script = f"""
         set -e
         command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
         command -v just >/dev/null || uv tool install -q rust-just
-        export PATH=$HOME/.local/bin:$PATH VIRTUAL_ENV=""
+        export PATH=$HOME/.local/bin:$PATH VIRTUAL_ENV="" UV_PROJECT_ENVIRONMENT=ilab
         cd {m}
         if [ ! -x ilab/bin/python ]; then
             echo "[deps] no ilab venv on peer -> full 'just setup' (this is the slow path)"
@@ -427,7 +524,8 @@ def ensure_deps(peer: Peer, *, dry: bool) -> None:
         echo "[deps] manager deps (uv sync)"; uv sync -q
         echo "[deps] workspace packages (editable re-install, fast when unchanged)"
         PY=ilab/bin/python
-        uv pip install -q --python $PY --torch-backend cu128 --extra-index-url https://pypi.nvidia.com --index-strategy unsafe-best-match -e "resources/hcrl_isaaclab[isaacsim]"
+        uv pip install -q --python $PY --torch-backend cu128 --extra-index-url https://pypi.nvidia.com \
+            --index-strategy unsafe-best-match -e "resources/hcrl_isaaclab[isaacsim]"
         for d in resources/robot_rl resources/*_tasks resources/*_robots resources/holosoma/src/holosoma_retargeting; do
             if [ -d "$d" ] && {{ [ -f "$d/setup.py" ] || [ -f "$d/pyproject.toml" ]; }}; then
                 uv pip install -q --python $PY --torch-backend cu128 --extra-index-url https://pypi.nvidia.com -e "$d"
@@ -467,7 +565,7 @@ def main() -> None:
     ap.add_argument(
         "--force",
         action="store_true",
-        help="overwrite the peer's own uncommitted changes",
+        help="overwrite the peer's own uncommitted changes and branches that are ahead of / diverged from ours",
     )
     ap.add_argument("--no-code", action="store_true")
     ap.add_argument("--no-claude", action="store_true")
@@ -480,27 +578,10 @@ def main() -> None:
     args = ap.parse_args()
     dry = args.dry_run
 
-    local = Local()
+    local = local_machine()
     if args.host in (os.uname().nodename, "localhost"):
         raise SystemExit("[sync] refusing to sync a machine to itself")
-    probe = sh(
-        [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=20",
-            args.host,
-            'printf "%s\\n%s\\n" "$HOME" "$(id -u)"',
-        ]
-    )
-    rhome, ruid = probe.splitlines()[:2]
-    peer = Peer(
-        args.host,
-        rhome,
-        ruid,
-        os.environ.get("SYNC_REMOTE_MANAGER", f"{rhome}/{MANAGER_DIR.name}"),
-    )
+    peer = probe_peer(args.host)
     pmap = path_map(local, peer)
     print(f"[sync] {local.manager} -> {peer.host}:{peer.manager}" + ("  (DRY RUN)" if dry else ""))
     for src, dst in pmap:
