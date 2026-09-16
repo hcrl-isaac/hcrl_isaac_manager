@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # Build the `ilab` venv on a LARG box, from the workspace already rsynced to the shared home.
 #
-# Storage on LARG is split and it matters: /u/$USER is ONE NFS share that every box mounts, under a
-# hard quota of a few tens of GB, while /var/local is per-box local disk with terabytes free. So code
-# lives in the shared home and everything big -- venv, uv cache, Isaac's caches, logs -- goes to
-# scratch. A venv therefore has to be built once per box even though the code is already there.
+# Code lives in the shared, quota'd NFS home; the venv and every cache go to per-box /var/local
+# scratch, so the venv is built once per box.
 #
 #   bash scripts/larg/remote_setup.sh          # build if missing
 #   FORCE=1 bash scripts/larg/remote_setup.sh  # rebuild from scratch
@@ -44,7 +42,8 @@ mode=$(grep -E '^[[:space:]]*mode:' workspace.yaml 2>/dev/null | head -1 | sed -
 echo "[setup] IsaacLab mode: ${mode:-pip}"
 
 echo "[setup] manager deps"
-uv sync --frozen 2>/dev/null || uv pip install --python "$PY" -r pyproject.toml
+# --inexact: a re-run must not prune the isaacsim/isaaclab/editable installs added below
+uv sync --frozen --inexact 2>/dev/null || uv pip install --python "$PY" -r pyproject.toml
 
 echo "[setup] torch 2.7.0 / torchvision 0.22.0 (cu128 -- sm_120 needs it)"
 uv pip install --python "$PY" --torch-backend cu128 torch==2.7.0 torchvision==0.22.0
@@ -72,9 +71,8 @@ for d in resources/robot_rl resources/*_tasks resources/*_robots resources/holos
     fi
 done
 
-# Isaac Lab hardcodes its URDF/MJCF conversion scratch to /tmp/IsaacLab. LARG boxes are shared, so that
-# directory belongs to whichever user booted Isaac first and is mode 0700 -- every other user then dies
-# with PermissionError before the sim starts. Make it honour TMPDIR, which runs point at local scratch.
+# Isaac Lab's URDF/MJCF conversion scratch is hard-coded to /tmp/IsaacLab, which one user owns on a
+# shared box; make it honour TMPDIR.
 CONV="$VENV/lib/python3.11/site-packages/isaaclab/source/isaaclab/isaaclab/sim/converters/asset_converter_base.py"
 if [ -f "$CONV" ] && grep -q 'f"/tmp/IsaacLab/usd_' "$CONV"; then
     python3 - "$CONV" <<'PATCH'
