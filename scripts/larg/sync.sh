@@ -8,9 +8,8 @@
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/common.sh"
 
-# LARG home is one NFS share across every box, under a hard quota of a few tens of GB -- a single
-# unexcluded dataset dir overruns it and rsync dies mid-transfer with "Disk quota exceeded". Keep
-# this list matched to the CURRENT flat resources/ layout: stale pre-reorg paths exclude nothing.
+# LARG home is one quota'd NFS share across every box, so bulk data must stay excluded; keep the
+# patterns matched to the flat resources/ layout (stale paths exclude nothing).
 EXCLUDES=(
   # virtualenvs (rebuilt per box on /var/local scratch)
   --exclude='.venv/'

@@ -8,15 +8,11 @@ cvxpy<1.6
 # isaacsim-core pins this; newer cvxpy releases try to replace it.
 osqp==0.6.7.post3
 
-# The base image ships +cu128 builds and some deps pull torch transitively (smplx). Pinning to the
-# installed version means pip treats it as satisfied (PEP 440: 2.7.0+cu128 matches ==2.7.0) and leaves
-# it alone; a dep demanding a newer torch then fails the build loudly instead of silently installing a
-# CPU/other-CUDA wheel over it.
+# Pin to the base image's +cu128 builds (PEP 440: 2.7.0+cu128 satisfies ==2.7.0), so a transitive
+# torch requirement (smplx) is already met and a dep demanding a newer torch fails the build instead.
 torch==2.7.0
 torchvision==0.22.0
 
-# holosoma's retargeting SQP is not version-stable across mujoco minors: 3.12.0 drives the sole
-# orientation to a different solution than 3.10.0 (measured on the same clip and inputs, |pitch|
-# 0.0 mm -> 138.2 mm, final cost 0.817 -> 338.4). holosoma_retargeting declares `mujoco` unpinned,
-# so without this the image silently picks up whatever is current.
+# holosoma's retargeting SQP converges differently across mujoco minors; holosoma_retargeting leaves
+# `mujoco` unpinned, so the version the corpus was built with is fixed here.
 mujoco==3.10.0
