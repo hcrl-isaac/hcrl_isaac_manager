@@ -99,8 +99,9 @@ x-axis in line graphs / media:
 ## Asynchronous Video Logging
 
 Environments that do not require cameras during training **can** be deployed to GPU clusters without
-RT cores, e.g. A100s and H100s. These runs will not support video recording synchronously during
-training. Instead, the trainer logs rollout state to W&B and tags the run; a separate **async video
+RT cores, e.g. A100s and H100s. The LARG A40s are in the same boat until the Isaac Sim 6.0 upgrade
+(driver 595 crashes the 5.1 renderer — see [LARG rendering](scripts/larg/README.md#rendering-does-not-work-on-larg-since-2026-06-12)).
+These runs will not support video recording synchronously during training. Instead, the trainer logs rollout state to W&B and tags the run; a separate **async video
 logger** running on any local machine that meets Isaac Sim's
 [GPU requirements](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/requirements.html#system-requirements)
 then discovers the tagged run, pulls its checkpoints, renders the videos, and uploads them back to

@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Run the async video logger on a local RT-core capable box for
-# LARG A100 runs. The A100 training jobs run with --video async: they log rollout
-# states to W&B and tag the run for async video. This pulls those states,
-# renders the video locally, and uploads it back to the W&B run.
+# Render the videos of --video async LARG runs on a local box that can render (no LARG box can, see README.md)
+# and upload them back to the W&B run.
 #
 # Usage:
 #   scripts/larg/video_logger.sh <task> [wandb_project]            # one pass
@@ -12,8 +10,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/common.sh"
 
 MANAGER_DIR="${LARG_LOCAL_DIR}"
-SCRIPTS_DIR="$MANAGER_DIR/resources/IsaacLab/source/hcrl_isaaclab/scripts"
-VENV_PY="$MANAGER_DIR/resources/IsaacLab/ilab/bin/python"
+SCRIPTS_DIR="$MANAGER_DIR/resources/hcrl_isaaclab/scripts"
+VENV_PY="$MANAGER_DIR/ilab/bin/python"
 ENV_WANDB="$MANAGER_DIR/scripts/.env.wandb"
 DEFAULT_PROJECT="sturman-university-of-texas-at-austin/G1_Meta_LocoManipulation"
 

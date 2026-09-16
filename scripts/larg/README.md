@@ -60,6 +60,27 @@ Example — a 2-GPU run on physical GPUs 0,1 of `pepi`:
 LARG_NPROC=2 CUDA_VISIBLE_DEVICES=0,1 scripts/larg/train.sh pepi <task> my-run my-group 8192
 ```
 
+## Rendering does not work on LARG (since 2026-06-12)
+
+**No LARG box can render right now — not the A100s, and since 2026-06-12 not the A40s either.** Every box was
+upgraded that day from driver 590.48.01 to **595.71.05** (kernel 6.17), and Isaac Sim 5.1's RTX renderer
+segfaults on the R595 driver before any scene loads: exit 139 ~150 ms after the renderer starts, breakpad
+backtrace through `UsdManager::createHydraEngine` -> `librtx.scenedb`. Headless training is unaffected;
+only `enable_cameras` paths die (`--video on`, `play.py --video`, `video_logger.py`). The A40s rendered fine
+before the upgrade; the A100s never could (no RT cores).
+
+- Confirmed upstream: [IsaacSim discussion #648](https://github.com/isaac-sim/IsaacSim/discussions/648) —
+  595.71.05 is not validated for Isaac Sim 5.1.0, and NVIDIA's only answer is a driver change. It is not a
+  venv, cache, Vulkan-ICD, loader or GPU-selection problem (all tried; plain Vulkan enumerates and creates
+  a device on the A40s without issue), so reinstalling `ilab` does nothing.
+- **The fix is the Isaac Sim 6.0 upgrade.** 6.0 is the release NVIDIA tests on the R595 branch (Linux
+  595.58.03, see its [requirements](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/requirements.html)),
+  so moving the workspace to Isaac Sim 6.0 + Isaac Lab 3.0 restores A40 rendering with no driver change.
+  The only alternative is asking the LARG admins to pin the driver back to 590.48.01 per box.
+
+Until then, always launch LARG runs with `--video async` (the trainer only tags the run) and run the async
+video logger on a machine that renders — currently only the local desktop (driver 590.48.01).
+
 ## Other helpers
 
 - **`scripts/larg/bench.sh <host> <task> [-- extra]`** — single-GPU `num_envs` FPS sweep (`bench.py`) to pick
@@ -67,6 +88,7 @@ LARG_NPROC=2 CUDA_VISIBLE_DEVICES=0,1 scripts/larg/train.sh pepi <task> my-run m
 - **`python scripts/larg/pull_gpu_stats.py`** — print GPU utilization/memory across all LARG boxes. Use it to
   find free GPUs before launching, and be a good citizen on shared boxes.
 - **`scripts/larg/video_logger.sh [--loop [secs]] <task> [<entity>/<project>]`** — run the async video logger
-  for LARG runs on a *local* RT-core-capable box (one pass, or repeat every `secs`, default 1800). See
+  for LARG runs on a *local* box that can render — not a LARG box, see above (one pass, or repeat
+  every `secs`, default 1800). See
   [Asynchronous Video Logging](../../README.md#asynchronous-video-logging) for the full workflow and
   `video_logger.py --mode async` options.
