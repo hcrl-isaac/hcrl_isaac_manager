@@ -32,9 +32,7 @@ def resolve(name: str) -> tuple[dict[str, str], list[str]]:
     """
     resources = os.path.join(MANAGER_DIR, "resources")
     repos = ["hcrl_isaaclab", "robot_rl"]
-    repos += sorted(
-        os.path.basename(p) for p in glob.glob(os.path.join(resources, "*_tasks"))
-    )
+    repos += sorted(os.path.basename(p) for p in glob.glob(os.path.join(resources, "*_tasks")))
     paths, overridden = {}, []
     for repo in repos:
         main = os.path.join(resources, repo)
@@ -61,16 +59,12 @@ def main() -> None:
     args = ap.parse_args()
     paths, overridden = resolve(args.name)
     if args.name and not overridden:
-        raise SystemExit(
-            f"[worktree] no repo has worktrees/{args.name}; nothing to select"
-        )
+        raise SystemExit(f"[worktree] no repo has worktrees/{args.name}; nothing to select")
     pypath = ":".join(paths[r] for r in overridden)
     print(f'export WT_PYTHONPATH="{pypath}"')
     print(f'export WT_CORE="{paths["hcrl_isaaclab"]}"')
     if overridden:
-        print(
-            f'echo "[worktree] {args.name}: {", ".join(overridden)} (others from main checkouts)" >&2'
-        )
+        print(f'echo "[worktree] {args.name}: {", ".join(overridden)} (others from main checkouts)" >&2')
 
 
 if __name__ == "__main__":

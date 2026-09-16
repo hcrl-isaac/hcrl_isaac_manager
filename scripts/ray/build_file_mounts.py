@@ -25,9 +25,7 @@ CONTAINER_EXT = "/workspace/ext"
 
 
 def _is_package(path: str) -> bool:
-    return os.path.isfile(os.path.join(path, "setup.py")) or os.path.isfile(
-        os.path.join(path, "pyproject.toml")
-    )
+    return os.path.isfile(os.path.join(path, "setup.py")) or os.path.isfile(os.path.join(path, "pyproject.toml"))
 
 
 def _source_mode() -> bool:
@@ -37,9 +35,7 @@ def _source_mode() -> bool:
             for line in f:
                 stripped = line.strip()
                 if stripped.startswith("mode:"):
-                    return (
-                        stripped.split("#", 1)[0].split(":", 1)[1].strip() == "source"
-                    )
+                    return stripped.split("#", 1)[0].split(":", 1)[1].strip() == "source"
                 if stripped.startswith("source:"):  # legacy `source: bool` form
                     return stripped.split("#", 1)[0].split(":", 1)[1].strip() == "true"
     except OSError:
@@ -67,9 +63,7 @@ def main() -> None:
             wdir = os.path.join(c, "worktrees", wt)
             resolved.append((wdir if os.path.isdir(wdir) else c, os.path.basename(c)))
         if all(src == c for (src, _), c in zip(resolved, candidates)):
-            raise SystemExit(
-                f"[file_mounts] HCRL_WT={wt!r} matches no resources/<repo>/worktrees/{wt}"
-            )
+            raise SystemExit(f"[file_mounts] HCRL_WT={wt!r} matches no resources/<repo>/worktrees/{wt}")
         candidates = resolved
     else:
         candidates = [(c, os.path.basename(c)) for c in candidates]
@@ -77,9 +71,7 @@ def main() -> None:
     if _source_mode():
         candidates += [
             (c, os.path.basename(c))
-            for c in sorted(
-                glob.glob(os.path.join(resources, "IsaacLab", "source", "isaaclab*"))
-            )
+            for c in sorted(glob.glob(os.path.join(resources, "IsaacLab", "source", "isaaclab*")))
         ]
 
     seen: set[str] = set()
