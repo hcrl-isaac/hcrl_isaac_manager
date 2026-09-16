@@ -6,7 +6,7 @@ org: hcrl-isaac
 isaaclab:
   mode: pip            # default IsaacLab mode, overridable per-user: pip | source | none (don't install)
   version: "5.1.0"
-always: [hcrl_isaaclab, robot_rl]   # repos always present (core extension + RL package)
+always: [hcrl_isaaclab, robot_rl, hcrl_sim2real]   # repos always present (core extension, RL package, sim2real infra)
 refs: {}                            # per-repo ref overrides (default is main)
 
 # Selectable project task repos (each -> <name>_tasks + its transitive robot/data deps). `default`
