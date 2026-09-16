@@ -10,8 +10,8 @@ libigl  # holosoma_retargeting
 matplotlib  # holosoma_retargeting
 mujoco  # holosoma_retargeting
 networkx>=3.3  # hcrl_isaaclab
-numpy>=1.16.4  # holosoma_retargeting, robot_rl
-numpy>=1.26,<2  # holosoma_retargeting, robot_rl
+numpy>=1.16.4  # robot_rl
+numpy>=1.26,<2  # holosoma_retargeting
 onnx  # robot_rl
 onnxruntime  # hcrl_isaaclab
 onnxscript>=0.5.4  # robot_rl

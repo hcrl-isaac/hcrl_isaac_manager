@@ -108,9 +108,9 @@ docker-deps:
     {{venv_py}} scripts/docker/collect_workspace_deps.py
 
 # Docker interface (scripts/docker/): build the shared Isaac image, reused by Ray + the HPC .sif.
-# Deps are regenerated first so a repo's new dependency cannot be missing from the image.
+# Refuses to build on a stale committed dependency list (regenerate with `just docker-deps`).
 docker *args:
-    @{{venv_py}} scripts/docker/collect_workspace_deps.py
+    @{{venv_py}} scripts/docker/collect_workspace_deps.py --check || { echo "[docker] run 'just docker-deps' and commit the result" >&2; exit 1; }
     if ! command -v docker >/dev/null 2>&1; then \
         curl -fsSL https://get.docker.com -o get-docker.sh; \
         sudo sh get-docker.sh; \
@@ -180,7 +180,7 @@ run script *args:
     # WT=<name> selects a worktree set: each repo with resources/<repo>/worktrees/<name> overrides the
     # main checkout (via PYTHONPATH, which precedes the editable installs); the rest fall back.
     set -euo pipefail
-    eval "$({{venv_py}} scripts/worktree_env.py "${WT:-}")"
+    wt_env="$({{venv_py}} scripts/worktree_env.py "${WT:-}")" || exit; eval "$wt_env"
     # a worktree checkout's parent is worktrees/, not resources/ -- pin asset resolution explicitly
     export HCRL_RESOURCES_DIR="{{justfile_directory()}}/resources"
     export PYTHONPATH="${WT_PYTHONPATH:+$WT_PYTHONPATH:}${PYTHONPATH:-}"
