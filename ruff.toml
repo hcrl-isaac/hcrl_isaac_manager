@@ -1,0 +1,55 @@
+line-length = 120
+target-version = "py311"
+preview = true
+extend-exclude = ["resources", "ilab", ".claude"]
+
+[lint]
+select = [
+    # pycodestyle
+    "E", "W",
+    # pyflakes
+    "F",
+    # pyupgrade
+    "UP",
+    # pep8-naming
+    "N",
+    # flake8-bugbear
+    "B",
+    # flake8-simplify
+    "SIM",
+    # flake8-tidy-imports
+    "TID",
+    # flake8-annotations
+    "ANN",
+    # isort
+    "I",
+    # perflint
+    "PERF",
+    # ruff
+    "RUF",
+]
+ignore = ["B006",
+          "B007",
+          "B028",
+          "ANN401",
+          "D100",
+          "D203",
+          "D213",
+          "D413",
+          "D103",
+          "D104",
+          "N801",
+          "N802",
+          "N803",
+          "N806",
+          "N813",
+          "E741",
+          "RUF012",
+          "E402",
+          "E501",
+          "B008",
+]
+per-file-ignores = {"*/__init__.py" = ["F401", "F403"], "tests/*" = ["ANN"]}
+
+[lint.isort]
+extra-standard-library = ["numpy", "torch"]

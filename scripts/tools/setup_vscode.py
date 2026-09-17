@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 
 MANAGER_DIR = Path(__file__).resolve().parents[2]
@@ -21,12 +20,12 @@ MANAGER_DIR = Path(__file__).resolve().parents[2]
 def main() -> None:
     os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
 
-    from isaacsim import SimulationApp  # noqa: PLC0415 -- import after the EULA env is set
+    from isaacsim import SimulationApp  # import after the EULA env is set
 
     # Boot Kit so the extension layout is materialized, then glob the ext dirs Pylance needs (Kit loads
     # most extensions via its own finder, not sys.path, so a sys.path snapshot would miss them).
     app = SimulationApp({"headless": True})
-    import isaacsim  # noqa: PLC0415
+    import isaacsim
 
     isaacsim_path = Path(isaacsim.__file__).resolve().parent
     kit_path = isaacsim_path / "kit"
@@ -55,12 +54,24 @@ def main() -> None:
         # Index all of resources/ (gitman subrepos, gitignored by the manager) in Ctrl-P / search.
         "search.useIgnoreFiles": False,
         "search.exclude": {
-            "**/.git": True, "**/ilab": True, "**/.venv": True, "**/__pycache__": True, "**/*.pyc": True,
-            "**/logs": True, "**/wandb": True, "**/outputs": True, "**/.pytest_cache": True,
-            "**/*.sif": True, "**/scripts/cluster/exports": True,
+            "**/.git": True,
+            "**/ilab": True,
+            "**/.venv": True,
+            "**/__pycache__": True,
+            "**/*.pyc": True,
+            "**/logs": True,
+            "**/wandb": True,
+            "**/outputs": True,
+            "**/.pytest_cache": True,
+            "**/*.sif": True,
+            "**/scripts/cluster/exports": True,
         },
         "files.watcherExclude": {
-            "**/ilab/**": True, "**/.venv/**": True, "**/.git/**": True, "**/logs/**": True, "**/wandb/**": True,
+            "**/ilab/**": True,
+            "**/.venv/**": True,
+            "**/.git/**": True,
+            "**/logs/**": True,
+            "**/wandb/**": True,
         },
         # Detect each gitman subrepo under resources/ (depth 2) so SCM shows per-subrepo git status.
         "git.autoRepositoryDetection": True,

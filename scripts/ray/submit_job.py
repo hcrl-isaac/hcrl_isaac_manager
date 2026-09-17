@@ -65,10 +65,7 @@ from ray import job_submission
 
 
 def read_cluster_spec(fn: str | None = None) -> list[dict]:
-    if fn is None:
-        cluster_spec_path = os.path.expanduser("~/.cluster_config")
-    else:
-        cluster_spec_path = os.path.expanduser(fn)
+    cluster_spec_path = os.path.expanduser("~/.cluster_config" if fn is None else fn)
 
     if not os.path.exists(cluster_spec_path):
         raise FileNotFoundError(f"Cluster spec file not found at {cluster_spec_path}")
@@ -99,7 +96,7 @@ def submit_job(cluster: dict, job_command: str, runtime_env: dict, metadata: dic
             dir_contents = os.listdir(runtime_env["working_dir"])
             print(f"[INFO] Directory contents: {dir_contents}")
         except Exception as e:
-            print(f"[INFO] Failed to list directory contents: {str(e)}")
+            print(f"[INFO] Failed to list directory contents: {e!s}")
         entrypoint = f'{runtime_env["py_executable"]} {job_command} --file-mounts "{other_data["file_mounts"]}" --init-commands "{other_data.get("init_commands", "[]")}" --sub-jobs {other_data["python_script"]}'
         print(f"[INFO] Attempting entrypoint {entrypoint} in cluster {cluster}")
         job_id = client.submit_job(entrypoint=entrypoint, runtime_env=runtime_env, metadata=metadata)

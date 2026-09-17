@@ -137,8 +137,7 @@ def resolve(manifest: dict) -> dict[str, dict]:
             continue
         resolved[name] = {"git": url, "ref": ref}
         # recurse into this repo's declared deps (if it is already checked out)
-        for sub in _read_deps(RESOURCES / name):
-            queue.append(sub)
+        queue.extend(_read_deps(RESOURCES / name))
     return resolved
 
 
@@ -154,18 +153,28 @@ def to_gitman(resolved: dict[str, dict], manifest: dict) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--manifest", default=str(MANAGER_DIR / "workspace.yaml"),
-                    help="Per-user selection overlaid on workspace.defaults.yaml (may be absent).")
+    ap.add_argument(
+        "--manifest",
+        default=str(MANAGER_DIR / "workspace.yaml"),
+        help="Per-user selection overlaid on workspace.defaults.yaml (may be absent).",
+    )
     ap.add_argument("--update", action="store_true", help="Run `gitman update --skip-changes` after writing.")
-    ap.add_argument("--force", action="store_true",
-                    help="Merge working changes in dirty repos without prompting (stash -> update -> stash pop).")
-    ap.add_argument("--skip-changes", action="store_true",
-                    help="Leave repos with working changes untouched (no prompt).")
-    ap.add_argument("--checkout-pin", action="store_true",
-                    help="End with every repo checked out at its gitman-pinned rev instead of restoring the "
-                         "branch you were on. Working changes are stashed (no prompt) so the checkout can "
-                         "move; the stash is popped only if your branch already matches the pin, otherwise "
-                         "it is kept and a recovery command is printed.")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="Merge working changes in dirty repos without prompting (stash -> update -> stash pop).",
+    )
+    ap.add_argument(
+        "--skip-changes", action="store_true", help="Leave repos with working changes untouched (no prompt)."
+    )
+    ap.add_argument(
+        "--checkout-pin",
+        action="store_true",
+        help="End with every repo checked out at its gitman-pinned rev instead of restoring the "
+        "branch you were on. Working changes are stashed (no prompt) so the checkout can "
+        "move; the stash is popped only if your branch already matches the pin, otherwise "
+        "it is kept and a recovery command is printed.",
+    )
     args = ap.parse_args()
     if args.force and args.skip_changes:
         ap.error("--force and --skip-changes are mutually exclusive")
@@ -210,7 +219,9 @@ def main() -> None:
                 continue
             dirty = subprocess.run(
                 ["git", "status", "--porcelain", "--untracked-files=no"],
-                cwd=repo, capture_output=True, text=True,
+                cwd=repo,
+                capture_output=True,
+                text=True,
             ).stdout.strip()
             if not dirty:
                 continue

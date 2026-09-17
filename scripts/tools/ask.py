@@ -11,7 +11,6 @@ Each falls back to plain stdin (or a safe default) when there is no TTY, so CI /
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 

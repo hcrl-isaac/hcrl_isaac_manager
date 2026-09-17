@@ -52,7 +52,7 @@ def main() -> None:
         if "--" not in rest:
             sys.exit("usage: ui.py spin <label> -- <cmd>...")
         sep = rest.index("--")
-        sys.exit(_spin(" ".join(rest[:sep]), rest[sep + 1:]))
+        sys.exit(_spin(" ".join(rest[:sep]), rest[sep + 1 :]))
     else:
         sys.exit(f"[ui] unknown subcommand {cmd!r}")
 

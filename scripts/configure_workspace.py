@@ -78,7 +78,9 @@ def _prompt(defaults: dict, current: dict) -> dict:
         )
         for p in catalog
     ]
-    projects = questionary.checkbox("Select projects to install (space to toggle, enter to confirm):", choices=choices).ask()
+    projects = questionary.checkbox(
+        "Select projects to install (space to toggle, enter to confirm):", choices=choices
+    ).ask()
     if projects is None:  # Ctrl-C / EOF
         sys.exit("[configure] cancelled")
 
@@ -99,8 +101,11 @@ def _prompt(defaults: dict, current: dict) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--interactive", action="store_true",
-                    help="On a TTY, (re)open the picker pre-filled with the current selection.")
+    ap.add_argument(
+        "--interactive",
+        action="store_true",
+        help="On a TTY, (re)open the picker pre-filled with the current selection.",
+    )
     args = ap.parse_args()
 
     defaults = _load(DEFAULTS)
