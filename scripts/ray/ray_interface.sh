@@ -43,6 +43,40 @@ sync_resources() {
     ( set -a; . "$mgr/scripts/.env.wandb"; set +a; python "$up" ) || echo "[WARN] resource sync failed; submitting with existing artifacts."
 }
 
+# Render the job configs from their templates for the CURRENT worktree selection. WT=<name> (or HCRL_WT)
+# routes ext_dir + file mounts through resources/<repo>/worktrees/<name> wherever one exists.
+render_job_configs() {  # render_job_configs <ut_eid>
+    local ut_eid="$1" manager_dir venv_py
+    manager_dir="$( cd "$SCRIPT_DIR/../.." && pwd )"
+    venv_py="$manager_dir/ilab/bin/python"
+    [ -x "$venv_py" ] || venv_py="python3"
+    export HCRL_WT="${HCRL_WT:-${WT:-}}"
+    export WORKSPACE_FILE_MOUNTS="$("$venv_py" "$SCRIPT_DIR/build_file_mounts.py")"
+    WORKSPACE_EXT_DIR="$manager_dir/resources/hcrl_isaaclab/scripts"
+    if [ -n "$HCRL_WT" ] && [ -d "$manager_dir/resources/hcrl_isaaclab/worktrees/$HCRL_WT" ]; then
+        WORKSPACE_EXT_DIR="$manager_dir/resources/hcrl_isaaclab/worktrees/$HCRL_WT/scripts"
+    fi
+    [ -n "$HCRL_WT" ] && echo "[INFO] Worktree set '$HCRL_WT': ext_dir + mounts via resources/<repo>/worktrees/$HCRL_WT" >&2
+    export WORKSPACE_EXT_DIR
+    local cfg
+    for cfg in job_config bench_job_config job_config_distributed; do
+        UT_EID="$ut_eid" MANAGER_DIR="$manager_dir" \
+            envsubst '$UT_EID $MANAGER_DIR $WORKSPACE_FILE_MOUNTS $WORKSPACE_EXT_DIR' \
+            < "$SCRIPT_DIR/tools/$cfg.template.yaml" > "$SCRIPT_DIR/$cfg.yaml"
+    done
+}
+
+# Re-render the job configs before a submit so the mounts match this job's WT, not the one setup saw.
+prepare_submit() {
+    if [ ! -f "$SCRIPT_DIR/.env.ray" ]; then
+        echo "[ERROR] $SCRIPT_DIR/.env.ray not found. Run 'just ray setup' first." >&2
+        exit 1
+    fi
+    local ut_eid
+    ut_eid="$( . "$SCRIPT_DIR/.env.ray"; echo "$UT_EID" )"
+    render_job_configs "$ut_eid"
+}
+
 #==
 # Main
 #==
@@ -91,18 +125,16 @@ fi
 command=$1
 shift
 
-# Any subcommand that submits work to the cluster first syncs managed resources to W&B, so the job
-# fetches current asset versions. Add new job-submitting subcommands to this list.
+# Any subcommand that submits work first re-renders the job configs (current WT) and syncs managed
+# resources to W&B. Add new job-submitting subcommands to this list.
 case "$command" in
-    job|job_distributed|bench) sync_resources ;;
+    job|job_distributed|bench) prepare_submit; sync_resources ;;
 esac
 
 case $command in
     setup)
         # Generate the Ray config files (.env.ray + job configs) from the templates.
         MANAGER_DIR="$( cd "$SCRIPT_DIR/../.." && pwd )"
-        VENV_PY="$MANAGER_DIR/ilab/bin/python"
-        [ -x "$VENV_PY" ] || VENV_PY="python3"
         if [ ! -f "$MANAGER_DIR/scripts/.env.wandb" ]; then
             echo "[ERROR] $MANAGER_DIR/scripts/.env.wandb not found. Run 'just deps' first." >&2
             exit 1
@@ -110,12 +142,7 @@ case $command in
         read -p "UT EID: " ut_eid
         source "$MANAGER_DIR/scripts/.env.wandb"
         UT_EID=$ut_eid envsubst < "$SCRIPT_DIR/tools/.env.ray.template" > "$SCRIPT_DIR/.env.ray"
-        export WORKSPACE_FILE_MOUNTS="$("$VENV_PY" "$SCRIPT_DIR/build_file_mounts.py")"
-        for cfg in job_config bench_job_config job_config_distributed; do
-            UT_EID=$ut_eid MANAGER_DIR="$MANAGER_DIR" \
-                envsubst '$UT_EID $MANAGER_DIR $WORKSPACE_FILE_MOUNTS' \
-                < "$SCRIPT_DIR/tools/$cfg.template.yaml" > "$SCRIPT_DIR/$cfg.yaml"
-        done
+        render_job_configs "$ut_eid"
         echo "[INFO] Created Ray config files in $SCRIPT_DIR (.env.ray + job_config/bench_job_config/job_config_distributed .yaml)."
         ;;
     push)

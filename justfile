@@ -66,18 +66,23 @@ setup:
     fi; \
     uv pip install --python {{venv_py}} rsl_rl-lib; \
     {{venv_py}} scripts/tools/ui.py section "Workspace packages"; \
-    for d in resources/robot_rl resources/*_tasks resources/*_robots; do \
+    for d in resources/robot_rl resources/*_tasks resources/*_robots resources/holosoma/src/holosoma_retargeting; do \
         if [ -d "$d" ] && { [ -f "$d/setup.py" ] || [ -f "$d/pyproject.toml" ]; }; then \
             uv pip install --python {{venv_py}} --torch-backend cu128 --extra-index-url https://pypi.nvidia.com -e "$d"; \
         elif [ -d "$d" ]; then echo "[setup] skipping non-package data repo: $d"; fi; \
     done; \
     just vscode
 
-# Generate .vscode/settings.json by booting headless Isaac Sim to snapshot the Kit extension paths.
-vscode:
-    @OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} scripts/tools/ui.py spin \
-        "Booting headless Isaac Sim to snapshot VS Code extension paths (~1 min)" \
-        -- {{venv_py}} scripts/tools/setup_vscode.py || echo "[vscode][WARN] settings generation failed"
+# Generate .vscode/settings.json. Boots headless Isaac Sim for the Kit paths; `just vscode no-kit`
+# reuses the cached ones and refreshes only the workspace package paths (instant, after a `just setup`).
+vscode *args:
+    @if [ "{{args}}" = "no-kit" ] || [ "{{args}}" = "--no-kit" ]; then \
+        {{venv_py}} scripts/tools/setup_vscode.py --no-kit; \
+    else \
+        OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} scripts/tools/ui.py spin \
+            "Booting headless Isaac Sim to snapshot VS Code extension paths (~1 min)" \
+            -- {{venv_py}} scripts/tools/setup_vscode.py || echo "[vscode][WARN] settings generation failed"; \
+    fi
 
 # Remove the ilab venv, generated workspace config (workspace.yaml/gitman.yaml), and shell alias (prompts first).
 clean:
@@ -98,8 +103,14 @@ clean:
     fi; \
     echo "[INFO] Successfully cleaned up environment."
 
+# Regenerate the image's workspace-dependency list from each repo's pyproject/setup.py.
+docker-deps:
+    {{venv_py}} scripts/docker/collect_workspace_deps.py
+
 # Docker interface (scripts/docker/): build the shared Isaac image, reused by Ray + the HPC .sif.
+# Refuses to build on a stale committed dependency list (regenerate with `just docker-deps`).
 docker *args:
+    @{{venv_py}} scripts/docker/collect_workspace_deps.py --check || { echo "[docker] run 'just docker-deps' and commit the result" >&2; exit 1; }
     if ! command -v docker >/dev/null 2>&1; then \
         curl -fsSL https://get.docker.com -o get-docker.sh; \
         sudo sh get-docker.sh; \
@@ -165,7 +176,15 @@ new name:
 # Run any hcrl_isaaclab/scripts/<script>.py from the manager dir with the ilab venv, e.g.
 #   just run train --task <id> --num_envs 4096   |   just run play --task <id> --checkpoint <path>
 run script *args:
-    OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} resources/hcrl_isaaclab/scripts/{{script}}.py {{args}}
+    #!/usr/bin/env bash
+    # WT=<name> selects a worktree set: each repo with resources/<repo>/worktrees/<name> overrides the
+    # main checkout (via PYTHONPATH, which precedes the editable installs); the rest fall back.
+    set -euo pipefail
+    wt_env="$({{venv_py}} scripts/worktree_env.py "${WT:-}")" || exit; eval "$wt_env"
+    # a worktree checkout's parent is worktrees/, not resources/ -- pin asset resolution explicitly
+    export HCRL_RESOURCES_DIR="{{justfile_directory()}}/resources"
+    export PYTHONPATH="${WT_PYTHONPATH:+$WT_PYTHONPATH:}${PYTHONPATH:-}"
+    OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} "$WT_CORE/scripts/{{script}}.py" {{args}}
 
 # Run a workspace repo's CPU smoke tests (task registration + env-cfg build; skips `-m gpu`). Launches
 # Isaac Sim, so it needs the ilab venv + a GPU. e.g. `just test ssti_tasks` (default: the core repo).

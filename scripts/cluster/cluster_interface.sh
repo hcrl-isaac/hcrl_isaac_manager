@@ -70,6 +70,7 @@ cmd_job() {
     rsync -rvh -e "ssh ${SSH_OPTS[*]}" --rsync-path="mkdir -p $CLUSTER_ISAACLAB_DIR && rsync" \
         --include="resources/IsaacLab/source/*/.git/***" --exclude="*.git*" \
         --exclude="ilab/" --exclude="wandb/" --exclude="logs/" --exclude=".vscode/" --exclude="__pycache__" \
+        --exclude="artifacts/" --exclude="**/worktrees/" \
         --exclude="scripts/cluster/exports/" --exclude="*.sif" \
         "$SCRIPT_DIR/../.." "$CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR"
     # Stage THIS cluster's env over the synced workspace-level copy -- run_singularity.sh on the compute
@@ -107,7 +108,7 @@ case "$cmd" in
         echo "  push/repush   rsync the built .sif to the cluster (reuses the SSH master; no 2FA)"
         echo "  add           create a cluster config (scripts/cluster/config/<name>)"
         echo "  job [args]    rsync the workspace + submit a batch job"
-        echo "  develop ...   manage a persistent dev node (start/status/attach/exec/sync/stop)"
+        echo "  develop ...   manage a persistent dev node (start/status/attach/exec/sync/kill/stop)"
         ;;
     *) echo "[ERROR] unknown command '$cmd' (try: help)" >&2; exit 1 ;;
 esac

@@ -19,9 +19,13 @@ from __future__ import annotations
 
 import glob
 import os
+import sys
 
 MANAGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CONTAINER_EXT = "/workspace/ext"
+
+sys.path.insert(0, os.path.join(MANAGER_DIR, "scripts"))
+from worktree_env import workspace_repos
 
 
 def _is_package(path: str) -> bool:
@@ -45,21 +49,33 @@ def _source_mode() -> bool:
 
 def main() -> None:
     resources = os.path.join(MANAGER_DIR, "resources")
-    # Deterministic order: core, RL package, then task/robot packages.
-    candidates = [
-        os.path.join(resources, "hcrl_isaaclab"),
-        os.path.join(resources, "robot_rl"),
-        *sorted(glob.glob(os.path.join(resources, "*_tasks"))),
-        *sorted(glob.glob(os.path.join(resources, "*_robots"))),
-    ]
+    # the same repo list `just run WT=` selects, so a Ray job ships the same worktree set
+    candidates = [os.path.join(resources, repo) for repo in workspace_repos(resources)]
+    # HCRL_WT=<name>: ship the named worktree instead of the main checkout for any repo that has one,
+    # so a Ray job carries exactly the code line it is meant to run and nothing else.
+    wt = os.environ.get("HCRL_WT", "")
+    if wt:
+        # (source path, repo name): the container path and dedup key must stay the REPO name, or every
+        # repo's worktree collapses onto the shared worktree-set basename.
+        resolved = []
+        for c in candidates:
+            wdir = os.path.join(c, "worktrees", wt)
+            resolved.append((wdir if os.path.isdir(wdir) else c, os.path.basename(c)))
+        if all(src == c for (src, _), c in zip(resolved, candidates, strict=False)):
+            raise SystemExit(f"[file_mounts] HCRL_WT={wt!r} matches no resources/<repo>/worktrees/{wt}")
+        candidates = resolved
+    else:
+        candidates = [(c, os.path.basename(c)) for c in candidates]
     # Source-mode overlay: editable IsaacLab source packages override the baked pip isaaclab.
     if _source_mode():
-        candidates += sorted(glob.glob(os.path.join(resources, "IsaacLab", "source", "isaaclab*")))
+        candidates += [
+            (c, os.path.basename(c))
+            for c in sorted(glob.glob(os.path.join(resources, "IsaacLab", "source", "isaaclab*")))
+        ]
 
     seen: set[str] = set()
     lines = ["{"]
-    for path in candidates:
-        name = os.path.basename(path)
+    for path, name in candidates:
         if name in seen or not os.path.isdir(path) or not _is_package(path):
             continue
         seen.add(name)

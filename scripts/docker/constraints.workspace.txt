@@ -1,0 +1,18 @@
+# Cross-cutting pins that must hold no matter what the workspace repos declare. These are the ones
+# where a loose requirement silently breaks the image rather than failing loudly.
+
+# Isaac Lab and Isaac Sim require numpy<2; an unpinned transitive dep (notably cvxpy>=1.6) pulls 2.x.
+numpy<2
+# cvxpy>=1.6 ships only numpy>=2 wheels, which would drag numpy across the line above.
+cvxpy<1.6
+# isaacsim-core pins this; newer cvxpy releases try to replace it.
+osqp==0.6.7.post3
+
+# Pin to the base image's +cu128 builds (PEP 440: 2.7.0+cu128 satisfies ==2.7.0), so a transitive
+# torch requirement (smplx) is already met and a dep demanding a newer torch fails the build instead.
+torch==2.7.0
+torchvision==0.22.0
+
+# holosoma's retargeting SQP converges differently across mujoco minors; holosoma_retargeting leaves
+# `mujoco` unpinned, so the version the corpus was built with is fixed here.
+mujoco==3.10.0
