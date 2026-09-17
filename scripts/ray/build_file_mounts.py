@@ -25,7 +25,7 @@ MANAGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 CONTAINER_EXT = "/workspace/ext"
 
 sys.path.insert(0, os.path.join(MANAGER_DIR, "scripts"))
-from worktree_env import workspace_repos  # noqa: E402
+from worktree_env import workspace_repos
 
 
 def _is_package(path: str) -> bool:
@@ -61,7 +61,7 @@ def main() -> None:
         for c in candidates:
             wdir = os.path.join(c, "worktrees", wt)
             resolved.append((wdir if os.path.isdir(wdir) else c, os.path.basename(c)))
-        if all(src == c for (src, _), c in zip(resolved, candidates)):
+        if all(src == c for (src, _), c in zip(resolved, candidates, strict=False)):
             raise SystemExit(f"[file_mounts] HCRL_WT={wt!r} matches no resources/<repo>/worktrees/{wt}")
         candidates = resolved
     else:
