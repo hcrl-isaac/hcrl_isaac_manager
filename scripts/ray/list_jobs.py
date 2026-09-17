@@ -1,10 +1,10 @@
-import sys
 import argparse
+import sys
 from datetime import datetime
 
+from ray.job_submission import JobDetails, JobStatus, JobSubmissionClient
 from rich.console import Console
 from rich.table import Table
-from ray.job_submission import JobSubmissionClient, JobDetails, JobStatus
 
 parser = argparse.ArgumentParser(description="List jobs on the Ray cluster")
 parser.add_argument("--address", type=str, default="http://100.95.64.90:8265", help="Address to the cluster head.")

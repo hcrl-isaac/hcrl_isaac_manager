@@ -1,5 +1,4 @@
 import subprocess
-import sys
 
 # --- Configuration ---
 # List your servers here (or load from a file)
@@ -19,7 +18,7 @@ SERVERS = [
 NVIDIA_CMD = "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits"
 
 
-def get_gpu_stats(server):
+def get_gpu_stats(server: str) -> str:
     try:
         # Run SSH command with a timeout
         ssh = subprocess.run(
@@ -34,10 +33,10 @@ def get_gpu_stats(server):
     except subprocess.TimeoutExpired:
         return "Error: Connection Timed Out"
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {e!s}"
 
 
-def main():
+def main() -> None:
     print(f"{'SERVER':<20} | {'ID':<3} | {'GPU NAME':<20} | {'UTIL':<5} | {'MEM USED':<10}")
     print("-" * 75)
 

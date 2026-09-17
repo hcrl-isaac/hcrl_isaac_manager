@@ -176,8 +176,10 @@ def main() -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
     print(f"[new] scaffolded {dest} ({name}/ namespace).")
-    print(f"[new] next: git init it, push to {args.org}/{name}_tasks, add '{name}' to "
-          "workspace.defaults.yaml available_projects, then pick it in `just setup`.")
+    print(
+        f"[new] next: git init it, push to {args.org}/{name}_tasks, add '{name}' to "
+        "workspace.defaults.yaml available_projects, then pick it in `just setup`."
+    )
 
 
 if __name__ == "__main__":

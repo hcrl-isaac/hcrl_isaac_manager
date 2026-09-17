@@ -26,3 +26,10 @@ dependencies = [
 # The manager itself is not an importable package (just scripts); don't try to build/install it.
 [tool.uv]
 package = false
+
+[tool.codespell]
+# install-git-lfs.sh is packagecloud's vendored installer; leave its text alone.
+skip = '*.usd,*.svg,*.png,*.lock,./resources,./ilab,./.claude,*/install-git-lfs.sh'
+quiet-level = 0
+# the word list should always have words in lower case
+ignore-words-list = "larg,ans"

@@ -1,0 +1,14 @@
+# Gitman-cloned repos, the venv and local working docs are not this repo's code.
+exclude: ^(resources|ilab|\.claude)/
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.0
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.2.6
+    hooks:
+      - id: codespell
+        additional_dependencies:
+        - tomli
