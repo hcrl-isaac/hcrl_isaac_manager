@@ -121,6 +121,22 @@ ensure_master() {
 # Run a command on the cluster login node over the master (no 2FA).
 on_login() { ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "$@"; }
 
+# Re-read the tracked job's state from Slurm into the state file. The watcher is the only other writer, so
+# once it dies the file keeps its last value; squeue drops ended jobs, so fall back to sacct for them.
+refresh_job_state() {
+    local jobid row state; jobid="$(state_get JOBID)"
+    [ -n "$jobid" ] && master_alive || return 0
+    # squeue exits non-zero once a job has left the queue -- the case this exists for
+    row="$(on_login "squeue -j $jobid -h -o '%T %N' 2>/dev/null" | tail -n1 || true)"
+    state="$(echo "$row" | awk '{print $1}')"
+    if [ -n "$state" ]; then
+        [ "$state" = "RUNNING" ] && state_set NODE "$(echo "$row" | awk '{print $2}')"
+    else
+        state="$(on_login "sacct -j $jobid -X -n -o State%30 2>/dev/null" | awk 'NF{print $1; exit}' || true)"
+    fi
+    [ -n "$state" ] && state_set JOB_STATE "$state"
+}
+
 # node_exec.sh must live inside the synced workspace (so it rides the rsync to the cluster and can
 # source the staged scripts/cluster/.env.cluster). Copy it in from our source-of-truth before each sync.
 stage_node_exec() {
@@ -269,6 +285,7 @@ cmd_watch_loop() {  # internal: poll squeue until RUNNING/terminal, record node
 
 cmd_status() {
     local jobid; jobid="$(state_get JOBID)"
+    refresh_job_state
     echo "-- cluster_dev status --"
     echo "  job id     : ${jobid:-<none>}"
     echo "  job state  : $(state_get JOB_STATE)"
@@ -299,6 +316,7 @@ require_running() {
         log "[override] targeting job ${DD_JOBID} on ${DD_NODE} via srun --overlap"
         return
     fi
+    refresh_job_state
     DD_JOBID="$(state_get JOBID)"; DD_NODE="$(state_get NODE)"
     [ "$(state_get JOB_STATE)" = "RUNNING" ] && [ -n "$DD_JOBID" ] || {
         err "No running job yet (state=$(state_get JOB_STATE)). Run './cluster_dev.sh status'."; exit 1; }
