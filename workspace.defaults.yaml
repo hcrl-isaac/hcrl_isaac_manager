@@ -16,5 +16,5 @@ available_projects:
     description: SSTI traversal + MCP crab tasks
     default: true
   - name: hhlm
-    description: HHLM (hierarchical humanoid loco-manipulation) FB-CPR humanoid tasks
+    description: Hierarchical humanoid loco-manipulation tasks
     default: true
