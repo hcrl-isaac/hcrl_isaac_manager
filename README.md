@@ -55,7 +55,7 @@ Scaffold a new project repo with `just new <name>` (registers under the `<name>/
 **Local:**
 ```bash
 ilab                                                   # activate the ilab venv + cd to the manager dir
-just run train --task <task-id> [--source <ssti|umrl>] # run any hcrl_isaaclab script from here
+just run train --task <task-id> [--source <ssti|hhlm>] # run any hcrl_isaaclab script from here
 ```
 `just run <script> <args>` runs any `hcrl_isaaclab/scripts/<script>.py` from the manager dir (no need
 to cd into the extension): `just run play --task <id> --checkpoint <path>`, `just run video_logger …`,
