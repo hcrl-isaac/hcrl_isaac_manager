@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 import yaml
+from resolve_workspace import RENAMED_PROJECTS
 
 MANAGER_DIR = Path(__file__).resolve().parent.parent
 DEFAULTS = MANAGER_DIR / "workspace.defaults.yaml"
@@ -69,7 +70,8 @@ def _prompt(defaults: dict, current: dict) -> dict:
     import questionary
 
     catalog = defaults.get("available_projects", [])
-    cur_projects = set(current.get("projects", [p["name"] for p in catalog if p.get("default")]))
+    saved = current.get("projects", [p["name"] for p in catalog if p.get("default")])
+    cur_projects = {RENAMED_PROJECTS.get(name, name) for name in saved}
     choices = [
         questionary.Choice(
             title=f"{p['name']:<8} {p.get('description', '')}".rstrip(),

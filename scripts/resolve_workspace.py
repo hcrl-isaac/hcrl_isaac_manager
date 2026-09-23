@@ -53,8 +53,28 @@ def _isaaclab_mode(isaaclab: dict) -> str:
     return "source" if isaaclab.get("source") else "pip"
 
 
-# renamed project -> current name, so existing per-user selections keep resolving
-LEGACY_PROJECTS: dict[str, str] = {"umrl": "hhlm"}
+# renamed project -> current name, named in the error when a per-user selection still uses the old one
+RENAMED_PROJECTS: dict[str, str] = {"umrl": "hhlm"}
+
+
+def _check_projects(projects: list[str], known: set[str], overrides_path: Path) -> None:
+    """Exit with a fix-it message if the selection names a project missing from the catalog."""
+    errors = []
+    for name in projects:
+        if name in known:
+            continue
+        if name in RENAMED_PROJECTS:
+            new = RENAMED_PROJECTS[name]
+            errors.append(
+                f"project {name!r} was renamed to {new!r} (repo {name}_tasks -> {new}_tasks, task ids {name}/ -> {new}/)"
+            )
+        else:
+            errors.append(f"unknown project {name!r} (available: {', '.join(sorted(known))})")
+    if errors:
+        sys.exit(
+            "[resolve] " + "\n[resolve] ".join(errors) + f"\n[resolve] Update `projects` in {overrides_path}, "
+            "or re-run `just setup` to pick again."
+        )
 
 
 def load_manifest(overrides_path: Path) -> dict:
@@ -75,7 +95,7 @@ def load_manifest(overrides_path: Path) -> dict:
     projects = overrides.get("projects")
     if projects is None:  # no per-user selection -> catalog defaults
         projects = [p["name"] for p in catalog if p.get("default")]
-    projects = [LEGACY_PROJECTS.get(p, p) for p in projects]
+    _check_projects(projects, {p["name"] for p in catalog}, overrides_path)
 
     isaaclab = {**defaults.get("isaaclab", {}), **overrides.get("isaaclab", {})}
     # Mode precedence: an explicit per-user choice (mode, or the legacy source bool) wins over the default.
