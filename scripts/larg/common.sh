@@ -13,6 +13,15 @@ LARG_DOMAIN="${LARG_DOMAIN:-cs.utexas.edu}"
 # Remote path (relative to remote $HOME) where the manager tree is synced.
 LARG_REMOTE_DIR="${LARG_REMOTE_DIR:-hcrl_isaac_manager}"
 
+# Absolute LARG_REMOTE_DIR is honoured as-is; a bare name stays relative to the remote $HOME. Point it
+# at /var/local/$USER to bypass the shared home's quota, at the cost of one sync per box.
+larg_remote_path() {
+  case "$LARG_REMOTE_DIR" in
+    /*) printf '%s' "$LARG_REMOTE_DIR" ;;
+    *)  printf '$HOME/%s' "$LARG_REMOTE_DIR" ;;
+  esac
+}
+
 # Local manager root (this repo's parent-of-scripts).
 LARG_LOCAL_DIR="${LARG_LOCAL_DIR:-$HOME/hcrl_isaac_manager}"
 

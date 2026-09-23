@@ -149,7 +149,8 @@ def parse_job_config(cfg_file: str) -> tuple[dict, dict, dict]:
         py_modules = None
         file_mounts = "{}"
     else:
-        file_mounts = json.dumps({k.split("/")[-1]: v for k, v in job_config["file_mounts"].items()})
+        # keyed by the container-side repo name: worktrees of different repos share a local basename
+        file_mounts = json.dumps({v.rstrip("/").split("/")[-1]: v for v in job_config["file_mounts"].values()})
     init_commands = json.dumps(job_config.get("init_commands", []))
     runtime_env = {
         "working_dir": working_dir,

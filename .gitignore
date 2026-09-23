@@ -33,3 +33,5 @@ scripts/cluster/exports/
 # Claude working docs (local, not shared)
 /CLAUDE.md
 /.claude/
+# per-user, like .env.cluster: names the cluster tree's branch copies to protect from the develop sync
+scripts/cluster/config/*/.rsync-exclude

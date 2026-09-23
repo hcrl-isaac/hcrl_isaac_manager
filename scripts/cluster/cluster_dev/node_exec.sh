@@ -38,7 +38,11 @@ stage_once() {
     mkdir -p "$STAGE"
     echo "[node_exec] staging container + caches into ${STAGE} (sif new/updated)..."
     cp -rn "$CLUSTER_ISAAC_SIM_CACHE_DIR" "$STAGE/" 2>/dev/null || true
-    cp "$src" "$SIF" || { echo "[node_exec] could not stage ${src}"; exit 1; }
+    # temp + rename: a plain cp truncates the image under running containers, which loop-mount $SIF
+    cp "$src" "${SIF}.staging.$$" || { rm -f "${SIF}.staging.$$"; echo "[node_exec] could not stage ${src}"; exit 1; }
+    # keep the source mtime so the -nt freshness check only fires for a genuinely newer sif
+    touch -r "$src" "${SIF}.staging.$$"
+    mv -f "${SIF}.staging.$$" "$SIF"
     echo "[node_exec] staged."
 }
 
@@ -67,9 +71,12 @@ for d in "${CLUSTER_ISAACLAB_DIR}"/resources/*/; do
 done
 [ -d "${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source" ] && \
     EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source:/workspace/isaaclab_source:rw"
-# Bind list mirrors scripts/cluster/run_singularity.sh -- with extra `-B ...:/u/esturman` so HOME is
-# writable inside the container.
-apptainer exec \
+# artifacts/ holds cluster-only input data that the resources/* binds miss
+[ -d "${CLUSTER_ISAACLAB_DIR}/artifacts" ] && \
+    EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/artifacts:/workspace/artifacts:rw"
+# Bind list mirrors scripts/cluster/run_singularity.sh, plus a writable HOME. CLUSTER_APPTAINER_FLAGS
+# carries site quirks (TACC needs --fakeroot for bind points missing from the image).
+apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B ${STAGE}/docker-isaac-sim/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
     -B ${STAGE}/docker-isaac-sim/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw \

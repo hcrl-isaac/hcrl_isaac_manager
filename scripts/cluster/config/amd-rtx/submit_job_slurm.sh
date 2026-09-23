@@ -10,12 +10,13 @@ module load nvidia/26.1
 cat <<EOT > job.sh
 #!/bin/bash
 
-#SBATCH -p rtx-small
+#SBATCH -p amd-rtx
 #SBATCH -A IRI26004
 #SBATCH -N 1
-#SBATCH -n 2
-#SBATCH --cpus-per-task=14
+#SBATCH -n 1
+#SBATCH --cpus-per-task=128
 #SBATCH --time=48:00:00
+#SBATCH --exclusive
 #SBATCH --mem-per-cpu=0
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=sturman@utexas.edu
