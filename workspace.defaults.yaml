@@ -15,6 +15,6 @@ available_projects:
   - name: ssti
     description: SSTI traversal + MCP crab tasks
     default: true
-  - name: umrl
-    description: UMRL FB-CPR humanoid motion tasks
+  - name: hhlm
+    description: HHLM (hierarchical humanoid loco-manipulation) FB-CPR humanoid tasks
     default: true

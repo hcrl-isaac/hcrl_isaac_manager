@@ -53,6 +53,10 @@ def _isaaclab_mode(isaaclab: dict) -> str:
     return "source" if isaaclab.get("source") else "pip"
 
 
+# renamed project -> current name, so existing per-user selections keep resolving
+LEGACY_PROJECTS: dict[str, str] = {"umrl": "hhlm"}
+
+
 def load_manifest(overrides_path: Path) -> dict:
     """Merge the committed defaults with a per-user selection into one flat manifest.
 
@@ -71,6 +75,7 @@ def load_manifest(overrides_path: Path) -> dict:
     projects = overrides.get("projects")
     if projects is None:  # no per-user selection -> catalog defaults
         projects = [p["name"] for p in catalog if p.get("default")]
+    projects = [LEGACY_PROJECTS.get(p, p) for p in projects]
 
     isaaclab = {**defaults.get("isaaclab", {}), **overrides.get("isaaclab", {})}
     # Mode precedence: an explicit per-user choice (mode, or the legacy source bool) wins over the default.
