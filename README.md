@@ -109,11 +109,12 @@ the same W&B run.
 
 ### 1. Tag the training run
 
-When sending a cluster job, pass `--video async` to `train.py` (for headless no-RT boxes). It tags the
-W&B run with `log_videos_async` for the async logger to pick up, instead of spawning a local recorder
-(the default `--video on`, on an RT-capable box, records in-process out-of-band; `--video off` disables).
+When sending a cluster job, pass `--eval async` to `train.py` (for headless no-RT boxes). It tags the
+W&B run with `log_evals_async` for the async eval logger to pick up, instead of spawning a local eval
+worker (the default `--eval on`, on an RT-capable box, evaluates out-of-process; `--eval off` disables).
+Runs tagged with the old `log_videos_async` are still picked up.
 
-### 2. Run the async video logger (on an RT-capable device)
+### 2. Run the async eval logger (on an RT-capable device)
 
 The unified logger is `hcrl_isaaclab/scripts/video_logger.py`; run it from the manager dir via `just run`:
 
@@ -121,7 +122,7 @@ The unified logger is `hcrl_isaaclab/scripts/video_logger.py`; run it from the m
 just run video_logger --mode async --task <task_name> --wandb_project <entity>/<project> [options]
 ```
 
-Async mode scans `--wandb_project` for `log_videos_async`-tagged runs and records any checkpoints
+Async mode scans `--wandb_project` for `log_evals_async`-tagged runs and records any checkpoints
 they haven't logged yet. Useful options:
 
 | Arg | Default | Purpose |
@@ -152,7 +153,7 @@ Remove it with:
 scripts/video_listener.sh remove --task <task_name> --wandb_project <entity>/<project>
 ```
 
-This installs a cron job that runs `hcrl_isaaclab/scripts/utils/log_videos_async.sh`, which activates
+This installs a cron job that runs `hcrl_isaaclab/scripts/utils/log_evals_async.sh`, which activates
 the `ilab` venv, sources your W&B credentials, skips the pass if GPU 0 is >50% busy, and invokes
 `video_logger.py --mode async`. See `scripts/video_listener.sh --help` for all options.
 

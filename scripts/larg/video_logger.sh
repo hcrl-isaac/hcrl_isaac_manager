@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Render the videos of --video async LARG runs on a local box that can render (no LARG box can, see README.md)
+# Render the videos of --eval async LARG runs on a local box that can render (no LARG box can, see README.md)
 # and upload them back to the W&B run.
 #
 # Usage:
