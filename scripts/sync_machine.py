@@ -18,6 +18,7 @@ large exported policies.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import re
 import shlex
@@ -71,7 +72,14 @@ SSH_OPTS = [
 SSH_CMD = "ssh " + " ".join(shlex.quote(o) for o in SSH_OPTS)
 
 
-def sh(cmd: list[str] | str, *, check: bool = True, capture: bool = True, dry: bool = False, env=None) -> str:
+def sh(
+    cmd: list[str] | str,
+    *,
+    check: bool = True,
+    capture: bool = True,
+    dry: bool = False,
+    env: dict[str, str] | None = None,
+) -> str:
     """Run a local command; with ``dry`` only print it."""
     if dry:
         print(
@@ -382,7 +390,7 @@ def sync_checkout(co: Checkout, peer: Machine, pmap: list[tuple[str, str]], *, f
 
 
 def retarget_symlinks(
-    local_root: Path, remote_root: str, subpaths: list[str], peer: Machine, pmap, *, dry: bool
+    local_root: Path, remote_root: str, subpaths: list[str], peer: Machine, pmap: list[tuple[str, str]], *, dry: bool
 ) -> None:
     """Absolute symlinks that point into a mapped tree are re-pointed at the peer's copy of that tree.
 
@@ -426,10 +434,8 @@ def rewrite_tree(src: Path, pmap: list[tuple[str, str]], staging: Path) -> Path:
         if p.suffix == ".jsonl":  # transcripts exceed the cap; they are line-oriented, so stream them
             data = b"".join(rewrite(line.decode(), pmap).encode() for line in data.splitlines(keepends=True))
         elif len(data) <= REWRITE_MAX_BYTES:
-            try:
+            with contextlib.suppress(UnicodeDecodeError):
                 data = rewrite(data.decode(), pmap).encode()
-            except UnicodeDecodeError:
-                pass
         out = dst / p.relative_to(src)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(data)
@@ -438,7 +444,9 @@ def rewrite_tree(src: Path, pmap: list[tuple[str, str]], staging: Path) -> Path:
     return dst
 
 
-def push_tree(local_dir: Path, remote_dir: str, peer: Machine, pmap, staging: Path, *, dry: bool) -> None:
+def push_tree(
+    local_dir: Path, remote_dir: str, peer: Machine, pmap: list[tuple[str, str]], staging: Path, *, dry: bool
+) -> None:
     """Two passes so multi-GB scratch binaries stream straight from source and never hit a staging copy.
 
     Args:
@@ -462,7 +470,7 @@ def push_tree(local_dir: Path, remote_dir: str, peer: Machine, pmap, staging: Pa
             sh(["rsync", "-ac", "--update", "-e", SSH_CMD, f"{staged}/", f"{peer.host}:{remote_dir}/"])
 
 
-def sync_claude(local: Machine, peer: Machine, pmap, *, dry: bool) -> None:
+def sync_claude(local: Machine, peer: Machine, pmap: list[tuple[str, str]], *, dry: bool) -> None:
     """Ship transcripts, memory, settings, prompt history and scratchpads; live per-machine state stays.
 
     Args:
