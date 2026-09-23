@@ -55,14 +55,41 @@ def _default_selection(defaults: dict) -> dict:
     return {"projects": projects, "isaaclab": {"mode": _default_mode(defaults)}}
 
 
+_HEADER = (
+    "# Per-user workspace selection (gitignored). Written by `just setup` (or `just setup reconfigure`).\n"
+    "# Merged with the committed workspace.defaults.yaml by resolve_workspace.py.\n"
+)
+
+
 def _write(selection: dict) -> None:
-    header = (
-        "# Per-user workspace selection (gitignored). Written by `just setup` (or `just setup reconfigure`).\n"
-        "# Merged with the committed workspace.defaults.yaml by resolve_workspace.py.\n"
-    )
-    OUT.write_text(header + yaml.safe_dump(selection, sort_keys=False))
+    OUT.write_text(_HEADER + yaml.safe_dump(selection, sort_keys=False))
     proj = ", ".join(selection["projects"]) or "(none)"
     print(f"[configure] wrote {OUT.name}: projects=[{proj}], isaaclab={selection['isaaclab']['mode']}")
+
+
+def _migrate_renamed(current: dict) -> dict:
+    """Rewrite renamed project names and ``<old>_tasks`` ref pins in a saved selection, saving it if changed."""
+    if not current:
+        return current
+    projects = current.get("projects") or []
+    projects = [projects] if isinstance(projects, str) else projects
+    refs = current.get("refs") or {}
+    notes = [f"project {p!r} -> {RENAMED_PROJECTS[p]!r}" for p in projects if p in RENAMED_PROJECTS]
+    notes += [f"refs pin {o}_tasks -> {n}_tasks" for o, n in RENAMED_PROJECTS.items() if f"{o}_tasks" in refs]
+    if not notes:
+        return current
+    current["projects"] = [RENAMED_PROJECTS.get(p, p) for p in projects]
+    if refs:
+        current["refs"] = {_renamed_repo(k): v for k, v in refs.items()}
+    OUT.write_text(_HEADER + yaml.safe_dump(current, sort_keys=False))
+    print(f"[configure] renamed in {OUT.name}: {'; '.join(notes)}")
+    return current
+
+
+def _renamed_repo(name: str) -> str:
+    """The current name of a ``<project>_tasks`` repo."""
+    old = name.removesuffix("_tasks")
+    return f"{RENAMED_PROJECTS[old]}_tasks" if name.endswith("_tasks") and old in RENAMED_PROJECTS else name
 
 
 def _prompt(defaults: dict, current: dict) -> dict:
@@ -70,8 +97,7 @@ def _prompt(defaults: dict, current: dict) -> dict:
     import questionary
 
     catalog = defaults.get("available_projects", [])
-    saved = current.get("projects", [p["name"] for p in catalog if p.get("default")])
-    cur_projects = {RENAMED_PROJECTS.get(name, name) for name in saved}
+    cur_projects = set(current.get("projects", [p["name"] for p in catalog if p.get("default")]))
     choices = [
         questionary.Choice(
             title=f"{p['name']:<8} {p.get('description', '')}".rstrip(),
@@ -113,7 +139,7 @@ def main() -> None:
     defaults = _load(DEFAULTS)
     if not defaults:
         sys.exit(f"[configure] missing catalog: {DEFAULTS}")
-    current = _load(OUT)
+    current = _migrate_renamed(_load(OUT))
 
     if args.interactive and sys.stdin.isatty():  # setup on a TTY -> always (re)prompt, pre-filled
         _write(_prompt(defaults, current or _default_selection(defaults)))

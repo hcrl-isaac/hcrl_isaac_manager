@@ -34,6 +34,7 @@ Defaults (``workspace.defaults.yaml``)::
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import shutil
 import subprocess
 import sys
@@ -57,9 +58,20 @@ def _isaaclab_mode(isaaclab: dict) -> str:
 RENAMED_PROJECTS: dict[str, str] = {"umrl": "hhlm"}
 
 
-def _check_projects(projects: list[str], known: set[str], overrides_path: Path) -> None:
-    """Exit with a fix-it message if the selection names a project missing from the catalog."""
-    errors = []
+def _check_projects(projects: list[str], refs: dict, known: set[str], overrides_path: Path) -> None:
+    """Exit with a fix-it message if the selection names a project missing from the catalog.
+
+    Args:
+        projects: Selected project names.
+        refs: Per-repo ref overrides; a pin on a renamed ``<old>_tasks`` repo is reported too.
+        known: Project names in the catalog.
+        overrides_path: The per-user ``workspace.yaml`` the fix goes in.
+    """
+    errors = [
+        f"`refs:` pins {old}_tasks, which was renamed to {new}_tasks"
+        for old, new in RENAMED_PROJECTS.items()
+        if f"{old}_tasks" in refs
+    ]
     for name in projects:
         if name in known:
             continue
@@ -71,10 +83,32 @@ def _check_projects(projects: list[str], known: set[str], overrides_path: Path) 
         else:
             errors.append(f"unknown project {name!r} (available: {', '.join(sorted(known))})")
     if errors:
-        sys.exit(
-            "[resolve] " + "\n[resolve] ".join(errors) + f"\n[resolve] Update `projects` in {overrides_path}, "
-            "or re-run `just setup` to pick again."
-        )
+        fix = "re-run `just setup` to pick again" if any("unknown" in e for e in errors) else "re-run `just resolve`"
+        sys.exit("[resolve] " + "\n[resolve] ".join(errors) + f"\n[resolve] Update {overrides_path}, or {fix}.")
+
+
+def retired_checkouts(projects: list[str]) -> list[Path]:
+    """Checkouts of renamed projects left under ``resources/`` whose new name is selected."""
+    return [
+        RESOURCES / f"{old}_tasks"
+        for old, new in RENAMED_PROJECTS.items()
+        if new in projects and (RESOURCES / f"{old}_tasks").is_dir()
+    ]
+
+
+def retire_renamed(projects: list[str]) -> None:
+    """Uninstall renamed projects' old packages from this interpreter and print their checkouts to skip."""
+    for old, new in RENAMED_PROJECTS.items():
+        if new not in projects:
+            continue
+        try:
+            importlib.metadata.distribution(f"{old}_tasks")
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        print(f"[setup] uninstalling {old}_tasks (renamed to {new}_tasks)", file=sys.stderr)
+        subprocess.run(["uv", "pip", "uninstall", "--python", sys.executable, f"{old}_tasks"], check=True)
+    for path in retired_checkouts(projects):
+        print(path.relative_to(MANAGER_DIR))
 
 
 def load_manifest(overrides_path: Path) -> dict:
@@ -95,7 +129,9 @@ def load_manifest(overrides_path: Path) -> dict:
     projects = overrides.get("projects")
     if projects is None:  # no per-user selection -> catalog defaults
         projects = [p["name"] for p in catalog if p.get("default")]
-    _check_projects(projects, {p["name"] for p in catalog}, overrides_path)
+    elif isinstance(projects, str):
+        projects = [projects]
+    _check_projects(projects, overrides.get("refs") or {}, {p["name"] for p in catalog}, overrides_path)
 
     isaaclab = {**defaults.get("isaaclab", {}), **overrides.get("isaaclab", {})}
     # Mode precedence: an explicit per-user choice (mode, or the legacy source bool) wins over the default.
@@ -200,13 +236,29 @@ def main() -> None:
         "move; the stash is popped only if your branch already matches the pin, otherwise "
         "it is kept and a recovery command is printed.",
     )
+    ap.add_argument(
+        "--retire-renamed",
+        action="store_true",
+        help="Uninstall renamed projects' old packages from this interpreter, print their leftover "
+        "checkouts (one per line) and exit. Used by `just setup` to skip them.",
+    )
     args = ap.parse_args()
+    if args.retire_renamed:
+        retire_renamed(load_manifest(Path(args.manifest))["projects"])
+        return
     if args.force and args.skip_changes:
         ap.error("--force and --skip-changes are mutually exclusive")
     if args.checkout_pin and args.force:
         ap.error("--force is implied by --checkout-pin (dirty repos are stashed without prompting)")
 
     manifest = load_manifest(Path(args.manifest))
+    for path in retired_checkouts(manifest["projects"]):
+        print(
+            f"[resolve][WARN] {path.relative_to(MANAGER_DIR)} is a pre-rename checkout. Ray and cluster jobs mount "
+            "every resources/*_tasks, so its tasks register twice until it is removed. Move or finish its "
+            "worktrees, then delete it.",
+            file=sys.stderr,
+        )
     out = MANAGER_DIR / "gitman.yaml"
     (MANAGER_DIR / "gitman.yml").unlink(missing_ok=True)  # drop a stale .yml so it can't shadow .yaml
     is_source = manifest.get("isaaclab", {}).get("mode") == "source"
