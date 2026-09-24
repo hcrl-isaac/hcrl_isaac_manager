@@ -83,7 +83,7 @@ else
 fi
 
 
-RUN_SCRIPT_COMMAND="mkdir -p ${OUTPUTS_DIR} && $HCRL_ISAACLAB_DIR/scripts/utils/log_videos_async.sh ${SCRIPT_DIR}/${wandb_file} ${profile} --task ${task} --wandb_project ${wandb_project} &> ${OUTPUTS_DIR}/${task,,}_video_logging.log"
+RUN_SCRIPT_COMMAND="mkdir -p ${OUTPUTS_DIR} && $HCRL_ISAACLAB_DIR/scripts/utils/log_evals_async.sh ${SCRIPT_DIR}/${wandb_file} ${profile} --task ${task} --wandb_project ${wandb_project} &> ${OUTPUTS_DIR}/${task,,}_video_logging.log"
 
 CRON_COMMAND="$( printf "SHELL=/bin/bash\n*/30 * * * * ${RUN_SCRIPT_COMMAND}" )"
 
