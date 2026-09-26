@@ -11,6 +11,8 @@ cat <<EOT > job.sh
 #!/bin/bash
 
 #SBATCH -p amd-rtx
+# without it sbatch and every srun --overlap step refuse: the account has more than one chargeable project
+#SBATCH -A IRI26004
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH --cpus-per-task=128
