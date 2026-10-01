@@ -14,8 +14,8 @@ esac
 [ "${EVERY:-0}" -gt 0 ] 2>/dev/null || EVERY=0   # 0 disables the periodic metric line
 
 ERRPAT='Traceback|error running python|Error executing|CUDA out of memory|Could not override|No contact sensors|Segmentation fault|Killed|srun: error'
-# benign boot-time noise from ranks starting together
-BENIGNPAT='omni/kit/pipapi|no current CUDA context|ignore_import_check|_process_ext_pipapi_config'
+# benign boot-time noise: ranks starting together, and srun failing to load its unused http_parser plugin
+BENIGNPAT='omni/kit/pipapi|no current CUDA context|ignore_import_check|_process_ext_pipapi_config|http_parser'
 
 CM=${WATCH_RUN_CONTROL_PATH:-$HOME/.ssh/cm/%C}
 mkdir -p "$(dirname "${CM/\%C/x}")" 2>/dev/null || true
