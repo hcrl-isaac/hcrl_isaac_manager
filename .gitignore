@@ -35,3 +35,6 @@ scripts/cluster/exports/
 /.claude/
 # per-user, like .env.cluster: names the cluster tree's branch copies to protect from the develop sync
 scripts/cluster/config/*/.rsync-exclude
+
+# per-user compute overrides (login names, extra pools)
+/scripts/compute/compute.local.toml
