@@ -14,16 +14,7 @@ CLUSTER_ENV_FILE="${SCRIPT_DIR}/config/${CLUSTER}/.env.cluster"
 # Reuse the persistent SSH control master (opened by `cluster_dev.sh start`) so push/job need no 2FA.
 SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${HOME}/.ssh/cm/%C" -o ControlPersist=48h -o ConnectTimeout=60)
 
-# Profiles used to be tracked: a pull that untracked them deletes submit_job_slurm.sh next to a kept
-# .env.cluster, so restore it from the commit that removed it.
-restore_untracked_profile() {
-    local rel="scripts/cluster/config/${CLUSTER}/submit_job_slurm.sh" repo="${SCRIPT_DIR}/../.." sha
-    [ -f "$CLUSTER_ENV_FILE" ] && [ ! -f "${repo}/${rel}" ] || return 0
-    sha="$(git -C "$repo" log --diff-filter=D -1 --format=%H -- "$rel" 2>/dev/null)"
-    [ -n "$sha" ] || return 0
-    git -C "$repo" show "${sha}^:${rel}" > "${repo}/${rel}" && echo "[INFO] Restored ${rel} from ${sha:0:7}^ (profiles are per-user now)."
-}
-restore_untracked_profile
+source "${SCRIPT_DIR}/tools/restore_profiles.sh"
 
 source_cluster_env() {
     if [ ! -f "$CLUSTER_ENV_FILE" ]; then

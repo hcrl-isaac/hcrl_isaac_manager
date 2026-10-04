@@ -38,7 +38,7 @@ Apptainer image, following the workflow of the [Isaac Lab docs](https://isaac-si
 | `develop ...` | persistent dev node: see [cluster_dev/README.md](cluster_dev/README.md) |
 
 Code changes ride each job's copy, so the `.sif` only needs a rebuild when dependencies change. The copy is removed
-when the job ends (`REMOVE_CODE_COPY_AFTER_JOB`); logs go to `CLUSTER_ISAACLAB_DIR/logs`, outside it.
+when the job ends (`REMOVE_CODE_COPY_AFTER_JOB`); training logs and the job's `slurm-<id>.out` end up in `CLUSTER_ISAACLAB_DIR/logs`, outside it.
 
 ## Profile settings (`.env.cluster`)
 

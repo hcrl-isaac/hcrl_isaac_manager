@@ -74,8 +74,8 @@ access). If not (some sites, e.g. Delta, block this without re-auth) → they us
 
 ## Files
 - `cluster_dev.sh` — control script (start/status/attach/exec/sync/stop + internal watcher).
-- `sentinel.sbatch` — node-holding job (envsubst template; resource directives filled in/omitted
-  per `.env.cluster`; does no heavy setup so a staging bug can't waste the allocation).
+- `sentinel.sbatch` — node-holding job (envsubst template; resource directives come from the
+  profile's `submit_job_slurm.sh`; does no heavy setup so a staging bug can't waste the allocation).
 - `node_exec.sh` — runs on the node; stages SIF+caches+code once, then `apptainer exec`s
   (bind mounts mirror `scripts/cluster/run_singularity.sh`). Reached via the synced
   `${CLUSTER_ISAACLAB_DIR}/scripts/cluster/cluster_dev/` copy.

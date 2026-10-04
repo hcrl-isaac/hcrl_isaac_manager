@@ -39,6 +39,9 @@ ask num_procs "GPUs per Node" "$(sbatch_get -n)"
 ask num_cpus "CPUs per Task/GPU" "$(sbatch_get --cpus-per-task)"
 cur_time="$(sbatch_get --time)"
 ask walltime "Walltime (HH:MM:SS)" "${cur_time:-24:00:00}"
+for required in cluster_login workspace scratch; do
+    [ -n "${!required}" ] || { echo "[ERROR] $required is required; nothing written." >&2; exit 1; }
+done
 case "$workspace" in /*) ;; *) workspace="/$workspace" ;; esac
 case "$scratch" in /*) ;; *) scratch="/$scratch" ;; esac
 account_line=""
@@ -51,8 +54,8 @@ module_loads=""
 
 backup=""
 if [ -n "$update" ] && [ -d "$outdir" ]; then
-    backup="$outdir/.backup-$(date +%Y%m%d-%H%M%S)"
-    mkdir -p "$backup"
+    backup="$outdir/.backup"
+    rm -rf "$backup" && mkdir -p "$backup"
     cp -a "$outdir"/.env.cluster "$outdir"/submit_job_slurm.sh "$backup"/ 2>/dev/null || true
 fi
 mkdir -p "$outdir"
@@ -68,11 +71,8 @@ EMAIL="$email" QUEUE="$queue" NUM_PROCS="$num_procs" NUM_CPUS="$num_cpus" WALLTI
     < cluster/tools/submit_job_slurm.template.sh > "$job_file"
 
 if [ -n "$backup" ] && [ -f "$backup/.env.cluster" ]; then
-    # keep settings the template doesn't know about (e.g. CLUSTER_SRUN_EXTRA)
-    while IFS= read -r line; do
-        key="${line%%=*}"
-        grep -q "^${key}=" "$env_file" || echo "$line" >> "$env_file"
-    done < <(grep -E '^[A-Z_][A-Z0-9_]*=' "$backup/.env.cluster")
+    # keep hand-set values and lines the template doesn't emit
+    python3 cluster/tools/merge_profile.py "$backup" "$outdir"
     echo "[INFO] Previous files saved in $backup. Changes:"
     diff -u "$backup/.env.cluster" "$env_file" || true
     diff -u "$backup/submit_job_slurm.sh" "$job_file" || true
