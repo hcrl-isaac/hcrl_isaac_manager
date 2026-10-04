@@ -31,6 +31,7 @@ mkdir -p "$G" "$R/resources/hcrl_isaaclab" "$R/resources/hcrl_robots"
     git switch -q -c feat && echo feat > code.py && git commit -qam feat && git switch -q main
 )
 cp "$G/code.py" "$G/big.bin" "$R/resources/hcrl_isaaclab/"
+touch -d 2020-01-01 "$R/resources/hcrl_isaaclab/big.bin"  # an old copy: linking must go by content, not mtime
 echo asset > "$R/resources/hcrl_robots/t1.urdf"
 printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\n' "$R" > "$T/scripts/cluster/config/zz/.env.cluster"
 printf '#!/usr/bin/env bash\n#SBATCH -p test\n' > "$T/scripts/cluster/config/zz/submit_job_slurm.sh"

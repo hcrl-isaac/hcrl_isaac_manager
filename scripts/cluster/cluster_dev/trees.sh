@@ -52,13 +52,13 @@ cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new
             repo="${entry%%=*}"; src="${entry#*=}"
             log "Uploading ${repo} -> ${part}/resources/${repo}"
             # unchanged files (e.g. LFS policies) are hardlinked from the shared checkout or the newest earlier
-            # trees holding this repo instead of re-sent
+            # trees holding this repo instead of re-sent (no -t: a fresh checkout's mtimes never match, content does)
             local links=(--link-dest="${REMOTE_ISAACLAB_DIR}/resources/${repo}/") prev
             while IFS= read -r prev; do
                 [ -n "$prev" ] && links+=(--link-dest="${prev}/")
             done < <(on_login "for d in \$(ls -1dt '${TREES_DIR}'/*/resources/'${repo}' 2>/dev/null); do \
                 [ -L \"\$d\" ] || echo \"\$d\"; done | head -3")
-            rsync -rlpt --checksum --info=progress2 --exclude='.git' --exclude='logs/' --exclude='outputs/' \
+            rsync -rlp --checksum --info=progress2 --exclude='.git' --exclude='logs/' --exclude='outputs/' \
                 --exclude='**/worktrees/' --exclude='__pycache__/' --exclude='.claude/' "${links[@]}" \
                 -e "ssh ${SSH_OPTS[*]}" "${src}/" "${CLUSTER_LOGIN}:${part}/resources/${repo}/"
         done
