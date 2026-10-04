@@ -1,36 +1,28 @@
 FROM isaac-lab-base
 
-# WGet is needed so that GCS or other cloud providers can mark the container as ready.
-# Otherwise the Ray liveliness checks fail.
+# wget: the Ray liveness checks need it to mark the container ready.
 RUN apt-get update && apt-get install wget
 
-# install SSH
 RUN apt-get update && apt-get install -y openssh-client
 
-# install rsync
 RUN apt-get update && apt-get install -y rsync && rm -rf /var/lib/apt/lists/*
 
-# Install other dependencies
 RUN apt-get update && apt-get install -y graphviz
 
-# Set NVIDIA paths
+# NVIDIA runtime paths
 ENV PATH="/usr/local/nvidia/bin:$PATH"
 ENV LD_LIBRARY_PATH="/usr/local/nvidia/lib64"
-
-# Link NVIDIA binaries
 RUN ln -sf /usr/local/nvidia/bin/nvidia* /usr/bin
 
-# Install Ray and configure it
+# Ray, with its CLI run by Kit's python
 RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install "ray[default, tune]"==2.50.1 && \
 sed -i "1i $(echo "#!/workspace/isaaclab/_isaac_sim/python.sh")" \
 /isaac-sim/kit/python/bin/ray && ln -s /isaac-sim/kit/python/bin/ray /usr/local/bin/ray
 
-# Install git-lfs
 COPY install-git-lfs.sh /workspace/isaaclab/install-git-lfs.sh
 RUN bash /workspace/isaaclab/install-git-lfs.sh && git lfs version
 
-# Install tuning dependencies
+# Tuning dependencies
 RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install optuna bayesian-optimization
 
-# Install gitman
 RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install gitman

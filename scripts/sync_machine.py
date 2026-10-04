@@ -1,18 +1,15 @@
 """Push this workspace + Claude state to a peer box (``just sync <host>``). One-way: run it from the machine
 you are leaving.
 
-- **Code, git-aware.** Each checkout (manager, ``resources/*``, their worktrees, ``~/booster-deploy``) is put on
-  the same branch+commit on the peer -- commits are pushed into its repo directly, so unpushed work travels --
-  then only dirty files and the gitignored extras the code needs (``.claude/``, ``.env.*``, ``models/``) go on
-  top. ``workspace.yaml`` is per-machine and never shipped.
-- **Claude state, path-rewritten.** Transcripts, memory, settings, scratchpads, with absolute paths translated
-  to the peer's home / manager dir / ``<tmpdir>/claude-<uid>/<slug>``; newer-only, so a session continued over
-  there is not clobbered. Live per-machine state (``SESSIONS.md``, ``~/.cluster_dev``) never travels.
-- **Deps, incrementally.** uv re-sync of the peer's venvs; a full ``just setup`` only if ``ilab`` is missing.
+- Code: each checkout (manager, ``resources/*``, their worktrees, ``~/booster-deploy``) lands on the same
+  branch+commit on the peer (unpushed commits included), then dirty files and the gitignored extras
+  (``.claude/``, ``.env.*``, ``models/``) go on top. ``workspace.yaml`` is never shipped.
+- Claude state: transcripts, memory, settings and scratchpads, with absolute paths rewritten for the peer;
+  newer-only. ``SESSIONS.md`` and ``~/.cluster_dev`` never travel.
+- Deps: uv re-sync of the peer's venvs; a full ``just setup`` only if ``ilab`` is missing.
 
-Refuses if the peer has tracked modifications this side is not also carrying, or its branch is ahead of /
-diverged from ours (``--force`` overrides both). ``--dry-run`` prints every action; ``--artifacts`` adds the
-large exported policies.
+Refuses if the peer has tracked modifications this side is not carrying, or its branch is ahead of or
+diverged from ours (``--force`` overrides both).
 """
 
 from __future__ import annotations
@@ -32,7 +29,7 @@ HOME = Path.home()
 # gitignored paths the code needs on the other side (relative to each checkout root)
 REPO_EXTRAS = [".claude"]
 MANAGER_EXTRAS = [
-    "CLAUDE.md",  # the manager gitignores its own (/CLAUDE.md), so it is a plain file, not a tracked one
+    "CLAUDE.md",  # gitignored in the manager
     ".claude",
     "scripts/.env.wandb",
     "scripts/ray/.env.ray",
@@ -55,8 +52,7 @@ TEXT_SUFFIXES = {
     ".env",
 }
 REWRITE_MAX_BYTES = 4 << 20
-# one multiplexed connection for the whole run: ~30 checkouts x 3 round-trips at ~350 ms each is
-# otherwise the dominant cost, with almost no data moving
+# one multiplexed connection for the whole run; per-checkout round-trips dominate otherwise
 SSH_OPTS = [
     "-o",
     "BatchMode=yes",
