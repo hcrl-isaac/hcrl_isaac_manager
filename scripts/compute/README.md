@@ -11,8 +11,10 @@ just res pools                # the configured pools
 ```
 
 Card states: `free`, `busy` (a process is on it; owner, command and elapsed time are shown), `held` (memory in use
-with no visible process, e.g. Isaac kept its VRAM after exit) and `UNKNOWN` (the pool could not be probed, e.g. its
-SSH master is down). Unknown is never free.
+or utilization with no visible process, e.g. Isaac kept its VRAM after exit; idle cards read 0-545 MiB, so the
+bound is 1 GiB) and `UNKNOWN` (the pool could not be probed, e.g. its
+SSH master is down, or nvidia-smi failed or returned partial output). Unknown is never free; `status` exits 2 when
+no pool could be probed.
 
 ## Pools
 
@@ -25,8 +27,9 @@ Every compute pool has a `kind`, which picks the backend that probes it:
 | `slurm` | your jobs (`squeue`) and, per running job, `nvidia-smi` in an `srun --overlap` step over the cluster's SSH master | from the cluster profile |
 | `ray` | the Ray dashboard API (nodes, GPUs, running jobs) | `address` |
 
-`compute.toml` lists the lab's pools. Put per-user settings (your LARG login, extra pools, `enabled = false` to hide
-one) in `compute.local.toml` (gitignored), which is merged over it:
+`compute.toml` lists the lab's pools (`local` is the machine you run on). Put per-user settings (your LARG login,
+extra pools, `enabled = false` to hide one) in `compute.local.toml` (gitignored), which is merged over it. The LARG
+pools need a user (there or in `$LARG_USER`); without one they read UNKNOWN with a hint:
 
 ```toml
 [compute.larg-a100]

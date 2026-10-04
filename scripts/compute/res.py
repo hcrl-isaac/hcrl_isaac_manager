@@ -7,36 +7,74 @@ import argparse
 import json
 import sys
 from collections import Counter
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from inventory import Pool, load_pools
 from probe import Report, probe_local, probe_ray, probe_slurm_login, probe_ssh_host
 
 
+def _guarded(fn: Callable[..., list[Report]], label: str, kind: str, *args: Any) -> list[Report]:
+    """Run one probe; an unexpected exception becomes that probe's UNKNOWN report instead of ending the run."""
+    try:
+        return fn(*args)
+    except Exception as exc:  # a probe bug or missing tool must not hide the other pools
+        return [Report(label, kind, error=f"probe failed: {type(exc).__name__}: {exc}")]
+
+
+def _probe_one_host(pool: Pool, host: str) -> list[Report]:
+    return [probe_ssh_host(pool, host)]
+
+
 def probe_all(pools: list[Pool]) -> list[Report]:
-    """Probe every pool in parallel; SLURM profiles that share a login are probed once."""
+    """Probe every pool in parallel; SLURM profiles that share a login are probed once.
+
+    Args:
+        pools: Pools to probe.
+
+    Returns:
+        Reports in pool order, with cards seen by two pools (same uuid) kept only in the first.
+    """
     tasks = []
     by_login: dict[str, list[Pool]] = {}
     for pool in pools:
         if pool.kind == "local":
-            tasks.append((probe_local, (pool,)))
+            tasks.append((probe_local, pool.name, pool.kind, pool))
         elif pool.kind == "ssh":
-            tasks.extend((lambda p, h: [probe_ssh_host(p, h)], (pool, h)) for h in pool.settings.get("hosts", []))
+            hosts = pool.settings.get("hosts", [])
+            tasks.extend((_probe_one_host, f"{pool.name}/{h}", pool.kind, pool, h) for h in hosts)
         elif pool.kind == "ray":
-            tasks.append((probe_ray, (pool,)))
+            tasks.append((probe_ray, pool.name, pool.kind, pool))
         elif pool.kind == "slurm":
             by_login.setdefault(pool.settings["login"], []).append(pool)
         else:
+            tasks.append((lambda: [], pool.name, pool.kind))
             print(f"[res] unknown kind '{pool.kind}' for pool {pool.name}", file=sys.stderr)
-    tasks.extend((probe_slurm_login, (login, group)) for login, group in by_login.items())
+    tasks.extend((probe_slurm_login, login, "slurm", login, group) for login, group in by_login.items())
     with ThreadPoolExecutor(max_workers=16) as ex:
-        results = list(ex.map(lambda t: t[0](*t[1]), tasks))
-    return [r for group in results for r in group]
+        results = list(ex.map(lambda t: _guarded(*t), tasks))
+    reports = [r for group in results for r in group]
+    seen = set()
+    for rep in reports:
+        rep.cards = [c for c in rep.cards if not c.uuid or c.uuid not in seen]
+        seen.update(c.uuid for c in rep.cards if c.uuid)
+    return reports
 
 
-def render(reports: list[Report]) -> str:
+def render(reports: list[Report]) -> tuple[str, Counter]:
+    """Format reports as a per-pool table.
+
+    Args:
+        reports: Probe results.
+
+    Returns:
+        The text and the per-state card counts (plus `unknown` pools).
+    """
     lines = []
-    head = f"{'HOST/JOB':<22} {'GPU':>3} {'MODEL':<16} {'MEM (MiB)':>15} {'UTIL':>5}  {'STATE':<6} {'WHO / WHAT':<44} LEFT"
+    head = (
+        f"{'HOST/JOB':<22} {'GPU':>3} {'MODEL':<16} {'MEM (MiB)':>15} {'UTIL':>5}  {'STATE':<7} {'WHO / WHAT':<44} LEFT"
+    )
     totals = Counter()
     for rep in reports:
         lines.append(f"\n== {rep.pool} [{rep.kind}]")
@@ -48,23 +86,26 @@ def render(reports: list[Report]) -> str:
             lines.append("   " + head)
         for c in rep.cards:
             totals[c.state] += 1
-            who = "; ".join(f"{p.user} {p.cmd or p.pid} {p.elapsed}".strip() for p in c.procs)
-            if c.state == "held":
-                who = "memory held, no process"
+            who = "; ".join(f"{p.user} {p.cmd or p.pid} {p.elapsed}".strip() for p in c.procs) or c.note
+            if c.state == "held" and not who:
+                who = "in use, no visible process"
             where = f"{c.host} {c.job}".strip()
             model = c.model.replace("NVIDIA ", "").replace("GeForce ", "")[:16]
-            mem = f"{c.mem_used}/{c.mem_total}"
-            lines.append(f"   {where:<22} {c.index:>3} {model:<16} {mem:>15} {c.util:>4}%  {c.state:<6} {who:<44.44} {c.wall_left}")
-        for note in rep.notes:
-            lines.append(f"   - {note}")
-    summary = ", ".join(f"{totals[k]} {k}" for k in ("free", "busy", "held") if totals[k])
+            mem = f"{c.mem_used}/{c.mem_total}" if c.mem_used >= 0 else f"?/{c.mem_total}"
+            row = (
+                f"{where:<22} {c.index:>3} {model:<16} {mem:>15} {c.util:>4}%  {c.state:<7} {who:<44.44} {c.wall_left}"
+            )
+            lines.append("   " + row)
+        lines.extend(f"   - {note}" for note in rep.notes)
+    parts = [f"{totals[k]} {k}" for k in ("free", "busy", "held") if totals[k]]
     if totals["unknown"]:
-        summary += f"; {totals['unknown']} pool(s)/host(s) unknown"
-    lines.append(f"\ncards: {summary or 'none found'}")
-    return "\n".join(lines)
+        parts.append(f"{totals['unknown']} card(s)/pool(s) unknown")
+    lines.append(f"\ncards: {', '.join(parts) or 'none found'}")
+    return "\n".join(lines), totals
 
 
 def main() -> None:
+    """Parse the CLI and run a command."""
     parser = argparse.ArgumentParser(prog="just res", description=__doc__)
     sub = parser.add_subparsers(dest="cmd")
     st = sub.add_parser("status", help="probe every pool and show each card's state")
@@ -88,8 +129,11 @@ def main() -> None:
             rep.cards = [c for c in rep.cards if c.state == "free"]
     if args.json:
         print(json.dumps([r.to_dict() for r in reports], indent=1))
-    else:
-        print(render(reports))
+        return
+    text, _ = render(reports)
+    print(text)
+    if reports and all(r.error for r in reports):
+        sys.exit(2)
 
 
 if __name__ == "__main__":

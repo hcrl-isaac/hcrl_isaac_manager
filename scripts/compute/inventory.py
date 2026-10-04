@@ -38,34 +38,19 @@ def _read_toml(path: Path) -> dict:
     return tomllib.loads(path.read_text()) if path.is_file() else {}
 
 
-def _sourced_env(env_file: Path, keys: list[str]) -> dict:
-    """Return `keys` as the shell sees them after sourcing `env_file` (values may reference variables)."""
-    script = 'source "$1" >/dev/null 2>&1; shift; for k in "$@"; do printf "%s=%s\\n" "$k" "${!k}"; done'
-    res = subprocess.run(["bash", "-c", script, "_", str(env_file), *keys], capture_output=True, text=True)
-    return dict(line.split("=", 1) for line in res.stdout.splitlines() if "=" in line)
-
-
-def _sbatch_values(job_file: Path) -> dict:
-    vals = {}
-    if job_file.is_file():
-        for line in job_file.read_text().splitlines():
-            parts = line.split(None, 2)
-            if len(parts) >= 2 and parts[0] == "#SBATCH":
-                flag, _, val = parts[1].partition("=")
-                vals[flag] = val or (parts[2] if len(parts) > 2 else "")
-    return vals
+def _cluster_login(env_file: Path) -> str:
+    """CLUSTER_LOGIN as the shell sees it after sourcing the profile (values may reference variables)."""
+    script = 'source "$1" >/dev/null 2>&1; printf %s "${CLUSTER_LOGIN:-}"'
+    return subprocess.run(["bash", "-c", script, "_", str(env_file)], capture_output=True, text=True).stdout
 
 
 def slurm_pools() -> list[Pool]:
     """One SLURM pool per per-user cluster profile under scripts/cluster/config/."""
     pools = []
     for env_file in sorted(CLUSTER_CONFIG_DIR.glob("*/.env.cluster")):
-        env = _sourced_env(env_file, ["CLUSTER_LOGIN", "CLUSTER_ISAACLAB_DIR"])
-        if not env.get("CLUSTER_LOGIN"):
-            continue
-        sbatch = _sbatch_values(env_file.parent / "submit_job_slurm.sh")
-        settings = {"login": env["CLUSTER_LOGIN"], "partition": sbatch.get("-p", ""), "account": sbatch.get("-A", "")}
-        pools.append(Pool(env_file.parent.name, "slurm", settings))
+        login = _cluster_login(env_file)
+        if login:
+            pools.append(Pool(env_file.parent.name, "slurm", {"login": login}))
     return pools
 
 
@@ -79,8 +64,7 @@ def load_pools() -> list[Pool]:
         pool.settings = _merge(pool.settings, entries.get(pool.name, {}))
         if pool.name not in known:
             pools.append(pool)
-    default_user = os.environ.get("LARG_USER") or os.environ.get("USER", "")
     for pool in pools:
-        if pool.kind == "ssh":
-            pool.settings.setdefault("user", default_user)
+        if pool.kind == "ssh" and os.environ.get("LARG_USER"):
+            pool.settings.setdefault("user", os.environ["LARG_USER"])
     return [p for p in pools if p.settings.get("enabled", True)]

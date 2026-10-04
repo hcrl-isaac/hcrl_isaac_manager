@@ -1,15 +1,14 @@
-# Compute that `just res` probes. Every entry is one compute pool; `kind` picks the backend that knows how to
-# probe it. Per-user settings (login names, extra pools, `enabled = false`) go in compute.local.toml (gitignored),
-# which is merged over this file. SLURM pools come from the per-user cluster profiles (scripts/cluster/config/).
+# Compute pools `just res` probes; `kind` picks the backend. compute.local.toml (gitignored) is merged over this
+# file for per-user settings, and SLURM pools come from the cluster profiles (scripts/cluster/config/).
 
-[compute.hcrl2]
+[compute.local]
 kind = "local"
 
 [compute.larg-a100]
 kind = "ssh"
 hosts = ["mckennie", "hazard", "debruyne", "aaronson"]
 domain = "cs.utexas.edu"
-# user = "<your LARG login>"   (compute.local.toml; defaults to $LARG_USER, then the local user)
+# user: your LARG login, in compute.local.toml (or $LARG_USER)
 
 [compute.larg-a40]
 kind = "ssh"
