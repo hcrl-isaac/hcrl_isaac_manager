@@ -80,6 +80,7 @@ class Report:
     cards: list[Card] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     error: str = ""
+    owner: str = ""  # OS user the probe ran as (whose processes count as a lease holder's); "" = unknown
 
     def to_dict(self) -> dict:
         """Return the report as plain data for --json."""
@@ -201,7 +202,8 @@ def probe_local(pool: Pool) -> list[Report]:
     host = os.uname().nodename.split(".")[0]
     try:
         res = _run(["bash", "-c", GPU_QUERY], timeout=30)
-        return [Report(pool.name, pool.kind, parse_gpu_query(res.stdout, pool.name, host))]
+        cards = parse_gpu_query(res.stdout, pool.name, host)
+        return [Report(pool.name, pool.kind, cards, owner=os.environ.get("USER", ""))]
     except (subprocess.TimeoutExpired, ProbeError) as exc:
         return [Report(pool.name, pool.kind, error=str(exc) or "nvidia-smi timed out")]
 
@@ -225,7 +227,8 @@ def probe_ssh_host(pool: Pool, host: str) -> Report:
     except subprocess.TimeoutExpired:
         return Report(label, pool.kind, error="unreachable (ssh timed out)")
     try:
-        return Report(label, pool.kind, parse_gpu_query(res.stdout, pool.name, host))
+        cards = parse_gpu_query(res.stdout, pool.name, host)
+        return Report(label, pool.kind, cards, owner=_ssh_target(pool, host).split("@")[0])
     except ProbeError as exc:
         tail = res.stderr.strip().splitlines()[-1] if res.stderr.strip() else ""
         return Report(label, pool.kind, error=f"{exc}{f' ({tail})' if tail else ''}")
@@ -250,7 +253,8 @@ def ray_card(g: dict, pool: str, host: str) -> Card:
     if index is None or not isinstance(uuid, str):
         raise ProbeError(f"unrecognized GPU entry (keys: {', '.join(sorted(g))[:120]})")
     used, util, total = _num(g.get("memoryUsed")), _num(g.get("utilizationGpu")), _num(g.get("memoryTotal"))
-    raw = g.get("processesPids") or []
+    raw = g.get("processesPids")
+    raw = [] if raw is None else raw
     well_formed = isinstance(raw, list) and all(isinstance(p, dict) and _num(p.get("pid")) is not None for p in raw)
     pids = raw if well_formed else []
     procs = [Proc(_num(p.get("pid")) or 0, _num(p.get("gpuMemoryUsage")) or 0, cmd="ray worker") for p in pids]
@@ -339,7 +343,7 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
         return [Report(label, "slurm", error="squeue timed out")]
     if res.returncode != 0:
         return [Report(label, "slurm", error=f"squeue failed: {res.stderr.strip()[:200]}")]
-    report, failed = Report(label, "slurm"), []
+    report, failed = Report(label, "slurm", owner=login.split("@")[0]), []
     for line in res.stdout.splitlines():
         f = line.split("|", 9)
         if len(f) < 10:

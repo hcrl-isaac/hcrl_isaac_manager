@@ -55,9 +55,14 @@ def slurm_pools() -> list[Pool]:
     return pools
 
 
+def load_config() -> dict:
+    """compute.toml merged with compute.local.toml."""
+    return _merge(_read_toml(COMPUTE_DIR / "compute.toml"), _read_toml(COMPUTE_DIR / "compute.local.toml"))
+
+
 def load_pools() -> list[Pool]:
     """All enabled pools: compute.toml merged with compute.local.toml, plus the cluster profiles."""
-    cfg = _merge(_read_toml(COMPUTE_DIR / "compute.toml"), _read_toml(COMPUTE_DIR / "compute.local.toml"))
+    cfg = load_config()
     entries = cfg.get("compute", {})
     pools = [Pool(name, s["kind"], s) for name, s in entries.items() if "kind" in s]
     known = {p.name for p in pools}

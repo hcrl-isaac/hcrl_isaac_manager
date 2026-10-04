@@ -18,3 +18,8 @@ domain = "cs.utexas.edu"
 [compute.ray]
 kind = "ray"
 address = "http://100.95.64.90:8265"
+
+# Lease windows in minutes (a design choice: the ~15 min stall watchdog plus a relaunch and Kit boot).
+[leases]
+grace_min = 30
+idle_min = 30
