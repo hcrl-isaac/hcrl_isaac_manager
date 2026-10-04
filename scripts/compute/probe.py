@@ -250,12 +250,16 @@ def ray_card(g: dict, pool: str, host: str) -> Card:
     if index is None or not isinstance(uuid, str):
         raise ProbeError(f"unrecognized GPU entry (keys: {', '.join(sorted(g))[:120]})")
     used, util, total = _num(g.get("memoryUsed")), _num(g.get("utilizationGpu")), _num(g.get("memoryTotal"))
-    pids = [p for p in g.get("processesPids") or [] if isinstance(p, dict)]
+    raw = g.get("processesPids") or []
+    well_formed = isinstance(raw, list) and all(isinstance(p, dict) and _num(p.get("pid")) is not None for p in raw)
+    pids = raw if well_formed else []
     procs = [Proc(_num(p.get("pid")) or 0, _num(p.get("gpuMemoryUsage")) or 0, cmd="ray worker") for p in pids]
     mem = -1 if used is None else used
     card = Card(pool, host, index, str(g.get("name", "")), mem, total or 0, util or 0, uuid=uuid, procs=procs)
-    if used is None or util is None:
+    if used is None or util is None or used < 0 or util < 0:
         card.state, card.note = "unknown", "memory/utilization not reported"
+    elif not well_formed:
+        card.state, card.note = "unknown", "unreadable process list"
     elif procs:
         card.state = "busy"
     elif used >= HELD_MIB or util >= HELD_UTIL:
@@ -273,9 +277,13 @@ def probe_ray(pool: Pool) -> list[Report]:
             jobs = json.load(r)
     except Exception as exc:  # any failure means the pool's state is unknown
         return [Report(pool.name, pool.kind, error=f"dashboard unreachable ({exc})")]
+    if not isinstance(nodes, list) or not isinstance(jobs, list):
+        return [Report(pool.name, pool.kind, error="dashboard returned an unexpected format")]
     report = Report(pool.name, pool.kind)
     for node in nodes:
-        host = node.get("hostname", "?").split(".")[0]
+        if not isinstance(node, dict) or not isinstance(node.get("gpus") or [], list):
+            return [Report(pool.name, pool.kind, error="dashboard returned an unexpected node entry")]
+        host = str(node.get("hostname", "?")).split(".")[0]
         state = node.get("raylet", {}).get("state")
         if state != "ALIVE":
             report.notes.append(f"node {host} is {state}: its cards are not listed")

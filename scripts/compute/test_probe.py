@@ -1,8 +1,11 @@
 """Unit tests for the GPU probe parser (run: python3 -m unittest discover -s scripts/compute)."""
 
+import subprocess
 import unittest
 
-from probe import Card, ProbeError, Report, _gres_gpus, parse_gpu_query, ray_card, short_cmd
+import probe
+from inventory import Pool
+from probe import Card, ProbeError, Proc, Report, _gres_gpus, parse_gpu_query, ray_card, short_cmd
 from res import merge_duplicates
 
 CARDS = """\
@@ -119,13 +122,51 @@ class RayCardTest(unittest.TestCase):
         with self.assertRaises(ProbeError):
             ray_card({"gpu_index": 0, "uuid": "GPU-r", "memory_used": 0}, "ray", "n")
 
+    def test_malformed_process_list_is_unknown(self) -> None:
+        for pids in ([1234], ["1234"], [{"gpuMemoryUsage": 10}], "1234"):
+            self.assertEqual(ray_card(dict(self.GOOD, processesPids=pids), "ray", "n").state, "unknown", pids)
+
+    def test_negative_reading_is_unknown(self) -> None:
+        self.assertEqual(ray_card(dict(self.GOOD, memoryUsed=-5), "ray", "n").state, "unknown")
+
+    def test_any_process_is_busy(self) -> None:
+        g = dict(self.GOOD, processesPids=[{"pid": 1, "gpuMemoryUsage": 0}])
+        self.assertEqual(ray_card(g, "ray", "n").state, "busy")
+
+
+def _cards(state_a: str, state_b: str) -> tuple[Card, Card]:
+    a = Card("local", "h", 0, "RTX", 400, 32000, 0, state_a, uuid="GPU-x", note="a", procs=[Proc(1, 10)])
+    b = Card("ray", "h", 0, "RTX", 9000, 32000, 90, state_b, uuid="GPU-x", note="b", procs=[Proc(1, 10), Proc(2, 20)])
+    return a, b
+
 
 class MergeDuplicatesTest(unittest.TestCase):
-    def test_keeps_the_more_cautious_state(self) -> None:
-        local = Card("local", "h", 0, "RTX", 400, 32000, 0, "free", uuid="GPU-x")
-        ray = Card("ray", "h", 0, "RTX", 9000, 32000, 90, "busy", uuid="GPU-x", note="in use")
-        reports = merge_duplicates([Report("local", "local", [local]), Report("ray", "ray", [ray])])
-        self.assertEqual([c.state for r in reports for c in r.cards], ["busy"])
+    def test_keeps_the_more_cautious_state_in_both_orders(self) -> None:
+        for first, second in (("free", "busy"), ("busy", "free")):
+            a, b = _cards(first, second)
+            reports = merge_duplicates([Report("local", "local", [a]), Report("ray", "ray", [b])])
+            self.assertEqual([c.state for r in reports for c in r.cards], ["busy"])
+
+    def test_merges_processes_once_and_both_notes(self) -> None:
+        a, b = _cards("busy", "busy")
+        card = merge_duplicates([Report("local", "local", [a]), Report("ray", "ray", [b])])[0].cards[0]
+        self.assertEqual(([p.pid for p in card.procs], card.note), ([1, 2], "a; b"))
+
+
+class SlurmUnseenCardsTest(unittest.TestCase):
+    def test_unseen_allocated_cards_are_unknown(self) -> None:
+        squeue = "42|gpuA40x4|acct|RUNNING|gpub001|1|10:00|N/A|gres/gpu:4|box\n"
+        step = "@@CARDS\n0, GPU-a, A40, 0, 46068, 0\n@@APPS rc=0\n@@PS rc=0\n@@END\n"
+        outputs = iter([squeue, step])
+        saved = probe._run, probe._master_alive
+        probe._master_alive = lambda login: True
+        probe._run = lambda cmd, timeout: subprocess.CompletedProcess(cmd, 0, next(outputs), "")
+        try:
+            reports = probe.probe_slurm_login("u@login.delta.x", [Pool("delta", "slurm", {"login": "u@login.delta.x"})])
+        finally:
+            probe._run, probe._master_alive = saved
+        self.assertEqual(len(reports[0].cards), 1)
+        self.assertIn("saw 1 of 4 allocated cards", reports[1].error)
 
 
 class HelpersTest(unittest.TestCase):

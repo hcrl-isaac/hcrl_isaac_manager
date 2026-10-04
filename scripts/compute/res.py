@@ -82,8 +82,10 @@ def merge_duplicates(reports: list[Report]) -> list[Report]:
                 kept.append(card)
                 continue
             if CAUTION[card.state] > CAUTION[other.state]:
-                other.state, other.note = card.state, card.note or other.note
-            other.procs.extend(card.procs)
+                other.state = card.state
+            other.note = "; ".join(n for n in dict.fromkeys([other.note, card.note]) if n)
+            known = {p.pid for p in other.procs}
+            other.procs.extend(p for p in card.procs if p.pid not in known)
         rep.cards = kept
     return reports
 
@@ -160,13 +162,15 @@ def cmd_status(args: argparse.Namespace, pools: list[Pool]) -> None:
     held = reconcile(reports)
     if args.free:
         for rep in reports:
-            rep.cards = [c for c in rep.cards if c.state == "free" and ls.card_key(c) not in held]
+            rep.cards = [
+                c for c in rep.cards if c.state == "unknown" or (c.state == "free" and ls.card_key(c) not in held)
+            ]
     if args.json:
         out = {"reports": [r.to_dict() for r in reports], "leases": [vars(x) for x in held.values()]}
         print(json.dumps(out, indent=1))
     else:
         print(render(reports, held)[0])
-    if reports and all(r.error for r in reports):
+    if reports and all(r.error or (r.cards and all(c.state == "unknown" for c in r.cards)) for r in reports):
         sys.exit(2)
 
 
