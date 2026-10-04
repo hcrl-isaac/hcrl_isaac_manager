@@ -24,4 +24,6 @@ init_commands: []
   - "**/.git/lfs/**"
   - "**/.venv/**"
   - "nohup.out"
-  - "**/policies/*_bfmzero_*"
+  # expert style datasets: they ship as the hcrl_resources artifact and would blow the upload limit
+  - "**/style_data/**"
+  - "**/policies/**/bfmzero_*/**"
