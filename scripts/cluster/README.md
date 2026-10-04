@@ -10,7 +10,9 @@ Apptainer image, following the workflow of the [Isaac Lab docs](https://isaac-si
    just cluster add [name]
    ```
    The prompts write `scripts/cluster/config/<name>/.env.cluster` and `submit_job_slurm.sh`. Profiles are per-user
-   and gitignored. Use a large-quota filesystem for the workspace directory (e.g. `$WORK` on TACC; every job copies
+   and gitignored; every cluster command snapshots a changed profile into `config/<name>/.backup/`, restores a
+   submit script that a checkout deleted from there, and refuses to run on a branch that still tracks the profiles
+   (merge main into it first). Use a large-quota filesystem for the workspace directory (e.g. `$WORK` on TACC; every job copies
    the workspace there) and `$SCRATCH` for the `.sif` and Isaac Sim cache. For a `*.tacc.utexas.edu` login the
    profile also loads TACC's `tacc-apptainer` module.
 2. Regenerate a profile after a template change, keeping your values as defaults (old files are backed up and the
