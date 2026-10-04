@@ -78,6 +78,7 @@ dev sync --dry-run > "$T/out6" 2>&1
 check "develop sync leaves trees alone" "! grep -q '^\*deleting *trees/' '$T/out6'"
 
 if [ "$fails" -ne 0 ]; then
+    ls -li "$R"/trees/*/resources/hcrl_isaaclab/big.bin
     for f in "$T"/out*; do echo "--- $f"; tail -15 "$f"; done
     exit 1
 fi
