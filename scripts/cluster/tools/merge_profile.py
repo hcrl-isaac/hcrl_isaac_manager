@@ -140,8 +140,8 @@ def merge_submit(old: str, new: str) -> tuple[str, list[str]]:
         if not line.strip() or line in merged:
             return False
         flags = sbatch_flags(line)
-        # a prompted flag's new value is the user's answer; any other flag missing from the output is lost
-        return bool(set(flags) - PROMPTED_FLAGS) if flags else not line.startswith("#")
+        # a prompted flag's new value is the user's answer; any other line missing from the output is lost
+        return bool(set(flags) - PROMPTED_FLAGS) if flags else True
 
     return "\n".join(out) + "\n", [line for line in old_lines if dropped(line)]
 

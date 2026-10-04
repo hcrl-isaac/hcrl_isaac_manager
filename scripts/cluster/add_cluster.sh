@@ -43,8 +43,8 @@ ask walltime "Walltime (HH:MM:SS)" "${cur_time:-24:00:00}"
 for required in cluster_login workspace scratch; do
     [ -n "${!required}" ] || { echo "[ERROR] $required is required; nothing written." >&2; exit 1; }
 done
-case "$workspace" in /*) ;; *) workspace="/$workspace" ;; esac
-case "$scratch" in /*) ;; *) scratch="/$scratch" ;; esac
+case "$workspace" in /* | \$*) ;; *) workspace="/$workspace" ;; esac  # keep ${VAR}/... as written
+case "$scratch" in /* | \$*) ;; *) scratch="/$scratch" ;; esac
 account_line=""
 [ -n "$account" ] && account_line="#SBATCH -A $account"
 # TACC ships apptainer only as an Lmod module on compute nodes
@@ -78,4 +78,5 @@ if [ -n "$backup" ] && [ -f "$backup/.env.cluster" ]; then
     diff -u "$backup/.env.cluster" "$env_file" || true
     diff -u "$backup/submit_job_slurm.sh" "$job_file" || true
 fi
+restore_profiles  # snapshot the profile just written, so .backup/ never lags it
 echo "[INFO] Wrote cluster profile $outdir (per-user, not tracked by git)."
