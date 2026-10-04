@@ -1,0 +1,21 @@
+# Compute that `just res` probes. Every entry is one compute pool; `kind` picks the backend that knows how to
+# probe it. Per-user settings (login names, extra pools, `enabled = false`) go in compute.local.toml (gitignored),
+# which is merged over this file. SLURM pools come from the per-user cluster profiles (scripts/cluster/config/).
+
+[compute.hcrl2]
+kind = "local"
+
+[compute.larg-a100]
+kind = "ssh"
+hosts = ["mckennie", "hazard", "debruyne", "aaronson"]
+domain = "cs.utexas.edu"
+# user = "<your LARG login>"   (compute.local.toml; defaults to $LARG_USER, then the local user)
+
+[compute.larg-a40]
+kind = "ssh"
+hosts = ["pepi", "pulisic", "salah", "pogba"]
+domain = "cs.utexas.edu"
+
+[compute.ray]
+kind = "ray"
+address = "http://100.95.64.90:8265"
