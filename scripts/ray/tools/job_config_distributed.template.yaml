@@ -24,4 +24,5 @@ init_commands: []
   - "**/.git/lfs/**"
   - "**/.venv/**"
   - "nohup.out"
-  - "**/policies/*_bfmzero_*"
+  - "**/style_data/**"
+  - "**/policies/**/bfmzero_*/**"
