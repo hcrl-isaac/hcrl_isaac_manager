@@ -3,13 +3,14 @@
 # in the case you need to load specific modules on the cluster, add them here
 # e.g., `module load eth_proxy`
 
-module load tacc-apptainer/1.2.2
+$MODULE_LOADS
 
 # create job script with compute demands
 cat <<EOT > job.sh
 #!/bin/bash
 
 #SBATCH -p $QUEUE
+$ACCOUNT_LINE
 #SBATCH -N 1
 #SBATCH -n $NUM_PROCS
 #SBATCH --cpus-per-task=$NUM_CPUS
