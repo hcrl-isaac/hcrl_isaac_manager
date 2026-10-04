@@ -1,5 +1,7 @@
 """Unit tests for the GPU probe parser (run all script tests: just test-scripts)."""
 
+import io
+import json
 import subprocess
 import sys
 import unittest
@@ -170,6 +172,45 @@ class SlurmUnseenCardsTest(unittest.TestCase):
             probe._run, probe._master_alive = saved
         self.assertEqual(len(reports[0].cards), 1)
         self.assertIn("saw 1 of 4 allocated cards", reports[1].error)
+
+
+class PartialReportTest(unittest.TestCase):
+    def slurm(self, squeue: str) -> list[Report]:
+        saved = probe._run, probe._master_alive
+        probe._master_alive = lambda login: True
+        probe._run = lambda cmd, timeout: subprocess.CompletedProcess(cmd, 0, squeue, "")
+        try:
+            return probe.probe_slurm_login("u@login.delta.x", [Pool("delta", "slurm", {"login": "u@login.delta.x"})])
+        finally:
+            probe._run, probe._master_alive = saved
+
+    def test_unparsable_squeue_line_marks_the_report_partial(self) -> None:
+        self.assertTrue(self.slurm("Welcome to Delta\n")[0].partial)
+
+    def test_completing_job_is_an_unknown_sub_report(self) -> None:
+        reports = self.slurm("42|gpuA40x4|acct|COMPLETING|gpub001|1|0:00|N/A|gres/gpu:4|box\n")
+        self.assertEqual([(r.pool, bool(r.error)) for r in reports[1:]], [("delta (delta) job 42", True)])
+
+    def test_non_alive_ray_node_marks_the_report_partial(self) -> None:
+        nodes = {"data": {"summary": [{"hostname": "n1", "raylet": {"state": "DEAD"}, "gpus": []}]}}
+
+        class Resp:
+            def __init__(self, body: object) -> None:
+                self.body = json.dumps(body).encode()
+
+            def __enter__(self) -> io.BytesIO:
+                return io.BytesIO(self.body)
+
+            def __exit__(self, *exc: object) -> None:
+                return None
+
+        saved = probe.urllib.request.urlopen
+        probe.urllib.request.urlopen = lambda url, timeout: Resp(nodes if "nodes" in url else [])
+        try:
+            rep = probe.probe_ray(Pool("ray", "ray", {"address": "http://x"}))[0]
+        finally:
+            probe.urllib.request.urlopen = saved
+        self.assertTrue(rep.partial)
 
 
 class HelpersTest(unittest.TestCase):

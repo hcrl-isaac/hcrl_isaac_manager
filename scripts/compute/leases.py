@@ -45,6 +45,7 @@ class Lease:
         idle_since: First idle observation since the last activity (0 = not idle).
         expires: Hard end for time-boxed leases (0 = none).
         conflict: The card's processes belong to someone else.
+        missing_since: First probe that no longer listed the card (0 = listed).
     """
 
     id: str
@@ -60,6 +61,7 @@ class Lease:
     idle_since: float = 0.0
     expires: float = 0.0
     conflict: bool = False
+    missing_since: float = 0.0
 
 
 def card_key(card: Card) -> str:
@@ -72,6 +74,22 @@ def card_label(card: Card) -> str:
     return f"{card.host}:{card.index}" + (f" (job {card.job})" if card.job else "")
 
 
+_TYPES = {"str": str, "float": (int, float), "bool": bool}
+
+
+def _lease(d: dict) -> Lease:
+    """Lease from stored data; unknown fields are ignored, wrong types raise TypeError."""
+    values = {}
+    for f in fields(Lease):
+        if f.name not in d:
+            continue
+        val, want = d[f.name], _TYPES[f.type]
+        if not isinstance(val, want) or (f.type == "float" and isinstance(val, bool)):
+            raise TypeError(f"{f.name} has type {type(val).__name__}")
+        values[f.name] = val
+    return Lease(**values)
+
+
 def _load(path: Path) -> list[Lease]:
     if not path.is_file():
         return []
@@ -79,10 +97,9 @@ def _load(path: Path) -> list[Lease]:
         data = json.loads(path.read_text())
         if not isinstance(data, list) or not all(isinstance(d, dict) for d in data):
             raise TypeError("not a list of leases")
-        known = {f.name for f in fields(Lease)}
-        return [Lease(**{k: v for k, v in d.items() if k in known}) for d in data]
-    except (json.JSONDecodeError, TypeError) as exc:
-        aside = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+        return [_lease(d) for d in data]
+    except (ValueError, TypeError) as exc:  # JSONDecodeError and UnicodeDecodeError are ValueErrors
+        aside = path.with_name(f"{path.name}.corrupt-{time.time_ns()}")
         path.rename(aside)
         raise LeaseStoreError(f"lease store was unreadable ({exc}); moved to {aside}") from exc
 
@@ -91,10 +108,14 @@ def _load(path: Path) -> list[Lease]:
 def locked_store() -> Iterator[list[Lease]]:
     """Yield the lease list under an exclusive lock; write it back only if the block changed it and finished.
 
-    Raises LeaseStoreError when the lock is not free within LOCK_WAIT_S or the store is unreadable.
+    Raises LeaseStoreError when the lock is not free within LOCK_WAIT_S or the store cannot be read or written.
     """
-    STORE.parent.mkdir(parents=True, exist_ok=True)
-    with open(STORE.with_suffix(".lock"), "w") as lock:
+    try:
+        STORE.parent.mkdir(parents=True, exist_ok=True)
+        lock = open(STORE.with_suffix(".lock"), "w")  # noqa: SIM115 - closed by the with below
+    except OSError as exc:
+        raise LeaseStoreError(f"cannot open the lease store ({exc})") from exc
+    with lock:
         deadline = time.monotonic() + LOCK_WAIT_S
         while True:
             try:
@@ -104,19 +125,25 @@ def locked_store() -> Iterator[list[Lease]]:
                 if exc.errno not in (errno.EAGAIN, errno.EACCES) or time.monotonic() > deadline:
                     raise LeaseStoreError(f"lease store is locked by another res call ({exc})") from exc
                 time.sleep(0.1)
-        leases = _load(STORE)
+        try:
+            leases = _load(STORE)
+        except OSError as exc:
+            raise LeaseStoreError(f"cannot read the lease store ({exc})") from exc
         before = [asdict(lease) for lease in leases]
         yield leases
         after = [asdict(lease) for lease in leases]
         if after != before:
-            tmp = STORE.with_suffix(".tmp")
-            tmp.write_text(json.dumps(after, indent=1))
-            tmp.replace(STORE)
+            try:
+                tmp = STORE.with_suffix(".tmp")
+                tmp.write_text(json.dumps(after, indent=1))
+                tmp.replace(STORE)
+            except OSError as exc:
+                raise LeaseStoreError(f"cannot write the lease store ({exc})") from exc
 
 
 def _uncertain(reports: list[Report]) -> tuple[set[str], set[tuple[str, str]]]:
-    """Reports that probed without error, and (report, job) pairs a failed SLURM sub-report left unknown."""
-    ok = {r.pool for r in reports if not r.error}
+    """Reports that listed all their cards, and (report, job) pairs a failed SLURM sub-report left unknown."""
+    ok = {r.pool for r in reports if not r.error and not r.partial}
     jobs = set()
     for r in reports:
         if r.error and " job " in r.pool:
@@ -130,8 +157,9 @@ def _activity(lease: Lease, card: Card) -> bool | None:
     if card.state == "unknown":
         return None
     if card.procs:
-        users = {p.user for p in card.procs}
-        lease.conflict = bool(lease.owner) and "?" not in users and lease.owner not in users
+        # only attributable processes can show a conflict; unattributed ones (Ray, "?") are not evidence
+        users = {p.user for p in card.procs} - {"?"}
+        lease.conflict = bool(lease.owner) and bool(users) and lease.owner not in users
         return not lease.conflict
     lease.conflict = False
     # busy without a listed process: in use but unattributable (Ray). Retained memory with no process and no
@@ -172,8 +200,13 @@ def reconcile(
             continue
         if card is None:
             if lease.report in ok and (lease.report, lease.job) not in uncertain_jobs:
-                released.append((lease, "card no longer exists"))
+                # like idle: gone on two complete probes at least the idle window apart
+                if not lease.missing_since:
+                    lease.missing_since = now
+                elif now - lease.missing_since >= idle_min * 60:
+                    released.append((lease, "card no longer exists"))
             continue
+        lease.missing_since = 0.0
         active = _activity(lease, card)
         if active is None:
             continue

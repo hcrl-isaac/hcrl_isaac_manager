@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from collections import Counter
@@ -156,9 +157,15 @@ def select_pools(pools: list[Pool], prefixes: list[str] | None) -> list[Pool]:
 
 
 def lease_windows() -> dict[str, float]:
-    """grace_min / idle_min from compute.toml's [leases] table."""
+    """grace_min / idle_min from compute.toml's [leases] table; each must be a finite number of minutes > 0."""
     cfg = load_config().get("leases", {})
-    return {"grace_min": float(cfg.get("grace_min", ls.GRACE_MIN)), "idle_min": float(cfg.get("idle_min", ls.IDLE_MIN))}
+    windows = {}
+    for key, default in (("grace_min", ls.GRACE_MIN), ("idle_min", ls.IDLE_MIN)):
+        val = cfg.get(key, default)
+        if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(val) or val <= 0:
+            sys.exit(f"[res] compute.toml [leases] {key} must be a positive number of minutes, not {val!r}")
+        windows[key] = float(val)
+    return windows
 
 
 def _report_released(released: list[tuple[ls.Lease, str]]) -> None:
@@ -169,12 +176,13 @@ def _report_released(released: list[tuple[ls.Lease, str]]) -> None:
 def cmd_status(args: argparse.Namespace, pools: list[Pool]) -> None:
     """Probe, reconcile leases and print every card; a lease store problem only hides the lease column."""
     reports = probe_all(select_pools(pools, args.pool))
+    windows = lease_windows()
     try:
         with ls.locked_store() as leases:
-            _report_released(ls.reconcile(leases, reports, **lease_windows()))
+            _report_released(ls.reconcile(leases, reports, **windows))
             held = {lease.key: lease for lease in leases}
-    except (ls.LeaseStoreError, OSError) as exc:
-        print(f"[res] WARNING: leases not shown: {exc}", file=sys.stderr)
+    except Exception as exc:  # the card table must still print when the lease store is broken
+        print(f"[res] WARNING: leases not shown: {type(exc).__name__}: {exc}", file=sys.stderr)
         held = {}
     if args.free:
         for rep in reports:
@@ -207,17 +215,25 @@ def _named(spec: str, seen: list[tuple[Card, Report]]) -> tuple[Card, Report]:
 def _choose(seen: list[tuple[Card, Report]], taken: set[str], args: argparse.Namespace) -> list[tuple[Card, Report]]:
     """The cards a claim takes: all named ones, or --any free ones packed onto partly used hosts first."""
     if args.any:
-        explicit_ray = any(sel.startswith("ray") for sel in args.pool or [])
+        explicit_ray = {
+            r.pool for _, r in seen if r.kind == "ray" and any(r.pool.startswith(s) for s in args.pool or [])
+        }
         free = [
             (c, r)
             for c, r in seen
             if c.state == "free"
             and ls.card_key(c) not in taken
             and c.mem_total - c.mem_used >= args.min_free_gb * 1024
-            and (r.kind != "ray" or explicit_ray)  # Ray schedules onto its own free cards
+            and (r.kind != "ray" or r.pool in explicit_ray)  # Ray schedules onto its own free cards
         ]
+        in_use = {c.host for c, _ in seen if c.state != "free" or ls.card_key(c) in taken}
         per_host = Counter(c.host for c, _ in free)
-        free.sort(key=lambda cr: (per_host[cr[0].host], -(cr[0].mem_total - cr[0].mem_used), cr[0].host, cr[0].index))
+
+        def pack(cr: tuple[Card, Report]) -> tuple:
+            c = cr[0]
+            return (c.host not in in_use, per_host[c.host], -(c.mem_total - c.mem_used), c.host, c.index)
+
+        free.sort(key=pack)
         if len(free) < args.count:
             sys.exit(f"[res] only {len(free)} free card(s) match; nothing claimed")
         return free[: args.count]
@@ -240,14 +256,21 @@ def cmd_claim(args: argparse.Namespace, pools: list[Pool]) -> None:
     reports = probe_all(select_pools(pools, args.pool))
     seen = [(c, r) for r in reports for c in r.cards]
     windows = lease_windows()
+    refused = None
     try:
         with ls.locked_store() as leases:
             _report_released(ls.reconcile(leases, reports, **windows))
-            chosen = _choose(seen, {lease.key for lease in leases}, args)
-            new = [ls.new_lease(c, r, args.holder, args.note, args.for_) for c, r in chosen]
-            leases.extend(new)
+            try:
+                chosen = _choose(seen, {lease.key for lease in leases}, args)
+            except SystemExit as exc:  # keep the reconcile result even when the claim is refused
+                refused = exc
+            else:
+                new = [ls.new_lease(c, r, args.holder, args.note, args.for_) for c, r in chosen]
+                leases.extend(new)
     except ls.LeaseStoreError as exc:
         sys.exit(f"[res] nothing claimed: {exc}")
+    if refused is not None:
+        raise refused
     for lease, (card, rep) in zip(new, chosen, strict=True):
         box = f", time box {int(args.for_ // 60)} min" if args.for_ else ""
         print(f"claimed {lease.id}: {lease.card} ({rep.pool}{box}) for {lease.holder}")
@@ -257,11 +280,18 @@ def cmd_claim(args: argparse.Namespace, pools: list[Pool]) -> None:
     )
 
 
+def _slurm_label(target: str) -> str:
+    """`host:job:gpu` as the lease label `host:gpu (job job)`; other targets unchanged."""
+    parts = target.split(":")
+    return f"{parts[0]}:{parts[2]} (job {parts[1]})" if len(parts) == 3 else target
+
+
 def cmd_release(args: argparse.Namespace, _pools: list[Pool]) -> None:
     """Drop leases by id or card; only the holder may, unless --force."""
     try:
         with ls.locked_store() as leases:
-            gone = [x for x in leases if x.id in args.targets or x.card in args.targets or x.key in args.targets]
+            targets = set(args.targets) | {_slurm_label(t) for t in args.targets}
+            gone = [x for x in leases if x.id in targets or x.card in targets or x.key in targets]
             foreign = [x for x in gone if x.holder != args.holder]
             if foreign and not args.force:
                 names = ", ".join(f"{x.id} ({x.holder})" for x in foreign)
@@ -272,7 +302,8 @@ def cmd_release(args: argparse.Namespace, _pools: list[Pool]) -> None:
         sys.exit(f"[res] nothing released: {exc}")
     for lease in gone:
         print(f"released {lease.id}: {lease.card} ({lease.holder})")
-    missing = set(args.targets) - {x.id for x in gone} - {x.card for x in gone} - {x.key for x in gone}
+    found = {x.id for x in gone} | {x.card for x in gone} | {x.key for x in gone}
+    missing = {t for t in args.targets if t not in found and _slurm_label(t) not in found}
     if missing:
         sys.exit(f"[res] no lease for: {', '.join(sorted(missing))}")
 

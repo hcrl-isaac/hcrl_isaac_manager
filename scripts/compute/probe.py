@@ -81,6 +81,7 @@ class Report:
     notes: list[str] = field(default_factory=list)
     error: str = ""
     owner: str = ""  # OS user the probe ran as (whose processes count as a lease holder's); "" = unknown
+    partial: bool = False  # some cards of this report could not be listed (absence proves nothing)
 
     def to_dict(self) -> dict:
         """Return the report as plain data for --json."""
@@ -290,7 +291,8 @@ def probe_ray(pool: Pool) -> list[Report]:
         host = str(node.get("hostname", "?")).split(".")[0]
         state = node.get("raylet", {}).get("state")
         if state != "ALIVE":
-            report.notes.append(f"node {host} is {state}: its cards are not listed")
+            report.notes.append(f"node {host} is {state}: its cards are unknown")
+            report.partial = True
             continue
         try:
             report.cards.extend(ray_card(g, pool.name, host) for g in node.get("gpus") or [])
@@ -348,10 +350,14 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
         f = line.split("|", 9)
         if len(f) < 10:
             report.notes.append(f"unparsable squeue line: {line[:120]}")
+            report.partial = True
             continue
         jobid, part, acct, state, node, nnodes, left, start, gres, name = f
+        if state == "PENDING":
+            report.notes.append(f"job {jobid} ({part}, {name}) PENDING, est. start {start}")
+            continue
         if state != "RUNNING":
-            report.notes.append(f"job {jobid} ({part}, {name}) {state}, est. start {start}")
+            failed.append(Report(f"{label} job {jobid}", "slurm", error=f"job is {state}: its cards are unknown"))
             continue
         node = node.split(",")[0]
         # -p/-A because TACC refuses overlap steps without them on multi-project accounts

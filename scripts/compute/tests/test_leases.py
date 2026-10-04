@@ -73,10 +73,39 @@ class ReconcileTest(unittest.TestCase):
         self.leases = [lease_on(c, idle_since=T0)]
         self.assertEqual(self.run_at(None, [report(error="unreachable")], 500), [])
 
-    def test_vanished_card_is_released_when_its_report_probed_cleanly(self) -> None:
+    def test_vanished_card_needs_two_complete_probes_a_window_apart(self) -> None:
         self.leases = [lease_on(card())]
-        released = self.run_at(None, [report(card(index=3))], 1)
+        self.assertEqual(self.run_at(None, [report(card(index=3))], 1), [])
+        self.assertEqual(self.run_at(None, [report(card(index=3))], 30), [])
+        released = self.run_at(None, [report(card(index=3))], 31)
         self.assertEqual([why for _, why in released], ["card no longer exists"])
+
+    def test_reappearing_card_resets_the_vanish_clock(self) -> None:
+        self.leases = [lease_on(card())]
+        self.run_at(None, [report(card(index=3))], 1)
+        self.run_at(None, [report(card())], 2)
+        self.assertEqual(self.run_at(None, [report(card(index=3))], 40), [])
+
+    def test_partial_report_proves_nothing_missing(self) -> None:
+        self.leases = [lease_on(card())]
+        partial = report(card(index=3))
+        partial.partial = True
+        for minute in (1, 100, 200):
+            self.assertEqual(self.run_at(None, [partial], minute), [])
+
+    def test_non_running_slurm_job_proves_nothing_missing(self) -> None:
+        c = card(job="42")
+        self.leases = [ls.new_lease(c, Report("delta (delta)", "slurm", [c]), "s", "", 0)]
+        reports = [Report("delta (delta)", "slurm"), Report("delta (delta) job 42", "slurm", error="job is COMPLETING")]
+        for minute in (1, 100):
+            self.assertEqual(self.run_at(None, reports, minute), [])
+
+    def test_unattributed_process_does_not_hide_a_squatter(self) -> None:
+        c = card(state="busy", user="squatter")
+        c.procs.append(Proc(9, 100, "?"))
+        self.leases = [lease_on(c, last_active=T0)]
+        self.run_at(None, [report(c)], 1)
+        self.assertTrue(self.leases[0].conflict)
 
     def test_vanished_slurm_card_kept_while_its_job_is_uncertain(self) -> None:
         c = card(job="42")
@@ -168,6 +197,28 @@ class StoreTest(TempStore):
         with ls.locked_store() as leases:
             self.assertEqual(len({x.id for x in leases}), 100)
 
+    def test_wrong_types_and_bad_bytes_are_moved_aside(self) -> None:
+        good = json.loads(json.dumps([vars(lease_on(card()))]))
+        for patch in ({"created": "yesterday"}, {"created": None}, {"conflict": 1}, {"holder": 5}):
+            ls.STORE.write_text(json.dumps([dict(good[0], **patch)]))
+            with self.assertRaises(ls.LeaseStoreError), ls.locked_store():
+                pass
+            self.assertFalse(ls.STORE.exists(), patch)
+        ls.STORE.write_bytes(b"\xff\xfe[")
+        with self.assertRaises(ls.LeaseStoreError), ls.locked_store():
+            pass
+        self.assertEqual(len(list(ls.STORE.parent.glob("leases.json.corrupt-*"))), 5)
+
+    def test_unwritable_store_is_a_store_error(self) -> None:
+        ls.STORE = Path(self.dir.name) / "ro" / "leases.json"
+        ls.STORE.parent.mkdir()
+        ls.STORE.parent.chmod(0o500)
+        try:
+            with self.assertRaises(ls.LeaseStoreError), ls.locked_store():
+                pass
+        finally:
+            ls.STORE.parent.chmod(0o700)
+
     def test_parse_duration(self) -> None:
         self.assertEqual([ls.parse_duration(x) for x in ("90s", "30m", "2h", "1d", "5")], [90, 1800, 7200, 86400, 300])
         for bad in ("abc", "-5m", "0", ""):
@@ -239,6 +290,34 @@ class CommandTest(TempStore):
         finally:
             sys.argv = saved
         self.assertEqual(self.stored(), [])
+
+    def test_refused_claim_still_persists_releases(self) -> None:
+        with ls.locked_store() as leases:
+            leases.append(lease_on(card(index=0), expires=T0))  # time box long over
+        with self.assertRaises(SystemExit):
+            self.claim("mckennie:2")  # busy card: refused
+        self.assertEqual(self.stored(), [])
+
+    def test_any_packs_onto_hosts_already_in_use(self) -> None:
+        self.cards = [card(host="solo", index=0), card(index=0), card(index=1, state="busy")]
+        self.claim(any=True, count=1)
+        self.assertEqual(self.stored(), ["mckennie:0"])
+
+    def test_release_accepts_host_job_gpu(self) -> None:
+        self.cards = [card(host="gpub1", index=0, job="7")]
+        self.claim("gpub1:7:0")
+        res.cmd_release(argparse.Namespace(targets=["gpub1:7:0"], holder="s", force=False), self.pools)
+        self.assertEqual(self.stored(), [])
+
+    def test_bad_lease_windows_are_rejected(self) -> None:
+        saved = res.load_config
+        try:
+            for bad in ("soon", -5, 0, True, float("nan")):
+                res.load_config = lambda bad=bad: {"leases": {"grace_min": bad}}
+                with self.assertRaises(SystemExit):
+                    res.lease_windows()
+        finally:
+            res.load_config = saved
 
     def test_release_needs_the_holder_or_force(self) -> None:
         self.claim("mckennie:0")
