@@ -1,7 +1,5 @@
-# Shared Isaac image, reused by BOTH the Ray worker and the HPC Apptainer (.sif). Decoupled from the
-# IsaacLab source tree: nvcr isaacsim/Kit base + pip Isaac Lab; the workspace extensions are NOT baked in
-# -- they're mounted + PYTHONPATH'd at job start (see entrypoint.sh) so code syncs without a rebuild.
-# Build: scripts/docker/docker_interface.sh build  (or `just docker build`).
+# Shared Isaac image for the Ray worker and the HPC .sif: nvcr isaacsim base + pip Isaac Lab, with the
+# workspace packages mounted at job start (entrypoint.sh). Build: `just docker build`.
 
 ARG ISAACSIM_BASE_IMAGE=nvcr.io/nvidia/isaac-sim
 ARG ISAACSIM_VERSION=5.1.0
@@ -23,8 +21,8 @@ RUN --mount=type=cache,target=/var/cache/apt \
     build-essential cmake git wget curl openssh-client rsync graphviz libglib2.0-0 ncurses-term && \
     apt -y autoremove && apt clean autoclean && rm -rf /var/lib/apt/lists/*
 
-# Isaac Lab (pip, no [isaacsim] extra: the base image's Kit provides it) + RL + Ray + tooling, into Kit's
-# python. Pins here are inline; rsl-rl-lib is explicit because isaaclab's extra pins an older version.
+# Isaac Lab without the [isaacsim] extra (the base image's Kit provides it), RL, Ray and tooling.
+# rsl-rl-lib is explicit because isaaclab's extra pins an older version.
 RUN ${ISAAC_PY} -m pip install --upgrade pip && \
     ${ISAAC_PY} -m pip install flatdict==4.0.0 && \
     ${ISAAC_PY} -m pip install "isaaclab==2.3.2.post1" "rsl-rl-lib==5.4.1" && \
@@ -50,7 +48,7 @@ ENV PATH="/usr/local/nvidia/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/usr/local/nvidia/lib64"
 RUN ln -sf /usr/local/nvidia/bin/nvidia* /usr/bin 2>/dev/null || true
 
-# Apptainer/Singularity placeholders + cache dirs, so the SAME image converts cleanly to a .sif.
+# Apptainer bind-point placeholders and cache dirs, so the image converts to a .sif.
 RUN mkdir -p ${ISAACSIM_ROOT_PATH}/kit/cache /root/.cache/ov /root/.cache/pip \
     /root/.cache/nvidia/GLCache /root/.nv/ComputeCache /root/.nvidia-omniverse/logs \
     /root/.local/share/ov/data /root/Documents /tmp /workspace/ext && \
@@ -58,8 +56,7 @@ RUN mkdir -p ${ISAACSIM_ROOT_PATH}/kit/cache /root/.cache/ov /root/.cache/pip \
     /bin/nvidia-cuda-mps-control /bin/nvidia-cuda-mps-server /etc/localtime && \
     mkdir -p /var/run/nvidia-persistenced && touch /var/run/nvidia-persistenced/socket
 
-# Entrypoint PYTHONPATHs the mounted workspace extensions (+ IsaacLab source in source mode) ahead of the
-# baked pip isaaclab, then execs the requested command. Mount points are bound at run time.
+# The entrypoint PYTHONPATHs the mounted workspace packages ahead of the baked pip isaaclab.
 COPY entrypoint.sh /usr/local/bin/hcrl-entrypoint
 RUN chmod +x /usr/local/bin/hcrl-entrypoint
 

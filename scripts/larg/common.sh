@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Shared config + helpers for deploying to the UT LARG GPU boxes.
-#
-# These are bare-metal workstations (no SLURM, no containers) reachable directly
-# over SSH from this device. We run training in a per-box `ilab` uv venv that
-# mirrors the local one (Isaac Lab installed via the justfile `setup` flow).
+# Shared config + helpers for the UT LARG GPU boxes: bare-metal workstations reached over SSH, with
+# training in a per-box `ilab` uv venv.
 
 set -euo pipefail
 
@@ -13,8 +10,7 @@ LARG_DOMAIN="${LARG_DOMAIN:-cs.utexas.edu}"
 # Remote path (relative to remote $HOME) where the manager tree is synced.
 LARG_REMOTE_DIR="${LARG_REMOTE_DIR:-hcrl_isaac_manager}"
 
-# Absolute LARG_REMOTE_DIR is honoured as-is; a bare name stays relative to the remote $HOME. Point it
-# at /var/local/$USER to bypass the shared home's quota, at the cost of one sync per box.
+# Remote manager path: an absolute LARG_REMOTE_DIR as-is, a bare name relative to the remote $HOME.
 larg_remote_path() {
   case "$LARG_REMOTE_DIR" in
     /*) printf '%s' "$LARG_REMOTE_DIR" ;;

@@ -21,12 +21,11 @@ if [ "${1:-}" = "--loop" ]; then loop=1; shift; case "${1:-}" in ''|*[!0-9]*) ;;
 task="$1"; project="${2:-$DEFAULT_PROJECT}"
 [ -n "${task:-}" ] || { echo "usage: $0 [--loop [secs]] <task> [wandb_project]"; exit 1; }
 
-# Call video_logger.py directly with absolute paths. Skip a pass if the
-# local render GPU is busy (>50%), mirroring the wrapper's guard.
+# One pass; skipped when the local render GPU is over 50% busy.
 run_once() {
   local util; util=$(nvidia-smi --query-gpu=utilization.gpu --id=0 --format=csv,noheader,nounits 2>/dev/null | tr -d ' ')
   if [ -n "$util" ] && [ "$util" -gt 50 ]; then echo "[video] local GPU ${util}% busy; skipping pass"; return 0; fi
-  # --max_runs_per_sweep 1: record ONE source run per process then exit (this loop restarts it)
+  # --max_runs_per_sweep 1: one source run per process (the loop restarts it)
   ( set -a; . "$ENV_WANDB"; set +a
     cd "$SCRIPTS_DIR" && "$VENV_PY" -u video_logger.py --mode async --task "$task" \
       --wandb_project "$project" --max_runs_per_sweep 1 )

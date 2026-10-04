@@ -16,9 +16,7 @@ fi
 VENV_ACTIVATE="${MANAGER_DIR}/${VENV_NAME}/bin/activate"
 WANDB_ENV="${MANAGER_DIR}/scripts/.env.wandb"
 
-# Single venv + single entry point: `ilab` activates the venv, sources W&B creds, and drops you in
-# the manager dir. From there the hcrl_isaaclab scripts run from anywhere (e.g. `uv run` / `python -m`),
-# so there's no separate extension-dir alias.
+# `ilab` activates the venv, sources the W&B creds and cds to the manager dir.
 if [ -f "$VENV_ACTIVATE" ]; then
     alias ilab="{ [ -f '${WANDB_ENV}' ] && source '${WANDB_ENV}'; }; cd ${MANAGER_DIR} && source '${VENV_ACTIVATE}'"
 else

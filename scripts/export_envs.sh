@@ -15,7 +15,6 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 while IFS= read -r line || [[ -n "$line" ]]; do
-  # Ignore empty lines and comments
   [[ -z "$line" || "$line" == \#* ]] && continue
 
   export "$line"

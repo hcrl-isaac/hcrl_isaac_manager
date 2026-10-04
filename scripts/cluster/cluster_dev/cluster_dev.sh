@@ -16,6 +16,7 @@
 # Queue a job:              ./cluster_dev.sh start            (approve ONE 2FA prompt)
 # Then it self-tracks the (possibly multi-hour) queue wait in the background.
 # Check anytime:            ./cluster_dev.sh status
+# Mirror code:              ./cluster_dev.sh sync [--dry-run] (--dry-run lists what would change or be deleted)
 # Use it:                   ./cluster_dev.sh attach           (interactive shell on the node)
 #                           ./cluster_dev.sh exec -- <cmd>    (run in container, SSH-tethered)
 #                           ./cluster_dev.sh exec --detach -- <cmd>   (run in container, detached
@@ -163,22 +164,33 @@ rsync_code() {
     # must not deploy to THIS cluster (e.g. another session's *_pbfm forks, which shadow package names).
     local extra_excludes=() cfg dest remote_only name
     # Every config that syncs to this destination contributes its .rsync-exclude, so a sync through one
-    # config cannot delete what a sibling config protects.
+    # config cannot delete what a sibling config protects. Destinations compare as expanded values.
     for cfg in "${SCRIPT_DIR}"/../config/*/; do
         dest=""
-        [ -f "${cfg}.env.cluster" ] && dest="$(sed -n 's/^CLUSTER_ISAACLAB_DIR=//p' "${cfg}.env.cluster" | tail -1 | tr -d '"')"
+        [ -f "${cfg}.env.cluster" ] && \
+            dest="$(bash -c 'source "$1" >/dev/null 2>&1; printf %s "${CLUSTER_ISAACLAB_DIR:-}"' _ "${cfg}.env.cluster")"
         [ "$dest" = "$REMOTE_ISAACLAB_DIR" ] || [ "$(basename "$cfg")" = "$CLUSTER" ] || continue
         [ -f "${cfg}.rsync-exclude" ] && extra_excludes+=(--exclude-from="${cfg}.rsync-exclude")
     done
-    # resources/* repos that exist only on the remote (cluster-only forks) are never deleted.
+    # resources/* repos that exist only on the remote (cluster-only forks, or retired here with only
+    # worktrees/ left) are never deleted.
     remote_only="$(on_login "[ ! -d '${REMOTE_ISAACLAB_DIR}/resources' ] || ls -1 '${REMOTE_ISAACLAB_DIR}/resources'")" || {
         err "cannot list ${REMOTE_ISAACLAB_DIR}/resources on the remote; refusing to sync with --delete"; return 1; }
-    for name in $remote_only; do
-        [ -e "${LOCAL_ISAACLAB_DIR}/resources/${name}" ] || extra_excludes+=(--exclude="/resources/${name}")
-    done
-    rsync -rlptvh --delete --info=progress2 \
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        if [ ! -e "${LOCAL_ISAACLAB_DIR}/resources/${name}" ] || \
+           [ -z "$(ls -A "${LOCAL_ISAACLAB_DIR}/resources/${name}" 2>/dev/null | grep -vx worktrees)" ]; then
+            extra_excludes+=(--exclude="/resources/${name}")
+        fi
+    done <<< "$remote_only"
+    # extra rsync args from the caller, e.g. `sync --dry-run` -> -n --itemize-changes
+    rsync -rlptvh --delete --info=progress2 "$@" \
         `# worktrees are per-session state: local ones never ship, remote ones are never deleted` \
         --exclude='**/worktrees/' \
+        `# hydra run dirs are run output, like logs/` \
+        --exclude='/outputs/' --exclude='/resources/*/outputs/' \
+        `# local working docs and session worktrees never ship` \
+        --exclude='/.claude/' --exclude='/resources/*/.claude/' \
         `# the selected config's env is read from config/<name>/ on the node, not from a shared slot` \
         --exclude='/scripts/cluster/.env.cluster' \
         `# legacy pre-reorg tree: un-protect it so --delete can clear it despite excluded contents` \
@@ -369,6 +381,8 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
         esac
     done
     require_running
+    # exec always runs with the current local config, even on a destination that hasn't been synced
+    push_env_cluster || { err "could not push ${ENV_FILE} to ${REMOTE_ENV_FILE}"; exit 1; }
     local nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} bash ${REMOTE_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh $*"
     if [ -z "$detach" ]; then
         log "[${DD_MODE}] container exec on job ${DD_JOBID}: $*"
@@ -421,8 +435,13 @@ cmd_tail() {  # cluster_dev.sh tail [LOGFILE]  : follow a detached --detach log 
     ssh "${SSH_OPTS[@]}" -t "$CLUSTER_LOGIN" "tail -F ${logfile}"
 }
 
-cmd_sync() {  # re-mirror local code -> cluster isaaclab dir (and onto the live node workspace)
+cmd_sync() {  # sync [--dry-run] : re-mirror local code -> cluster isaaclab dir (and onto the live node workspace)
     ensure_master
+    if [ "${1:-}" = "--dry-run" ]; then
+        rsync_code -n --itemize-changes
+        log "Dry run: nothing was transferred or deleted (lines starting '*deleting' would be removed)."
+        return
+    fi
     stage_node_exec
     rsync_code
     push_env_cluster

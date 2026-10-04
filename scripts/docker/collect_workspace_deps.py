@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """Collect the runtime dependencies of the mounted workspace packages into a requirements file.
 
-Workspace packages are PYTHONPATH'd into the image rather than pip-installed, so their dependencies
-have to be baked in separately. Reading them from each repo's own metadata keeps that list from
-drifting the way a hand-maintained one does.
-
 Repos come from the committed catalogue (``workspace.defaults.yaml``: the ``always`` list plus every
-project's task repo and their ``dependencies.yaml`` closure), never from whatever happens to be cloned
-locally, so the output is the same on every machine. Both declaration styles are read:
+project's task repo and their ``dependencies.yaml`` closure). Dependencies are read from
 ``[project].dependencies`` in pyproject.toml and ``INSTALL_REQUIRES`` in setup.py (AST, never executed).
+
+Writes ``requirements.workspace.txt`` next to this script; ``--check`` verifies it instead.
 """
 
 from __future__ import annotations
@@ -24,12 +21,10 @@ import yaml
 
 MANAGER_DIR = Path(__file__).resolve().parents[2]
 
-# Packages the base image already provides. torch/torchvision matter most: the image ships +cu128
-# builds and a plain "torch==2.7.0" from PyPI would be a CPU/other-CUDA wheel.
+# Packages the base image already provides; a PyPI torch would replace its +cu128 build.
 BASE_PROVIDED = {"torch", "torchvision", "isaaclab", "isaacsim"}
 
-# Nested packages outside the catalogue: the retargeting stack is the runtime part of holosoma (its
-# sibling `holosoma` package declares a dev-only set that has no place in the image).
+# Nested packages outside the catalogue: only holosoma's retargeting package is a runtime dependency.
 NESTED_PACKAGES = ("holosoma/src/holosoma_retargeting",)
 
 
@@ -170,8 +165,7 @@ def main() -> int:
             by_spec.setdefault(spec, set()).add(source)
         if len(by_spec) > 1:
             conflicts.append(f"{name}: {sorted(by_spec)} (from {sorted(set().union(*by_spec.values()))})")
-        # Every declared specifier is emitted: pip intersects repeated requirements for one project,
-        # so the tightest pin wins without this script having to choose (and choose wrong).
+        # Every declared specifier is emitted: pip intersects repeated requirements for one project.
         lines.extend(f"{spec}  # {', '.join(sorted(by_spec[spec]))}" for spec in sorted(by_spec))
 
     header = [

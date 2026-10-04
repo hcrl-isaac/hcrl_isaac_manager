@@ -1,18 +1,11 @@
 """Print the Ray ``file_mounts`` YAML block for the resolved workspace package repos.
 
-Each workspace Python package under ``resources/`` (hcrl_isaaclab, robot_rl, the ``*_tasks`` and any
-packaged ``*_robots``) is uploaded to the Ray cluster as a py_module and placed at ``/workspace/ext/<name>``
-inside the shared Isaac image, then editable/PYTHONPATH'd there. The image bakes isaacsim (nvcr base) +
-Isaac Lab (pip), so nothing from the IsaacLab source tree is required. Data-only repos (no setup.py/
-pyproject, e.g. ``hcrl_robots``) are skipped -- their bulk files are fetched at runtime as W&B artifacts.
+Each workspace Python package under ``resources/`` maps to ``/workspace/ext/<name>`` in the shared Isaac
+image; data-only repos (no setup.py/pyproject) are skipped. In IsaacLab source mode the
+``resources/IsaacLab/source/isaaclab*`` packages are mounted too.
 
-Source-mode overlay: when ``workspace.yaml`` has ``isaaclab.source: true``, the local IsaacLab source
-packages (``resources/IsaacLab/source/isaaclab*``) are mounted alongside so they land on the worker
-PYTHONPATH ahead of the baked pip isaaclab, overriding it. Pip mode emits none of these, so the baked
-pip isaaclab is used.
-
-Emitted as a YAML flow mapping with absolute local paths so it can be injected verbatim into the
-job-config templates via ``envsubst`` (``file_mounts: ${WORKSPACE_FILE_MOUNTS}``).
+Output is a YAML flow mapping of absolute local paths, injected into the job-config templates via
+``envsubst`` (``file_mounts: ${WORKSPACE_FILE_MOUNTS}``).
 """
 
 from __future__ import annotations
@@ -51,12 +44,11 @@ def main() -> None:
     resources = os.path.join(MANAGER_DIR, "resources")
     # the same repo list `just run WT=` selects, so a Ray job ships the same worktree set
     candidates = [os.path.join(resources, repo) for repo in workspace_repos(resources)]
-    # HCRL_WT=<name>: ship the named worktree instead of the main checkout for any repo that has one,
-    # so a Ray job carries exactly the code line it is meant to run and nothing else.
+    # HCRL_WT=<name>: ship the named worktree instead of the main checkout for any repo that has one
     wt = os.environ.get("HCRL_WT", "")
     if wt:
-        # (source path, repo name): the container path and dedup key must stay the REPO name, or every
-        # repo's worktree collapses onto the shared worktree-set basename.
+        # (source path, repo name): the container path and dedup key are the repo name, since every
+        # repo's worktree shares the worktree-set basename
         resolved = []
         for c in candidates:
             wdir = os.path.join(c, "worktrees", wt)
@@ -66,7 +58,7 @@ def main() -> None:
         candidates = resolved
     else:
         candidates = [(c, os.path.basename(c)) for c in candidates]
-    # Source-mode overlay: editable IsaacLab source packages override the baked pip isaaclab.
+    # source mode: IsaacLab source packages override the baked pip isaaclab
     if _source_mode():
         candidates += [
             (c, os.path.basename(c))
