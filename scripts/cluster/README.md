@@ -1,46 +1,56 @@
 # Deploying to HPC Clusters
 
-This repo provides some utility scripts for deploying to HPC clusters, following a similar workflow as described in the [Isaac Lab docs](https://isaac-sim.github.io/IsaacLab/main/source/deployment/cluster.html).
+Utility scripts for running the workspace on SLURM clusters (e.g. NCSA Delta, TACC Stampede3) inside the shared
+Apptainer image, following the workflow of the [Isaac Lab docs](https://isaac-sim.github.io/IsaacLab/main/source/deployment/cluster.html).
 
-## Getting Started
+## Getting started
 
-To set up cluster configuration files, run
-```bash
-just cluster add
-```
-and fill out the following prompts. This will create `.env.cluster` and `submit_job_slurm.sh` files in `scripts/cluster/<name>_config`. If no name is provided, it will be set to `default`.
+1. Create your cluster profile:
+   ```bash
+   just cluster add [name]
+   ```
+   The prompts write `scripts/cluster/config/<name>/.env.cluster` and `submit_job_slurm.sh`. Profiles are per-user
+   and gitignored. Use a large-quota filesystem for the workspace directory (e.g. `$WORK` on TACC; every job copies
+   the workspace there) and `$SCRATCH` for the `.sif` and Isaac Sim cache. For a `*.tacc.utexas.edu` login the
+   profile also loads TACC's `tacc-apptainer` module.
+2. Regenerate a profile after a template change, keeping your values as defaults (old files are backed up and the
+   diff is printed):
+   ```bash
+   just cluster add --update <name>
+   ```
+3. Create `scripts/.env.wandb` from `scripts/tools/.env.wandb.template`; `just cluster job` refuses to run without it.
+4. Build the `.sif` from the shared docker image and push it to the cluster (only needed when the image changes):
+   ```bash
+   just cluster <name> setup
+   ```
 
-You can then deploy the Isaac Lab image to the cluster with
-```bash
-just cluster <optional name>
-```
-If no name is specified, the `default` cluster will be used.
+## Commands
 
-This performs the following steps:
+`CLUSTER=<name> just cluster <cmd>` and `just cluster <name> <cmd>` are equivalent.
 
-1. Install necessary dependencies (Docker, Apptainer, nvidia-toolkit-container).
-2. Build and start the Isaac Lab Docker container.
-3. Compile the Docker container into an Apptainer image.
-4. Tar and copy the image to the cluster.
+| command | what it does |
+|---|---|
+| `add [--update] [name]` | create or regenerate your profile |
+| `setup` | build the `.sif` and rsync it to `CLUSTER_SIF_PATH` |
+| `build` | build the `.sif` only (into `scripts/cluster/exports/`) |
+| `push` / `repush` | rsync an already built `.sif` (reuses the SSH master) |
+| `job [args]` | copy the workspace to a timestamped dir under `CLUSTER_ISAACLAB_DIR`, then `sbatch` `scripts/train.py [args]` |
+| `develop ...` | persistent dev node: see [cluster_dev/README.md](cluster_dev/README.md) |
 
-## Cluster Interface
+Code changes ride each job's copy, so the `.sif` only needs a rebuild when dependencies change. The copy is removed
+when the job ends (`REMOVE_CODE_COPY_AFTER_JOB`); logs go to `CLUSTER_ISAACLAB_DIR/logs`, outside it.
 
-Cluster names can be specified with `CLUSTER=<name> just cluster <cmd>` (or `just cluster <name> <cmd>`). If no name is specified, it will be set to `default`.
+## Profile settings (`.env.cluster`)
 
-### `just cluster job`
+| var | note |
+|---|---|
+| `CLUSTER_LOGIN` | `user@login-host` |
+| `CLUSTER_ISAACLAB_DIR` | workspace on the cluster (ends in `isaaclab`); job copies and logs |
+| `CLUSTER_SIF_PATH`, `CLUSTER_ISAAC_SIM_CACHE_DIR` | scratch locations of the `.sif` and the Isaac Sim cache |
+| `CLUSTER_PYTHON_EXECUTABLE` | script (plus fixed args) a `job` runs, e.g. `scripts/train.py` or a `torch.distributed.run` line |
+| `CLUSTER_APPTAINER_FLAGS` | extra `apptainer exec` flags; default `--fakeroot`, which TACC needs to read the image's `/isaac-sim` |
+| `CLUSTER_MODULE_LOAD` | Lmod module(s) providing apptainer on compute nodes (TACC: `tacc-apptainer`); blank if it is on `PATH` |
+| `OMP_NUM_THREADS` | threads per process |
 
-- Sends a training job to the cluster (runs `hcrl_isaaclab/scripts/train.py`).
-- Can be followed by any arguments you'd like to pass to the script (e.g. `--task reach-v0`)
-- Unlike with the Ray clusters, this copies *all* Isaac Lab code to the cluster, and will therefore include any changes made to Isaac Lab itself (not just the extensions)
-
-### `just cluster push`
-
-- Builds the Apptainer image from an existing Isaac Lab Docker image
-    - This expects that the Docker image already exists. To create both the Docker and Apptainer image, use `just cluster`.
-- Note that the Apptainer image only needs to be rebuilt if the Docker image changes (e.g. if updating top-level dependencies). Code changes are synced on job deployment.
-
-### `just cluster repush`
-
-- Pushes an *existing* tarred Apptainer image to the cluster.
-- It can be used if the SSH request from the `push` command times out, or if you have an existing .sif image that you'd like to copy to a new cluster.
-    - You can find the existing image in `resources/IsaacLab/docker/cluster/exports`.
+The job's resources (`-p`, `-A`, `-n`, `--cpus-per-task`, `--time`, mail) are the `#SBATCH` lines of
+`submit_job_slurm.sh`; `develop` reuses them for its sentinel.

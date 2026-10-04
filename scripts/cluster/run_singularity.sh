@@ -42,7 +42,7 @@ JOB_TMPDIR="$TMPDIR/isaaclab_$SLURM_JOB_ID"
 
 # load variables to set the Isaac Lab path on the cluster
 source $SCRIPT_DIR/.env.cluster
-source $SCRIPT_DIR/.env.wandb
+source $SCRIPT_DIR/.env.wandb || { echo "(run_singularity.py): no W&B credentials at $SCRIPT_DIR/.env.wandb"; exit 1; }
 # .env.base is only present in source mode; default the container paths so `set -u` doesn't trip.
 [ -f "$SCRIPT_DIR/../.env.base" ] && source "$SCRIPT_DIR/../.env.base"
 # some clusters ship the container runtime as an Lmod module (e.g. TACC's tacc-apptainer)
@@ -104,9 +104,9 @@ for d in "$SYNC_DIR"/resources/*/; do
 done
 [ -d "$SYNC_DIR/resources/IsaacLab/source" ] && EXT_BINDS="$EXT_BINDS -B $SYNC_DIR/resources/IsaacLab/source:/workspace/isaaclab_source:rw"
 
-# execute command in singularity container
-# NOTE: ISAACLAB_PATH is normally set in `isaaclab.sh` but we directly call the isaac-sim python because we sync the entire
-# Isaac Lab directory to the compute node and remote the symbolic link to isaac-sim
+echo "(run_singularity.py) apptainer: $(command -v apptainer || echo 'not found') $(apptainer --version 2>/dev/null)," \
+    "flags: '${CLUSTER_APPTAINER_FLAGS:-}', modules: '${CLUSTER_MODULE_LOAD:-}'"
+# isaac-sim's python is called directly: the synced tree has no isaaclab.sh or isaac-sim symlink
 apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B $JOB_TMPDIR/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B $HOME_DIR:${DOCKER_USER_HOME}:rw \
@@ -130,9 +130,8 @@ rsync -azPv $JOB_TMPDIR/docker-isaac-sim $CLUSTER_ISAAC_SIM_CACHE_DIR/..
 # clean up tmpdir
 rm -rf $JOB_TMPDIR
 
-# if defined, remove the temporary isaaclab directory pushed when the job was submitted
-# only remove folders if run finished successfully -- otherwise we want to keep the logs
-if $REMOVE_CODE_COPY_AFTER_JOB && [ $EXIT_CODE -eq 0 ]; then
+# remove the job's code copy whatever the exit code: logs are bound to $CLUSTER_ISAACLAB_DIR/logs, outside it
+if $REMOVE_CODE_COPY_AFTER_JOB; then
     rm -rf $1
 fi
 

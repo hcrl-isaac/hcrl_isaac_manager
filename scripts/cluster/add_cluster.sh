@@ -1,26 +1,45 @@
 #!/usr/bin/env bash
-# Create a cluster config (scripts/cluster/config/<name>/) from the templates. Invoked by
-# `just cluster add`.
+# Create or regenerate a per-user cluster profile (scripts/cluster/config/<name>/, gitignored) from the
+# templates. Invoked by `just cluster add [--update] [name]`.
 set -euo pipefail
 cd "$(dirname "$0")/.."  # scripts/
 
-read -p "Cluster Nickname (leave blank for default): " cluster_name
+update=""
+[ "${1:-}" = "--update" ] && { update=1; shift; }
+cluster_name="${1:-}"
+[ -z "$cluster_name" ] && read -r -p "Cluster Nickname (leave blank for default): " cluster_name
 [ -z "$cluster_name" ] && cluster_name="default"
 outdir="cluster/config/${cluster_name}"
-if [ -d "$outdir" ]; then
-    echo "[ERROR] Cluster config '$cluster_name' already exists. Delete it, edit it directly, or pick a different name." >&2
-    exit 1
+env_file="$outdir/.env.cluster"
+job_file="$outdir/submit_job_slurm.sh"
+
+if [ -d "$outdir" ] && [ -z "$update" ]; then
+    read -r -p "Profile '$cluster_name' exists. Regenerate it with its current values as defaults? [y/N] " yn
+    case "$yn" in [yY]*) update=1 ;; *) echo "[INFO] Left $outdir unchanged."; exit 0 ;; esac
 fi
 
-read -p "Cluster Login (username@address): " cluster_login
-read -p "Home Directory (\$HOME from cluster machine): " home
-read -p "Scratch Directory (\$SCRATCH from cluster machine): " scratch
-read -p "Email (for job notifications): " email
-read -p "Queue Name: " queue
-read -p "Allocation/Account (#SBATCH -A, leave blank if not needed): " account
-read -p "GPUs per Node: " num_procs
-read -p "CPUs per Task/GPU: " num_cpus
-case "$home" in /*) ;; *) home="/$home" ;; esac
+# Current values of an existing profile become the prompt defaults.
+env_get() { [ -f "$env_file" ] && sed -n "s/^$1=//p" "$env_file" | tail -1 | tr -d '"' || true; }
+sbatch_get() { [ -f "$job_file" ] && sed -n "s/^#SBATCH $1[ =]//p" "$job_file" | tail -1 || true; }
+ask() {  # ask VAR "Prompt" DEFAULT
+    local reply
+    read -r -p "$2${3:+ [$3]}: " reply
+    printf -v "$1" '%s' "${reply:-$3}"
+}
+
+cur_dir="$(env_get CLUSTER_ISAACLAB_DIR)"
+ask cluster_login "Cluster Login (username@address)" "$(env_get CLUSTER_LOGIN)"
+ask workspace "Workspace Directory (large quota, e.g. \$WORK on TACC; job code copies and logs)" \
+    "${cur_dir:+$(dirname "$cur_dir")}"
+ask scratch "Scratch Directory (\$SCRATCH from cluster machine; .sif and Isaac Sim cache)" "$(env_get CLUSTER_SIF_PATH)"
+ask email "Email (for job notifications)" "$(sbatch_get --mail-user)"
+ask queue "Queue Name" "$(sbatch_get -p)"
+ask account "Allocation/Account (#SBATCH -A, leave blank if not needed)" "$(sbatch_get -A)"
+ask num_procs "GPUs per Node" "$(sbatch_get -n)"
+ask num_cpus "CPUs per Task/GPU" "$(sbatch_get --cpus-per-task)"
+cur_time="$(sbatch_get --time)"
+ask walltime "Walltime (HH:MM:SS)" "${cur_time:-24:00:00}"
+case "$workspace" in /*) ;; *) workspace="/$workspace" ;; esac
 case "$scratch" in /*) ;; *) scratch="/$scratch" ;; esac
 account_line=""
 [ -n "$account" ] && account_line="#SBATCH -A $account"
@@ -30,12 +49,32 @@ case "$cluster_login" in *.tacc.utexas.edu) module_load="tacc-apptainer" ;; esac
 module_loads=""
 [ -n "$module_load" ] && module_loads="module load $module_load"
 
+backup=""
+if [ -n "$update" ] && [ -d "$outdir" ]; then
+    backup="$outdir/.backup-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$backup"
+    cp -a "$outdir"/.env.cluster "$outdir"/submit_job_slurm.sh "$backup"/ 2>/dev/null || true
+fi
 mkdir -p "$outdir"
 echo "[INFO] Writing cluster env file..."
-HOME="$home" SCRATCH="$scratch" CLUSTER_LOGIN="$cluster_login" NUM_PROCS="$num_procs" NUM_CPUS="$num_cpus" \
-    CLUSTER_MODULE_LOAD="$module_load" envsubst < cluster/tools/.env.cluster.template > "$outdir/.env.cluster"
+WORKSPACE="$workspace" SCRATCH="$scratch" CLUSTER_LOGIN="$cluster_login" NUM_CPUS="$num_cpus" \
+    CLUSTER_MODULE_LOAD="$module_load" \
+    envsubst '$WORKSPACE $SCRATCH $CLUSTER_LOGIN $NUM_CPUS $CLUSTER_MODULE_LOAD' \
+    < cluster/tools/.env.cluster.template > "$env_file"
 echo "[INFO] Writing SLURM job config file..."
-EMAIL="$email" QUEUE="$queue" NUM_PROCS="$num_procs" NUM_CPUS="$num_cpus" \
+EMAIL="$email" QUEUE="$queue" NUM_PROCS="$num_procs" NUM_CPUS="$num_cpus" WALLTIME="$walltime" \
     ACCOUNT_LINE="$account_line" MODULE_LOADS="$module_loads" \
-    envsubst < cluster/tools/submit_job_slurm.template.sh > "$outdir/submit_job_slurm.sh"
-echo "[INFO] Created cluster config in $outdir."
+    envsubst '$EMAIL $QUEUE $NUM_PROCS $NUM_CPUS $WALLTIME $ACCOUNT_LINE $MODULE_LOADS' \
+    < cluster/tools/submit_job_slurm.template.sh > "$job_file"
+
+if [ -n "$backup" ] && [ -f "$backup/.env.cluster" ]; then
+    # keep settings the template doesn't know about (e.g. CLUSTER_SRUN_EXTRA)
+    while IFS= read -r line; do
+        key="${line%%=*}"
+        grep -q "^${key}=" "$env_file" || echo "$line" >> "$env_file"
+    done < <(grep -E '^[A-Z_][A-Z0-9_]*=' "$backup/.env.cluster")
+    echo "[INFO] Previous files saved in $backup. Changes:"
+    diff -u "$backup/.env.cluster" "$env_file" || true
+    diff -u "$backup/submit_job_slurm.sh" "$job_file" || true
+fi
+echo "[INFO] Wrote cluster profile $outdir (per-user, not tracked by git)."

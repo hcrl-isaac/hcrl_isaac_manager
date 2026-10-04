@@ -14,6 +14,17 @@ CLUSTER_ENV_FILE="${SCRIPT_DIR}/config/${CLUSTER}/.env.cluster"
 # Reuse the persistent SSH control master (opened by `cluster_dev.sh start`) so push/job need no 2FA.
 SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${HOME}/.ssh/cm/%C" -o ControlPersist=48h -o ConnectTimeout=60)
 
+# Profiles used to be tracked: a pull that untracked them deletes submit_job_slurm.sh next to a kept
+# .env.cluster, so restore it from the commit that removed it.
+restore_untracked_profile() {
+    local rel="scripts/cluster/config/${CLUSTER}/submit_job_slurm.sh" repo="${SCRIPT_DIR}/../.." sha
+    [ -f "$CLUSTER_ENV_FILE" ] && [ ! -f "${repo}/${rel}" ] || return 0
+    sha="$(git -C "$repo" log --diff-filter=D -1 --format=%H -- "$rel" 2>/dev/null)"
+    [ -n "$sha" ] || return 0
+    git -C "$repo" show "${sha}^:${rel}" > "${repo}/${rel}" && echo "[INFO] Restored ${rel} from ${sha:0:7}^ (profiles are per-user now)."
+}
+restore_untracked_profile
+
 source_cluster_env() {
     if [ ! -f "$CLUSTER_ENV_FILE" ]; then
         echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'just cluster add'). Available:" \
@@ -62,6 +73,11 @@ submit_job() {
 
 cmd_job() {
     source_cluster_env
+    [ -f "$SCRIPT_DIR/../.env.wandb" ] || {
+        echo "[ERROR] scripts/.env.wandb not found: a job without W&B credentials cannot log. Create it from" \
+            "scripts/tools/.env.wandb.template." >&2
+        exit 1
+    }
     # Sync to a timestamped dir so concurrent jobs don't clobber each other's code copy.
     CLUSTER_ISAACLAB_DIR="${CLUSTER_ISAACLAB_DIR}_$(date +"%Y%m%d_%H%M%S")"
     ensure_ssh_master
@@ -78,12 +94,8 @@ cmd_job() {
     echo "[INFO] Staging ${CLUSTER} env + W&B creds into the synced workspace..."
     rsync -vh -e "ssh ${SSH_OPTS[*]}" "$CLUSTER_ENV_FILE" \
         "$CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR/scripts/cluster/.env.cluster"
-    if [ -f "$SCRIPT_DIR/../.env.wandb" ]; then
-        rsync -vh -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/../.env.wandb" \
-            "$CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR/scripts/cluster/.env.wandb"
-    else
-        echo "[WARN] scripts/.env.wandb not found -- the job will run without W&B credentials."
-    fi
+    rsync -vh -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/../.env.wandb" \
+        "$CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR/scripts/cluster/.env.wandb"
     echo "[INFO] Submitting job..."
     submit_job "$@"
 }
@@ -106,7 +118,7 @@ case "$cmd" in
         echo "  setup         build the shared .sif and rsync it to the cluster"
         echo "  build         build the .sif from the shared docker image (no push)"
         echo "  push/repush   rsync the built .sif to the cluster (reuses the SSH master; no 2FA)"
-        echo "  add           create a cluster config (scripts/cluster/config/<name>)"
+        echo "  add [--update] [name]  create or regenerate your profile (scripts/cluster/config/<name>, gitignored)"
         echo "  job [args]    rsync the workspace + submit a batch job"
         echo "  develop ...   manage a persistent dev node (start/status/attach/exec/sync/kill/stop)"
         ;;
