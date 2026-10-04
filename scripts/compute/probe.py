@@ -11,18 +11,21 @@ from dataclasses import asdict, dataclass, field
 
 from inventory import Pool
 
-# Idle cards read 0-545 MiB and the smallest card seen in use reads ~2.4 GB, so 1 GiB sits in that gap: more
-# than this with no visible process is held (e.g. Isaac kept its VRAM after exit).
+# Idle cards read 0-545 MiB and the smallest card seen in use reads ~2.4 GB, so 1 GiB sits in that gap: at or
+# above this with no visible process a card is held (e.g. Isaac kept its VRAM after exit).
 HELD_MIB = 1024
-# Utilization above this with no visible process also means the card is in use.
+# Utilization at or above this with no visible process also means the card is in use.
 HELD_UTIL = 10
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
-# Over an existing master only: a dead socket fails (state UNKNOWN) instead of dialing a new connection.
+# Over an existing master only: with its socket gone, ProxyCommand=false makes the call fail (UNKNOWN) instead
+# of dialing a new connection that would need 2FA.
 MASTER_OPTS = ["-o", "ControlMaster=no", "-o", f"ControlPath={os.path.expanduser('~')}/.ssh/cm/%C"]
+MASTER_OPTS += ["-o", "ProxyCommand=false"]
 
 # One round trip per host. Each section ends with a marker carrying its nvidia-smi exit code, and the ps pid
 # list comes from the same apps query, so a truncated or failed probe is detectable.
 GPU_QUERY = r"""
+echo "@@CARDS"
 out=$(nvidia-smi --query-gpu=index,uuid,name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>&1)
 rc=$?; printf '%s\n' "$out"; echo "@@APPS rc=$rc"
 apps=$(nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noheader,nounits 2>&1)
@@ -108,19 +111,33 @@ def short_cmd(args: str) -> str:
     return f"{script} {task}".strip()
 
 
+MARKERS = ["@@CARDS", "@@APPS", "@@PS", "@@END"]
+
+
 def _sections(out: str) -> dict[str, list[str]]:
-    sections = {"cards": [], "apps": [], "ps": []}
-    rcs, key, ended = {}, "cards", False
+    """Split GPU_QUERY output into its sections; lines before @@CARDS (login banners) are ignored."""
+    sections: dict[str, list[str]] = {"cards": [], "apps": [], "ps": []}
+    keys = {"@@CARDS": "cards", "@@APPS": "apps", "@@PS": "ps"}
+    rcs: dict[str, str] = {}
+    seen: list[str] = []
+    key = None
     for line in out.splitlines():
-        if line.startswith("@@APPS"):
-            rcs["cards"], key = line.partition("rc=")[2].strip(), "apps"
-        elif line.startswith("@@PS"):
-            rcs["apps"], key = line.partition("rc=")[2].strip(), "ps"
-        elif line.startswith("@@END"):
-            ended = True
+        marker = line.split(" ", 1)[0] if line.startswith("@@") else None
+        if marker in MARKERS:
+            if marker in seen or MARKERS.index(marker) != len(seen):
+                raise ProbeError(f"probe markers out of order at {marker}")
+            seen.append(marker)
+            if marker == "@@APPS":
+                rcs["cards"] = line.partition("rc=")[2].strip()
+            elif marker == "@@PS":
+                rcs["apps"] = line.partition("rc=")[2].strip()
+            key = keys.get(marker)
+        elif key is None:
+            if seen and line.strip():
+                raise ProbeError(f"unexpected output after @@END: {line[:80]}")
         elif line.strip():
             sections[key].append(line)
-    if not ended or set(rcs) != {"cards", "apps"}:
+    if seen != MARKERS:
         raise ProbeError("probe output truncated")
     for name, label in (("cards", "card query"), ("apps", "process query")):
         if rcs[name] != "0":
@@ -161,7 +178,7 @@ def parse_gpu_query(out: str, pool: str, host: str) -> list[Card]:
         # name may contain commas: index and uuid from the front, the three numbers from the back
         index, uuid, name = int(f[0]), f[1], ", ".join(f[2:-3])
         used, total, util = (_int(x) for x in f[-3:])
-        procs = procs_by_uuid.get(uuid, [])
+        procs = procs_by_uuid.pop(uuid, [])
         card = Card(
             pool, host, index, name, used if used is not None else -1, total or 0, util or 0, uuid=uuid, procs=procs
         )
@@ -174,6 +191,8 @@ def parse_gpu_query(out: str, pool: str, host: str) -> list[Card]:
         cards.append(card)
     if not cards:
         raise ProbeError("nvidia-smi listed no cards")
+    if procs_by_uuid:
+        raise ProbeError(f"processes on cards missing from the card table: {', '.join(procs_by_uuid)}")
     return cards
 
 
@@ -212,6 +231,38 @@ def probe_ssh_host(pool: Pool, host: str) -> Report:
         return Report(label, pool.kind, error=f"{exc}{f' ({tail})' if tail else ''}")
 
 
+def _num(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def ray_card(g: dict, pool: str, host: str) -> Card:
+    """Card from one Ray dashboard `gpus` entry; missing readings make it unknown, never free.
+
+    Args:
+        g: The dashboard's GPU entry.
+        pool: Pool name for the card.
+        host: Node host name.
+
+    Returns:
+        The card; raises ProbeError when the entry lacks its index or uuid.
+    """
+    index, uuid = _num(g.get("index")), g.get("uuid")
+    if index is None or not isinstance(uuid, str):
+        raise ProbeError(f"unrecognized GPU entry (keys: {', '.join(sorted(g))[:120]})")
+    used, util, total = _num(g.get("memoryUsed")), _num(g.get("utilizationGpu")), _num(g.get("memoryTotal"))
+    pids = [p for p in g.get("processesPids") or [] if isinstance(p, dict)]
+    procs = [Proc(_num(p.get("pid")) or 0, _num(p.get("gpuMemoryUsage")) or 0, cmd="ray worker") for p in pids]
+    mem = -1 if used is None else used
+    card = Card(pool, host, index, str(g.get("name", "")), mem, total or 0, util or 0, uuid=uuid, procs=procs)
+    if used is None or util is None:
+        card.state, card.note = "unknown", "memory/utilization not reported"
+    elif procs:
+        card.state = "busy"
+    elif used >= HELD_MIB or util >= HELD_UTIL:
+        card.state, card.note = "busy", "in use, process not visible to Ray"
+    return card
+
+
 def probe_ray(pool: Pool) -> list[Report]:
     """Probe a Ray cluster through its dashboard API."""
     addr = pool.settings["address"].rstrip("/")
@@ -229,26 +280,10 @@ def probe_ray(pool: Pool) -> list[Report]:
         if state != "ALIVE":
             report.notes.append(f"node {host} is {state}: its cards are not listed")
             continue
-        for g in node.get("gpus") or []:
-            used, util = int(g.get("memoryUsed") or 0), int(g.get("utilizationGpu") or 0)
-            pids = [p for p in g.get("processesPids") or [] if isinstance(p, dict)]
-            procs = [Proc(int(p.get("pid") or 0), int(p.get("gpuMemoryUsage") or 0), cmd="ray worker") for p in pids]
-            card = Card(
-                pool.name,
-                host,
-                int(g.get("index", 0)),
-                g.get("name", ""),
-                used,
-                int(g.get("memoryTotal") or 0),
-                util,
-                uuid=g.get("uuid", ""),
-                procs=procs,
-            )
-            if procs:
-                card.state = "busy"
-            elif used >= HELD_MIB or util >= HELD_UTIL:
-                card.state, card.note = "busy", "in use, process not visible to Ray"
-            report.cards.append(card)
+        try:
+            report.cards.extend(ray_card(g, pool.name, host) for g in node.get("gpus") or [])
+        except ProbeError as exc:
+            return [Report(pool.name, pool.kind, error=f"node {host}: {exc}")]
     for job in jobs:
         if job.get("status") in ("RUNNING", "PENDING"):
             ep = short_cmd(job.get("entrypoint", "")) or job.get("entrypoint", "")[:60]
@@ -300,6 +335,7 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
     for line in res.stdout.splitlines():
         f = line.split("|", 9)
         if len(f) < 10:
+            report.notes.append(f"unparsable squeue line: {line[:120]}")
             continue
         jobid, part, acct, state, node, nnodes, left, start, gres, name = f
         if state != "RUNNING":
@@ -327,7 +363,8 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
             failed.append(Report(f"{label} job {jobid}", "slurm", error=f"probed 1 of {nnodes} nodes"))
         alloc = _gres_gpus(gres)
         if alloc is not None and alloc > len(cards):
-            report.notes.append(f"job {jobid}: saw {len(cards)} of {alloc} allocated cards")
+            msg = f"saw {len(cards)} of {alloc} allocated cards; {alloc - len(cards)} unknown"
+            failed.append(Report(f"{label} job {jobid}", "slurm", error=msg))
     if not report.cards and not report.notes and not failed:
         report.notes.append("no jobs held")
     return [report, *failed]

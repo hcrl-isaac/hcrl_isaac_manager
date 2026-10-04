@@ -41,7 +41,8 @@ def _read_toml(path: Path) -> dict:
 def _cluster_login(env_file: Path) -> str:
     """CLUSTER_LOGIN as the shell sees it after sourcing the profile (values may reference variables)."""
     script = 'source "$1" >/dev/null 2>&1; printf %s "${CLUSTER_LOGIN:-}"'
-    return subprocess.run(["bash", "-c", script, "_", str(env_file)], capture_output=True, text=True).stdout
+    cmd = ["bash", "-c", script, "_", str(env_file)]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout
 
 
 def slurm_pools() -> list[Pool]:
