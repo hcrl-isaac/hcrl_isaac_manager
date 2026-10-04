@@ -80,6 +80,8 @@ class Report:
     cards: list[Card] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     error: str = ""
+    owner: str = ""  # OS user the probe ran as (whose processes count as a lease holder's); "" = unknown
+    partial: bool = False  # some cards of this report could not be listed (absence proves nothing)
 
     def to_dict(self) -> dict:
         """Return the report as plain data for --json."""
@@ -201,7 +203,8 @@ def probe_local(pool: Pool) -> list[Report]:
     host = os.uname().nodename.split(".")[0]
     try:
         res = _run(["bash", "-c", GPU_QUERY], timeout=30)
-        return [Report(pool.name, pool.kind, parse_gpu_query(res.stdout, pool.name, host))]
+        cards = parse_gpu_query(res.stdout, pool.name, host)
+        return [Report(pool.name, pool.kind, cards, owner=os.environ.get("USER", ""))]
     except (subprocess.TimeoutExpired, ProbeError) as exc:
         return [Report(pool.name, pool.kind, error=str(exc) or "nvidia-smi timed out")]
 
@@ -225,7 +228,8 @@ def probe_ssh_host(pool: Pool, host: str) -> Report:
     except subprocess.TimeoutExpired:
         return Report(label, pool.kind, error="unreachable (ssh timed out)")
     try:
-        return Report(label, pool.kind, parse_gpu_query(res.stdout, pool.name, host))
+        cards = parse_gpu_query(res.stdout, pool.name, host)
+        return Report(label, pool.kind, cards, owner=_ssh_target(pool, host).split("@")[0])
     except ProbeError as exc:
         tail = res.stderr.strip().splitlines()[-1] if res.stderr.strip() else ""
         return Report(label, pool.kind, error=f"{exc}{f' ({tail})' if tail else ''}")
@@ -250,12 +254,17 @@ def ray_card(g: dict, pool: str, host: str) -> Card:
     if index is None or not isinstance(uuid, str):
         raise ProbeError(f"unrecognized GPU entry (keys: {', '.join(sorted(g))[:120]})")
     used, util, total = _num(g.get("memoryUsed")), _num(g.get("utilizationGpu")), _num(g.get("memoryTotal"))
-    pids = [p for p in g.get("processesPids") or [] if isinstance(p, dict)]
+    raw = g.get("processesPids")
+    raw = [] if raw is None else raw
+    well_formed = isinstance(raw, list) and all(isinstance(p, dict) and _num(p.get("pid")) is not None for p in raw)
+    pids = raw if well_formed else []
     procs = [Proc(_num(p.get("pid")) or 0, _num(p.get("gpuMemoryUsage")) or 0, cmd="ray worker") for p in pids]
     mem = -1 if used is None else used
     card = Card(pool, host, index, str(g.get("name", "")), mem, total or 0, util or 0, uuid=uuid, procs=procs)
-    if used is None or util is None:
+    if used is None or util is None or used < 0 or util < 0:
         card.state, card.note = "unknown", "memory/utilization not reported"
+    elif not well_formed:
+        card.state, card.note = "unknown", "unreadable process list"
     elif procs:
         card.state = "busy"
     elif used >= HELD_MIB or util >= HELD_UTIL:
@@ -273,12 +282,17 @@ def probe_ray(pool: Pool) -> list[Report]:
             jobs = json.load(r)
     except Exception as exc:  # any failure means the pool's state is unknown
         return [Report(pool.name, pool.kind, error=f"dashboard unreachable ({exc})")]
+    if not isinstance(nodes, list) or not isinstance(jobs, list):
+        return [Report(pool.name, pool.kind, error="dashboard returned an unexpected format")]
     report = Report(pool.name, pool.kind)
     for node in nodes:
-        host = node.get("hostname", "?").split(".")[0]
+        if not isinstance(node, dict) or not isinstance(node.get("gpus") or [], list):
+            return [Report(pool.name, pool.kind, error="dashboard returned an unexpected node entry")]
+        host = str(node.get("hostname", "?")).split(".")[0]
         state = node.get("raylet", {}).get("state")
         if state != "ALIVE":
-            report.notes.append(f"node {host} is {state}: its cards are not listed")
+            report.notes.append(f"node {host} is {state}: its cards are unknown")
+            report.partial = True
             continue
         try:
             report.cards.extend(ray_card(g, pool.name, host) for g in node.get("gpus") or [])
@@ -331,15 +345,19 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
         return [Report(label, "slurm", error="squeue timed out")]
     if res.returncode != 0:
         return [Report(label, "slurm", error=f"squeue failed: {res.stderr.strip()[:200]}")]
-    report, failed = Report(label, "slurm"), []
+    report, failed = Report(label, "slurm", owner=login.split("@")[0]), []
     for line in res.stdout.splitlines():
         f = line.split("|", 9)
         if len(f) < 10:
             report.notes.append(f"unparsable squeue line: {line[:120]}")
+            report.partial = True
             continue
         jobid, part, acct, state, node, nnodes, left, start, gres, name = f
+        if state == "PENDING":
+            report.notes.append(f"job {jobid} ({part}, {name}) PENDING, est. start {start}")
+            continue
         if state != "RUNNING":
-            report.notes.append(f"job {jobid} ({part}, {name}) {state}, est. start {start}")
+            failed.append(Report(f"{label} job {jobid}", "slurm", error=f"job is {state}: its cards are unknown"))
             continue
         node = node.split(",")[0]
         # -p/-A because TACC refuses overlap steps without them on multi-project accounts

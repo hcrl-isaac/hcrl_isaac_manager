@@ -8,13 +8,49 @@ just res status --free        # only free cards
 just res status --pool larg   # pools whose name starts with "larg" (repeatable)
 just res status --json        # machine-readable
 just res pools                # the configured pools
+just res claim / release / leases   # card leases, below
 ```
 
-Card states: `free`, `busy` (a process is on it; owner, command and elapsed time are shown), `held` (memory in use
-or utilization with no visible process, e.g. Isaac kept its VRAM after exit; idle cards read 0-545 MiB, so the
-bound is 1 GiB) and `UNKNOWN` (the pool could not be probed, e.g. its
-SSH master is down, or nvidia-smi failed or returned partial output). Unknown is never free; `status` exits 2 when
-no pool could be probed.
+Card states:
+
+- `free`; `leased` (free, but someone holds a lease on it)
+- `busy`: a process is on it; owner, command and elapsed time are shown
+- `held`: memory in use (>= 1 GiB; idle cards read 0-545 MiB) or utilization with no visible process, e.g. Isaac
+  kept its VRAM after exit
+- `UNKNOWN`: the pool could not be probed (SSH master down, nvidia-smi failed or returned partial output). Unknown
+  is never free; `status` exits 2 when no pool could be probed.
+
+## Leases
+
+A lease says who is using a card. There is no daemon: every `just res` call reconciles the leases with the live
+probe, so a lease's state only changes when someone runs `res`.
+
+```bash
+just res claim mckennie:1 --holder "<session>" --note "T1 kick seed 3"   # host:gpu (host:job:gpu on SLURM)
+just res claim --any --count 2 --min-free-gb 40 --pool larg --holder "<session>"
+just res claim gpub065:2 --holder "<session>" --for 2h                   # time-boxed interactive work
+just res leases                                                          # list (no probe)
+just res release <id|host:gpu|host:job:gpu> --holder "<session>"         # --force for someone else's
+```
+
+- A claim probes first and succeeds only on cards it sees as free that nobody holds; all named cards or none.
+  `--any` fills partly used hosts first and skips Ray unless `--pool ray` is given (Ray schedules onto its cards).
+- Activity renews a lease: a process of the holder's OS user on that pool, or a busy card whose processes cannot be
+  attributed (Ray lists them as `?`). If every attributable process belongs to another user the lease is not renewed
+  and shows `CONFLICT`, even when unattributed processes share the card; retained memory with no process and no
+  utilization (a finished Isaac run) does not renew it either and shows `held, no process`.
+- Idle time runs from the first idle observation, so a lease is released only after two observations at least the
+  window apart: `grace_min` before any activity was seen, `idle_min` after. Both default to 30 min (compute.toml
+  `[leases]`), a design choice covering the ~15 min stall watchdog plus a relaunch and Kit boot. `--for` adds a
+  hard end.
+- A card that could not be read leaves its lease alone, and so does a partial probe: a Ray node that is not ALIVE,
+  an unparsable `squeue` line, or a SLURM job that is not RUNNING (e.g. COMPLETING) makes its cards unknown. A lease
+  whose card is gone from a complete probe (allocation ended, node removed) is released only when it is still gone
+  on a complete probe at least `idle_min` later.
+- The store is `~/.local/state/hcrl_res/leases.json`, one per home directory: other OS users see none of it, and
+  machines that share a home (the LARG boxes' NFS home) share it. It is locked with `flock`, which an NFS mount may
+  not honour, so run `res` from one machine. A store that cannot be read or has wrong-typed fields is moved aside:
+  `status` then shows no leases and `claim`/`release`/`leases` refuse.
 
 ## Pools
 
