@@ -4,13 +4,10 @@
 # Configurations
 #==
 
-# Exits if error occurs
 set -e
 
-# Set tab-spaces
 tabs 4
 
-# get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 # Prefer the ilab venv's python/ray so commands work without activating it first.
@@ -21,17 +18,14 @@ VENV_BIN="$( cd "$SCRIPT_DIR/../.." && pwd )/ilab/bin"
 # Functions
 #==
 
-# Function to check docker versions
 check_docker_version() {
-    # check if docker is installed
     if ! command -v docker &> /dev/null; then
         echo "[Error] Docker is not installed! Please check the 'Docker Guide' for instruction." >&2;
         exit 1
     fi
 }
 
-# Sync managed large-file resources to W&B before a job so the cluster fetches the current versions.
-# Idempotent (W&B dedups unchanged content); non-fatal so a sync hiccup never blocks a submit.
+# Sync managed large-file resources to W&B so the cluster fetches current versions; failure is non-fatal.
 sync_resources() {
     local mgr up
     mgr="$( cd "$SCRIPT_DIR/../.." && pwd )"
@@ -43,8 +37,8 @@ sync_resources() {
     ( set -a; . "$mgr/scripts/.env.wandb"; set +a; python "$up" ) || echo "[WARN] resource sync failed; submitting with existing artifacts."
 }
 
-# Render the job configs from their templates for the CURRENT worktree selection. WT=<name> (or HCRL_WT)
-# routes ext_dir + file mounts through resources/<repo>/worktrees/<name> wherever one exists.
+# Render the job configs from their templates. WT=<name> (or HCRL_WT) routes ext_dir + file mounts
+# through resources/<repo>/worktrees/<name> wherever one exists.
 render_job_configs() {  # render_job_configs <ut_eid>
     local ut_eid="$1" manager_dir venv_py
     manager_dir="$( cd "$SCRIPT_DIR/../.." && pwd )"
@@ -99,7 +93,6 @@ help() {
     echo -e "\n" >&2
 }
 
-# Parse options
 while getopts ":h" opt; do
     case ${opt} in
         h )
@@ -115,7 +108,6 @@ while getopts ":h" opt; do
 done
 shift $((OPTIND -1))
 
-# Check for command
 if [ $# -lt 1 ]; then
     echo "Error: Command is required." >&2
     help
@@ -125,15 +117,13 @@ fi
 command=$1
 shift
 
-# Any subcommand that submits work first re-renders the job configs (current WT) and syncs managed
-# resources to W&B. Add new job-submitting subcommands to this list.
+# Every job-submitting subcommand belongs in this list: it re-renders the job configs and syncs resources.
 case "$command" in
     job|job_distributed|bench) prepare_submit; sync_resources ;;
 esac
 
 case $command in
     setup)
-        # Generate the Ray config files (.env.ray + job configs) from the templates.
         MANAGER_DIR="$( cd "$SCRIPT_DIR/../.." && pwd )"
         if [ ! -f "$MANAGER_DIR/scripts/.env.wandb" ]; then
             echo "[ERROR] $MANAGER_DIR/scripts/.env.wandb not found. Run 'just deps' first." >&2
@@ -153,7 +143,6 @@ case $command in
         fi
         echo "Building and pushing the shared Isaac image for Ray"
         check_docker_version
-        # Build the shared decoupled image (isaacsim base + pip isaaclab) and push it for the cluster to pull.
         "$SCRIPT_DIR/../docker/docker_interface.sh" build
         docker tag hcrl-isaac:latest esturman/isaac-ray:latest
         docker push esturman/isaac-ray:latest
@@ -163,7 +152,6 @@ case $command in
         echo "[INFO] Executing job command"
         [ -n "$job_args" ] && echo -e "\tJob arguments: $job_args"
         job_config=$SCRIPT_DIR/job_config.yaml
-        # Submit job
         echo "[INFO] Executing job script..."
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
             --config_file $SCRIPT_DIR/ray.cfg \
@@ -173,8 +161,7 @@ case $command in
                 $job_args
         ;;
     job_distributed)
-        # Distributed variant of `job`: one Ray submission spawns two sub-jobs (one per GPU node) that
-        # run torchrun_wrapper.py -> train.py --distributed, for a single run with a 2-node global batch.
+        # One Ray submission spawning a sub-job per GPU node (torchrun_wrapper.py -> train.py --distributed).
         job_args="$@"
         echo "[INFO] Executing distributed job command"
         [ -n "$job_args" ] && echo -e "\tJob arguments: $job_args"
