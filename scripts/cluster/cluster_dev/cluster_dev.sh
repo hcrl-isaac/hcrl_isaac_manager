@@ -17,6 +17,8 @@
 # Then it self-tracks the (possibly multi-hour) queue wait in the background.
 # Check anytime:            ./cluster_dev.sh status
 # Mirror code:              ./cluster_dev.sh sync [--dry-run] (--dry-run lists what would change or be deleted)
+# Stage a code tree:        ./cluster_dev.sh stage <name> <repo>=<ref|worktree path> ...  (no --delete; see trees)
+#                           ./cluster_dev.sh exec --tree <name> -- <cmd>   (run against that tree)
 # Use it:                   ./cluster_dev.sh attach           (interactive shell on the node)
 #                           ./cluster_dev.sh exec -- <cmd>    (run in container, SSH-tethered)
 #                           ./cluster_dev.sh exec --detach -- <cmd>   (run in container, detached
@@ -198,6 +200,8 @@ rsync_code() {
         `# artifacts/ is the out-of-sync tree both ways: local exports never ship, and cluster-only data` \
         `# lives under the remote artifacts/ where --delete cannot touch it -- put new excludable data there` \
         --exclude='/artifacts' \
+        `# staged code trees live only on the remote` \
+        --exclude='/trees/' \
         `# FIRST match wins, so per-cluster protection must precede the allowlist below -- an include` \
         `# that matched first would mark cluster-only state as syncable and --delete would erase it` \
         "${extra_excludes[@]}" \
@@ -371,11 +375,12 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     # redirected to a log file on the login node (default: $HOME/cluster_dev_run_<ts>.log).
     # Follow it with `cluster_dev.sh tail`. The latest --detach log path is recorded in
     # ~/.cluster_dev/state (LAST_RUN_LOG) so `tail` finds it without args.
-    local detach="" logfile=""
+    local detach="" logfile="" tree=""
     while [ $# -gt 0 ]; do
         case "${1:-}" in
             --detach) detach="1"; shift;;
             --log) logfile="$2"; shift 2;;
+            --tree) tree="$2"; shift 2;;
             --) shift; break;;
             *) break;;
         esac
@@ -384,6 +389,12 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     # exec always runs with the current local config, even on a destination that hasn't been synced
     push_env_cluster || { err "could not push ${ENV_FILE} to ${REMOTE_ENV_FILE}"; exit 1; }
     local nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} bash ${REMOTE_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh $*"
+    if [ -n "$tree" ]; then
+        tree="$(resolve_tree "$tree")" || exit 1
+        log "Using tree ${tree}"
+        nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} NODE_EXEC_RESOURCES=${tree}/resources"
+        nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh $*"
+    fi
     if [ -z "$detach" ]; then
         log "[${DD_MODE}] container exec on job ${DD_JOBID}: $*"
         if [ "$DD_MODE" = "ssh" ]; then
@@ -493,10 +504,14 @@ cmd_stop() {
 }
 
 usage() {
-    sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
+source "${SCRIPT_DIR}/trees.sh"
+
 case "${1:-}" in
+    stage)    shift; cmd_stage "$@" ;;
+    trees)    shift; cmd_trees "$@" ;;
     start)    shift; cmd_start "$@" ;;
     open)     shift; cmd_open "$@" ;;
     status)   shift; cmd_status "$@" ;;

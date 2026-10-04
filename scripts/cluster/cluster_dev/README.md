@@ -32,6 +32,20 @@ The watcher writes `~/.cluster_dev/<cluster>/state` (and `watch.log` next to it)
 `JOB_STATE=RUNNING` and `NODE` is set, the box is ready. A Claude session can poll `status` and
 drive `exec`/`attach` over the live master with zero auth.
 
+## Code trees (run specific branches without syncing)
+```bash
+just cluster delta develop stage push-foot hhlm_tasks=feat/push-foot-contact-penalty hcrl_isaaclab=main robot_rl=main
+just cluster delta develop exec --tree push-foot -- python scripts/train.py --task ...   # (--detach as usual)
+just cluster delta develop trees                                                          # list staged trees
+```
+`stage` uploads each named repo at a pushed ref (or a local worktree path, uncommitted edits included) into a new
+`<CLUSTER_ISAACLAB_DIR>/trees/<name>-<fingerprint>/`. It never uses `--delete` and never touches the shared checkout:
+every repo not named is a link to the shared one, files identical to the shared copy or an earlier tree are
+hardlinked instead of re-sent, and the tree's `MANIFEST` records each repo's commit. Staging the same refs again
+reuses the tree. `exec --tree <name>` runs the newest tree of that name with its repos mounted (and its own
+`node_exec.sh`); run logs still go to the shared `hcrl_isaaclab/logs`. `develop sync` leaves `trees/` alone.
+Old trees are not cleaned up automatically yet.
+
 ## Config
 The sentinel reuses the `#SBATCH` directives of the cluster's own `config/<cluster>/submit_job_slurm.sh`
 (minus `--job-name`/`--output`), so the dev box asks for what a `job` submission asks for. `attach`/`exec`

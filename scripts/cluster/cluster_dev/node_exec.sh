@@ -70,14 +70,21 @@ mkdir -p \
 cmd="$*"; [ -n "$cmd" ] || cmd="/isaac-sim/python.sh --version"
 # Bind all workspace repos into /workspace/ext -- packages AND asset repos (e.g. hcrl_robots), since the
 # in-repo resource symlinks need the asset repos mounted. The entrypoint PYTHONPATHs only the packages.
+# NODE_EXEC_RESOURCES (set by `exec --tree`) points at a staged tree's resources/ instead of the shared one.
+RESOURCES="${NODE_EXEC_RESOURCES:-${CLUSTER_ISAACLAB_DIR}/resources}"
 EXT_BINDS=""
-for d in "${CLUSTER_ISAACLAB_DIR}"/resources/*/; do
+for d in "${RESOURCES}"/*/; do
     name="$(basename "$d")"
     [ "$name" = "IsaacLab" ] && continue   # handled by the source overlay below, not /workspace/ext
-    EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:rw"
+    EXT_BINDS="$EXT_BINDS -B $(readlink -f "${d%/}"):/workspace/ext/${name}:rw"
 done
-[ -d "${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source" ] && \
-    EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source:/workspace/isaaclab_source:rw"
+[ -d "${RESOURCES}/IsaacLab/source" ] && \
+    EXT_BINDS="$EXT_BINDS -B $(readlink -f "${RESOURCES}/IsaacLab/source"):/workspace/isaaclab_source:rw"
+# a tree is immutable: run logs still go to the shared hcrl_isaaclab/logs
+if [ -n "${NODE_EXEC_RESOURCES:-}" ]; then
+    mkdir -p "${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs"
+    EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs:/workspace/ext/hcrl_isaaclab/logs:rw"
+fi
 # artifacts/ is the structural out-of-sync tree (see cluster_dev.sh rsync_code): cluster-only INPUT
 # data staged there still has to be readable inside the container, which the resources/* glob misses.
 [ -d "${CLUSTER_ISAACLAB_DIR}/artifacts" ] && \
