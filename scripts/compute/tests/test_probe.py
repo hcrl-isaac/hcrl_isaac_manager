@@ -1,7 +1,10 @@
-"""Unit tests for the GPU probe parser (run: python3 -m unittest discover -s scripts/compute)."""
+"""Unit tests for the GPU probe parser (run all script tests: just test-scripts)."""
 
+import sys
 import unittest
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from probe import Card, ProbeError, Report, _gres_gpus, parse_gpu_query, ray_card, short_cmd
 from res import merge_duplicates
 

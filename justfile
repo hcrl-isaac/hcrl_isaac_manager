@@ -198,6 +198,10 @@ run script *args:
     export PYTHONPATH="${WT_PYTHONPATH:+$WT_PYTHONPATH:}${PYTHONPATH:-}"
     OMNI_KIT_ACCEPT_EULA=YES {{venv_py}} "$WT_CORE/scripts/{{script}}.py" {{args}}
 
+# Run the manager's own script tests (scripts/<area>/tests/test_*.{py,sh}; stubs only, no cluster or GPU). CI runs this.
+test-scripts:
+    @bash scripts/run_tests.sh
+
 # Run a workspace repo's CPU smoke tests (task registration + env-cfg build; skips `-m gpu`). Launches
 # Isaac Sim, so it needs the ilab venv + a GPU. e.g. `just test ssti_tasks` (default: the core repo).
 test repo="hcrl_isaaclab" *args:
