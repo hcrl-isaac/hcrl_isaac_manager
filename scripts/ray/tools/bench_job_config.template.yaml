@@ -21,8 +21,6 @@ init_commands: []
   - "**/.git/lfs/**"
   - "**/.venv/**"
   - "nohup.out"
-  # expert style datasets: they ship as the hcrl_resources artifact and would blow the upload limit
   - "**/style_data/**"
-  # the large exported BFM-Zero policy dir (fetched as a W&B artifact at runtime; >100MB blows
-  # Ray's upload limit). Small git-tracked policies (e.g. g1_locomotion_jit.pt) ship with the job.
+  # exported BFM-Zero policies
   - "**/policies/**/bfmzero_*/**"
