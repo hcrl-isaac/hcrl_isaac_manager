@@ -131,12 +131,18 @@ rsync -azPv $JOB_TMPDIR/docker-isaac-sim $CLUSTER_ISAAC_SIM_CACHE_DIR/..
 rm -rf $JOB_TMPDIR
 
 # sbatch ran inside the code copy, so its slurm-<id>.out lives there: move it to the logs dir (the open file
-# keeps receiving output), then remove the copy whatever the exit code
+# keeps receiving output), then remove the copy unless the move failed. A walltime kill skips both.
 SLURM_OUT="$1/slurm-${SLURM_JOB_ID}.out"
+out_kept=true
 if [ -f "$SLURM_OUT" ]; then
-    mv "$SLURM_OUT" "$CLUSTER_ISAACLAB_DIR/logs/" && echo "(run_singularity.py): Slurm output moved to $CLUSTER_ISAACLAB_DIR/logs/"
+    if mv "$SLURM_OUT" "$CLUSTER_ISAACLAB_DIR/logs/"; then
+        echo "(run_singularity.py): Slurm output moved to $CLUSTER_ISAACLAB_DIR/logs/"
+    else
+        out_kept=false
+        echo "(run_singularity.py): could not move $SLURM_OUT; keeping the code copy"
+    fi
 fi
-if $REMOVE_CODE_COPY_AFTER_JOB; then
+if $REMOVE_CODE_COPY_AFTER_JOB && $out_kept; then
     rm -rf $1
 fi
 

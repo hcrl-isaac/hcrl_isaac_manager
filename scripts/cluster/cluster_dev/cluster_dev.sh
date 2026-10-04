@@ -204,7 +204,7 @@ rsync_code() {
         --filter=':- .dockerignore' \
         --exclude='*.git*' --exclude='ilab/' --exclude='.venv/' \
         --exclude='wandb/' --exclude='logs/' --exclude='.vscode/' \
-        --filter='-p **/__pycache__/' --exclude='scripts/cluster/exports/' --exclude='*.sif' --exclude='*.tar' \
+        --filter='-p **/__pycache__/' --exclude='scripts/cluster/exports/' --exclude='*.sif' --exclude='*.tar' --exclude='.backup/' \
         `# motion_datasets ALLOWLIST: sync only training .pt + sidecars; any new intermediate type is dropped by default` \
         `# remote-only bundles are protected: P is receiver-side, so the allowlist still decides what ships` \
         --filter='P /resources/motion_datasets/**' \

@@ -7,7 +7,7 @@ restore_profiles() {
     for cfg in "$repo"/scripts/cluster/config/*/; do
         rel="scripts/cluster/config/$(basename "$cfg")/submit_job_slurm.sh"
         [ -f "${cfg}.env.cluster" ] && [ ! -f "$repo/$rel" ] || continue
-        sha="$(git -C "$repo" log --diff-filter=D -1 --format=%H -- "$rel" 2>/dev/null)"
+        sha="$(git -C "$repo" log --diff-filter=D -1 --format=%H -- "$rel" 2>/dev/null)" || continue
         [ -n "$sha" ] || continue
         tmp="$(mktemp)"
         if git -C "$repo" show "${sha}^:${rel}" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then

@@ -3,6 +3,7 @@
 # templates. Invoked by `just cluster add [--update] [name]`.
 set -euo pipefail
 cd "$(dirname "$0")/.."  # scripts/
+source cluster/tools/restore_profiles.sh
 
 update=""
 [ "${1:-}" = "--update" ] && { update=1; shift; }
@@ -20,7 +21,7 @@ fi
 
 # Current values of an existing profile become the prompt defaults.
 env_get() { [ -f "$env_file" ] && sed -n "s/^$1=//p" "$env_file" | tail -1 | tr -d '"' || true; }
-sbatch_get() { [ -f "$job_file" ] && sed -n "s/^#SBATCH $1[ =]//p" "$job_file" | tail -1 || true; }
+sbatch_get() { python3 cluster/tools/merge_profile.py get "$job_file" "$1"; }  # any spelling of the flag
 ask() {  # ask VAR "Prompt" DEFAULT
     local reply
     read -r -p "$2${3:+ [$3]}: " reply
