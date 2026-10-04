@@ -8,7 +8,7 @@ trap 'rm -rf "$T"' EXIT
 
 # The script under test reads config/ next to its own dir, so it runs from a copy inside $T.
 mkdir -p "$T/bin" "$T/scripts/cluster/config"
-cp -r "$REPO/scripts/cluster/cluster_dev" "$T/scripts/cluster/"
+cp -r "$REPO/scripts/cluster/cluster_dev" "$REPO/scripts/cluster/tools" "$T/scripts/cluster/"
 
 cat > "$T/bin/ssh" <<'EOF'
 #!/usr/bin/env bash

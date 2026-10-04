@@ -52,6 +52,7 @@ DEV_USER="${CLUSTER_LOGIN%@*}"
 CLUSTER_LOGIN_HOST="${CLUSTER_LOGIN_HOST:-${CLUSTER_LOGIN#*@}}"   # login host; round-robin DNS is fine since we always multiplex over one master.
 REMOTE_ISAACLAB_DIR="${CLUSTER_ISAACLAB_DIR:?CLUSTER_ISAACLAB_DIR not set}"
 
+source "${SCRIPT_DIR}/../tools/restore_profiles.sh"
 # Sentinel resources reuse the #SBATCH config from this cluster's submit_job_slurm.sh (the same one the
 # `job` path uses), so the dev box matches it with no separate config.
 SUBMIT_SLURM="$(dirname "$ENV_FILE")/submit_job_slurm.sh"
@@ -203,7 +204,7 @@ rsync_code() {
         --filter=':- .dockerignore' \
         --exclude='*.git*' --exclude='ilab/' --exclude='.venv/' \
         --exclude='wandb/' --exclude='logs/' --exclude='.vscode/' \
-        --filter='-p **/__pycache__/' --exclude='scripts/cluster/exports/' --exclude='*.sif' --exclude='*.tar' \
+        --filter='-p **/__pycache__/' --exclude='scripts/cluster/exports/' --exclude='*.sif' --exclude='*.tar' --exclude='.backup/' \
         `# motion_datasets ALLOWLIST: sync only training .pt + sidecars; any new intermediate type is dropped by default` \
         `# remote-only bundles are protected: P is receiver-side, so the allowlist still decides what ships` \
         --filter='P /resources/motion_datasets/**' \
