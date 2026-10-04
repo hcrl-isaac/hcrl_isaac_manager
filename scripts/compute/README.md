@@ -8,13 +8,36 @@ just res status --free        # only free cards
 just res status --pool larg   # pools whose name starts with "larg" (repeatable)
 just res status --json        # machine-readable
 just res pools                # the configured pools
+just res claim / release / leases   # card leases, below
 ```
 
-Card states: `free`, `busy` (a process is on it; owner, command and elapsed time are shown), `held` (memory in use
-or utilization with no visible process, e.g. Isaac kept its VRAM after exit; idle cards read 0-545 MiB, so the
-bound is 1 GiB) and `UNKNOWN` (the pool could not be probed, e.g. its
-SSH master is down, or nvidia-smi failed or returned partial output). Unknown is never free; `status` exits 2 when
-no pool could be probed.
+Card states:
+
+- `free`; `leased` (free, but someone holds a lease on it)
+- `busy`: a process is on it; owner, command and elapsed time are shown
+- `held`: memory in use (>= 1 GiB; idle cards read 0-545 MiB) or utilization with no visible process, e.g. Isaac
+  kept its VRAM after exit
+- `UNKNOWN`: the pool could not be probed (SSH master down, nvidia-smi failed or returned partial output). Unknown
+  is never free; `status` exits 2 when no pool could be probed.
+
+## Leases
+
+A lease says who is using a card. It needs no daemon and no upkeep: every `just res` call reconciles the leases
+against the live probe, and a lease ends on its own.
+
+```bash
+just res claim mckennie:1 --holder "<session>" --note "T1 kick seed 3"   # name cards as host:gpu
+just res claim --any --count 2 --min-free-gb 40 --pool larg --holder "<session>"
+just res claim gpub065:2 --holder "<session>" --for 2h                   # time-boxed interactive work
+just res leases                                                          # list (no probe)
+just res release <id|host:gpu>
+```
+
+- A claim only succeeds on a card the probe sees as free and nobody holds.
+- A new lease must show activity (memory or a process on the card) within 20 min, after which it is released
+  once the card has been idle for 15 min. `--for` adds a hard end.
+- Leases on a pool that cannot be probed are neither renewed nor released until it can be.
+- The store is `~/.local/state/hcrl_res/leases.json` on the machine the sessions run on, written under a lock.
 
 ## Pools
 
