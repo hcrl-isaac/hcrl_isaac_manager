@@ -1,16 +1,11 @@
 """Generate ``.vscode/settings.json`` for the workspace (run from ``just vscode`` / end of ``just setup``).
 
-Writes the three search-root families Pylance cannot discover from the interpreter alone, as
-``python.analysis.extraPaths``:
+Writes the search roots Pylance cannot discover from the interpreter, as ``python.analysis.extraPaths``:
 
-1. **Isaac Sim extensions.** ``python -m isaaclab --generate-vscode-settings`` does ``import
-   omni.kit_app``, which is not importable under a pip-installed isaacsim (Kit loads it dynamically).
-   So we boot a headless ``SimulationApp`` -- the path that *does* work in both source and pip mode --
-   and snapshot the extension dirs. This is the slow part; ``--no-kit`` reuses the last snapshot.
-2. **pip-isaaclab packages.** ``site-packages/isaaclab`` is a Kit-bootstrapping shim with no
-   submodules; the importable trees are under its ``source/``.
-3. **Editable workspace repos.** ``uv pip install -e`` installs them as PEP 660 import-hook finders,
-   which only run at import time and so are invisible to static analysis.
+1. Isaac Sim extension dirs, snapshotted from a headless ``SimulationApp`` boot (slow); ``--no-kit``
+   reuses the last snapshot.
+2. pip-isaaclab's importable package trees under ``site-packages/isaaclab/source/``.
+3. Editable workspace repos, read from their PEP 660 finder mappings.
 """
 
 from __future__ import annotations
@@ -32,8 +27,7 @@ def _kit_ext_paths() -> tuple[list[str], object]:
 
     from isaacsim import SimulationApp  # import after the EULA env is set
 
-    # Boot Kit so the extension layout is materialized, then glob the ext dirs Pylance needs (Kit loads
-    # most extensions via its own finder, not sys.path, so a sys.path snapshot would miss them).
+    # Kit loads most extensions via its own finder, not sys.path, so glob the ext dirs after booting.
     app = SimulationApp({"headless": True})
     import isaacsim
 

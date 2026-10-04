@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Launch a single-node multi-GPU torchrun training job on a LARG box, under nohup.
 #
-# A100s lack RT cores, so we pass --video async -> train.py defers video rendering to
-# the async logger (run scripts/larg/video_logger.sh on an RT-capable box). The
-# run is W&B-logged; other flags pass via `--`.
+# Passes --video async: A100s lack RT cores, so scripts/larg/video_logger.sh renders elsewhere.
+# Extra train.py flags pass via `--`.
 #
 # Usage:
 #   scripts/larg/train.sh <host> <task> <run_name> [run_group] [num_envs] [-- extra train.py args]
@@ -33,8 +32,7 @@ if [ "${1:-}" = "--" ]; then shift; extra=("$@"); fi
 envs_arg=""
 [ -n "$num_envs" ] && envs_arg="--num_envs $num_envs"
 
-# Pin the run to specific physical GPUs when CUDA_VISIBLE_DEVICES is set in the caller's env, so multiple
-# (e.g. dual-GPU) runs can share one box without colliding. The tag also disambiguates the log filename.
+# A caller-set CUDA_VISIBLE_DEVICES pins the run to those GPUs and tags the log filename.
 cvd_export=""; cvd_tag=""
 if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
   cvd_export="export CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES;"

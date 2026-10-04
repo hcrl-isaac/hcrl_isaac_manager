@@ -16,3 +16,11 @@ jobs:
           python-version: "3.11"
       - run: python -m pip install pre-commit
       - run: pre-commit run --all-files --show-diff-on-failure
+
+  cluster-scripts:
+    # Exercises the cluster shell scripts against throwaway trees (ssh stub; no cluster access).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/cluster/tests/test_develop_sync.sh
+      - run: python3 -m unittest discover -s scripts/compute

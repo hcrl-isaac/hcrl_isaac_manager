@@ -1,34 +1,13 @@
 #!/usr/bin/env python3
 """Resolve a per-project workspace into a flat, deduped gitman config, then materialize it.
 
-Each repo (core ``hcrl_isaaclab``, ``robot_rl``, shared ``hcrl_robots``, per-project ``*_tasks`` /
-``*_robots``) declares only its *direct* deps in a ``dependencies.yaml``; this resolves them into one
-flat ``gitman.yaml`` (all repos siblings under ``resources/``) for ``gitman update`` to fetch.
+Each repo declares only its direct deps in a ``dependencies.yaml`` (``deps: [{name, git?, ref?}]``); they are
+resolved by name into one flat ``gitman.yaml`` (all repos siblings under ``resources/``) for ``gitman update``.
 
-The dedup-by-name pass is the reason this exists rather than plain gitman: gitman alone vendors a
-nested copy of a shared dep per consumer, so a dep two projects share would be checked out twice.
-
-The effective manifest is the committed ``workspace.defaults.yaml`` (org, always, refs, isaaclab
-version, and the ``available_projects`` catalog) overlaid with a per-user, gitignored
-``workspace.yaml`` (just ``projects`` + ``isaaclab.mode``, written by ``configure_workspace.py``).
-When no per-user file exists, the catalog's ``default: true`` projects are used.
-
-Defaults (``workspace.defaults.yaml``)::
-
-    org: hcrl-isaac                      # default GitHub org for bare repo names
-    isaaclab:
-      source: false                      # true -> check out IsaacLab source under resources/IsaacLab
-      version: "5.1.0"                    # pin for pip mode (informational here)
-    always: [hcrl_isaaclab, robot_rl]     # repos always present (the core + RL package)
-    available_projects:                  # selectable <name>_tasks repos
-      - {name: ssti, default: true}
-
-``dependencies.yaml`` (in each repo)::
-
-    deps:
-      - name: hcrl_isaaclab
-        git: git@github.com:hcrl-isaac/hcrl_isaaclab.git  # optional; derived from org + name if omitted
-        ref: main
+The manifest is the committed ``workspace.defaults.yaml`` (``org``, ``always``, ``refs``, ``isaaclab``,
+``available_projects``) overlaid with the per-user, gitignored ``workspace.yaml`` (``projects`` +
+``isaaclab.mode``, written by ``configure_workspace.py``). With no per-user file, the catalog's
+``default: true`` projects are used.
 """
 
 from __future__ import annotations
@@ -173,9 +152,7 @@ def resolve(manifest: dict) -> dict[str, dict]:
         SystemExit: Two repos request the same dependency name at different refs (unresolved conflict).
     """
     org = manifest.get("org", "hcrl-isaac")
-    # Per-repo ref overrides (workspace.yaml `refs: {name: ref}`) win over the default "main" and over
-    # any ref a dependency declares -- so e.g. `refs: {hcrl_isaaclab: feature/reorg-core}` pins the core
-    # without tripping the conflict check when a dep requests it at main.
+    # `refs: {name: ref}` overrides win over the default "main" and over any ref a dependency declares
     refs = manifest.get("refs", {}) or {}
     resolved: dict[str, dict] = {}
 
@@ -263,18 +240,15 @@ def main() -> None:
     (MANAGER_DIR / "gitman.yml").unlink(missing_ok=True)  # drop a stale .yml so it can't shadow .yaml
     is_source = manifest.get("isaaclab", {}).get("mode") == "source"
 
-    # In pip mode, remove an orphaned source clone left by a previous source-mode resolve so
-    # downstream source-vs-pip detection (and editable installs) don't pick it up.
+    # an orphaned source clone would be picked up by downstream source-vs-pip detection
     if not is_source:
         isaaclab_dir = RESOURCES / "IsaacLab"
         if isaaclab_dir.exists():
             print(f"[resolve] pip mode: removing orphaned IsaacLab source clone at {isaaclab_dir}")
             shutil.rmtree(isaaclab_dir)
 
-    # Repos with working changes: gitman update --skip-changes silently leaves them behind. Unless
-    # --skip-changes is passed, offer (or with --force, just do) a merge: stash, let gitman update to the
-    # locked rev, then stash pop -- conflicts are left in the tree for the user to resolve.
-    # --checkout-pin stashes without prompting and pops only if the repo was already on the pinned ref.
+    # gitman update --skip-changes leaves dirty repos behind, so stash them here (prompted, or unprompted
+    # with --force / --checkout-pin) and pop after the update.
     stashed: list[tuple[Path, str, bool]] = []  # (repo, pre-update branch, pop after update?)
     branches: list[tuple[Path, str]] = []  # every repo's pre-update branch, restored after the update
     if args.update:
@@ -321,8 +295,7 @@ def main() -> None:
             else:
                 print(f"[resolve] leaving {name} untouched (gitman will skip it).")
 
-    # A repo's transitive deps are in its own dependencies.yaml, readable only once it's checked out --
-    # so resolve -> gitman update -> re-resolve to a fixpoint. Without --update, write the first pass + stop.
+    # A repo's own deps are readable only once it is checked out, so resolve and update to a fixpoint.
     prev_names: set[str] | None = None
     try:
         while True:
@@ -335,9 +308,8 @@ def main() -> None:
             subprocess.run(["gitman", "update", "--skip-changes"], cwd=MANAGER_DIR, check=True)
             prev_names = names
     finally:
-        # gitman leaves the pinned checkout; return every repo to the branch the user was on (no-op for
-        # anyone who never switched), then pop stashes so they land on the base they were taken from.
-        # With --checkout-pin the pinned checkout IS the goal, so skip the restore.
+        # gitman leaves the pinned checkout: return each repo to its branch (unless --checkout-pin), then
+        # pop stashes onto the base they were taken from.
         if not args.checkout_pin:
             for repo, branch in branches:
                 cur = subprocess.run(
