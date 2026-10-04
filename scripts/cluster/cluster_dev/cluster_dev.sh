@@ -137,36 +137,22 @@ refresh_job_state() {
     [ -n "$state" ] && state_set JOB_STATE "$state"
 }
 
-# node_exec.sh must live inside the synced workspace (so it rides the rsync to the cluster and can
-# source the staged scripts/cluster/.env.cluster). Copy it in from our source-of-truth before each sync.
+# node_exec.sh must live inside the synced workspace so it rides the rsync to the cluster.
 stage_node_exec() {
-    local dst="${LOCAL_ISAACLAB_DIR}/scripts/cluster/cluster_dev"
-    local src="${SCRIPT_DIR}/node_exec.sh"
-    local dst_file="${dst}/node_exec.sh"
-    mkdir -p "$dst"
-    # If src == dst (e.g. cluster_dev.sh was copied INTO LOCAL_ISAACLAB_DIR by scripts/cluster.sh,
-    # so SCRIPT_DIR is already the staging dir), skip the cp -- it would fail with
-    # "are the same file".
-    if [ -e "$dst_file" ] && [ "$src" -ef "$dst_file" ]; then
-        chmod +x "$dst_file"
-        stage_env_cluster
-        return 0
-    fi
-    cp "$src" "$dst_file"
+    local dst_file="${LOCAL_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh"
+    [ -e "$dst_file" ] && [ "${SCRIPT_DIR}/node_exec.sh" -ef "$dst_file" ] && return 0
+    mkdir -p "$(dirname "$dst_file")"
+    cp "${SCRIPT_DIR}/node_exec.sh" "$dst_file"
     chmod +x "$dst_file"
-    stage_env_cluster
 }
 
-# Stage the SELECTED cluster's .env.cluster into the IsaacLab tree so it rides the rsync and
-# node_exec.sh (which sources ../.env.cluster ON THE NODE) picks up THIS cluster's paths/modules
-# (CLUSTER_ISAACLAB_DIR, CLUSTER_SIF_PATH, CLUSTER_MODULE_LOAD, ...) -- not whatever another cluster's
-# session last left in the shared staging slot. This is what makes node_exec cluster-agnostic.
-stage_env_cluster() {
-    local env_dst="${LOCAL_ISAACLAB_DIR}/scripts/cluster/.env.cluster"
+# The selected config's env goes straight to its remote config dir, where node_exec.sh reads it
+# (NODE_EXEC_ENV); no local or remote slot is shared between configs.
+REMOTE_ENV_FILE="${REMOTE_ISAACLAB_DIR}/scripts/cluster/config/${CLUSTER}/.env.cluster"
+push_env_cluster() {
     [ -f "$ENV_FILE" ] || { err "Cluster env file not found: $ENV_FILE"; return 1; }
-    [ "$ENV_FILE" -ef "$env_dst" ] && return 0
-    mkdir -p "$(dirname "$env_dst")"
-    cp "$ENV_FILE" "$env_dst"
+    on_login "mkdir -p '$(dirname "$REMOTE_ENV_FILE")'"
+    rsync -t -e "ssh ${SSH_OPTS[*]}" "$ENV_FILE" "${CLUSTER_LOGIN}:${REMOTE_ENV_FILE}"
 }
 
 rsync_code() {
@@ -174,10 +160,26 @@ rsync_code() {
     # -t preserves mtimes so re-syncs skip unchanged assets; --info=progress2 shows overall progress.
     # A per-cluster config/<name>/.rsync-exclude (rsync exclude patterns, one per line) prunes repos that
     # must not deploy to THIS cluster (e.g. another session's *_pbfm forks, which shadow package names).
-    local extra_excludes=()
-    [ -f "${SCRIPT_DIR}/../config/${CLUSTER}/.rsync-exclude" ] && \
-        extra_excludes=(--exclude-from="${SCRIPT_DIR}/../config/${CLUSTER}/.rsync-exclude")
+    local extra_excludes=() cfg dest remote_only name
+    # Every config that syncs to this destination contributes its .rsync-exclude, so a sync through one
+    # config cannot delete what a sibling config protects.
+    for cfg in "${SCRIPT_DIR}"/../config/*/; do
+        dest=""
+        [ -f "${cfg}.env.cluster" ] && dest="$(sed -n 's/^CLUSTER_ISAACLAB_DIR=//p' "${cfg}.env.cluster" | tail -1 | tr -d '"')"
+        [ "$dest" = "$REMOTE_ISAACLAB_DIR" ] || [ "$(basename "$cfg")" = "$CLUSTER" ] || continue
+        [ -f "${cfg}.rsync-exclude" ] && extra_excludes+=(--exclude-from="${cfg}.rsync-exclude")
+    done
+    # resources/* repos that exist only on the remote (cluster-only forks) are never deleted.
+    remote_only="$(on_login "[ ! -d '${REMOTE_ISAACLAB_DIR}/resources' ] || ls -1 '${REMOTE_ISAACLAB_DIR}/resources'")" || {
+        err "cannot list ${REMOTE_ISAACLAB_DIR}/resources on the remote; refusing to sync with --delete"; return 1; }
+    for name in $remote_only; do
+        [ -e "${LOCAL_ISAACLAB_DIR}/resources/${name}" ] || extra_excludes+=(--exclude="/resources/${name}")
+    done
     rsync -rlptvh --delete --info=progress2 \
+        `# worktrees are per-session state: local ones never ship, remote ones are never deleted` \
+        --exclude='**/worktrees/' \
+        `# the selected config's env is read from config/<name>/ on the node, not from a shared slot` \
+        --exclude='/scripts/cluster/.env.cluster' \
         `# legacy pre-reorg tree: un-protect it so --delete can clear it despite excluded contents` \
         --filter='R /source/***' \
         `# artifacts/ is the out-of-sync tree both ways: local exports never ship, and cluster-only data` \
@@ -191,6 +193,8 @@ rsync_code() {
         --exclude='wandb/' --exclude='logs/' --exclude='.vscode/' \
         --filter='-p **/__pycache__/' --exclude='scripts/cluster/exports/' --exclude='*.sif' --exclude='*.tar' \
         `# motion_datasets ALLOWLIST: sync only training .pt + sidecars; any new intermediate type is dropped by default` \
+        `# remote-only bundles are protected: P is receiver-side, so the allowlist still decides what ships` \
+        --filter='P /resources/motion_datasets/**' \
         --include='resources/motion_datasets/**/' \
         --include='resources/motion_datasets/**.pt' \
         --include='resources/motion_datasets/**.arena.json' --include='resources/motion_datasets/**.courts.json' \
@@ -217,6 +221,7 @@ cmd_start() {
         stage_node_exec
         rsync_code || err "rsync failed (continuing; you can re-run './cluster_dev.sh sync')."
     fi
+    push_env_cluster || err "could not push ${ENV_FILE} (exec falls back to scripts/cluster/.env.cluster)."
     # 2) render + submit the sentinel sbatch from the template. Only $SBATCH_DIRECTIVES is substituted;
     # runtime refs ($SLURM_JOB_ID, $HOME, $(hostname)) are left for the job to evaluate on the node.
     local sbatch_remote=".cluster_dev_sentinel.sbatch"
@@ -363,7 +368,7 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
         esac
     done
     require_running
-    local nodecmd="bash ${REMOTE_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh $*"
+    local nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} bash ${REMOTE_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh $*"
     if [ -z "$detach" ]; then
         log "[${DD_MODE}] container exec on job ${DD_JOBID}: $*"
         if [ "$DD_MODE" = "ssh" ]; then
@@ -374,9 +379,13 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
         fi
         return
     fi
-    # --detach path. Default log lives in $HOME on the login node (literal `$HOME` is
-    # preserved through the local->ssh hop and expanded by the remote bash).
-    [ -z "$logfile" ] && logfile="\$HOME/cluster_dev_run_$(date -u +%Y%m%d-%H%M%S).log"
+    # --detach path. The default log lives in the login node's $HOME, resolved here so the printed and
+    # recorded path is absolute (watchers cannot expand a literal $HOME).
+    if [ -z "$logfile" ]; then
+        local rhome; rhome="$(on_login 'printf %s "$HOME"')"
+        [ -n "$rhome" ] || { err "could not resolve \$HOME on ${CLUSTER_LOGIN}"; exit 1; }
+        logfile="${rhome}/cluster_dev_run_$(date -u +%Y%m%d-%H%M%S).log"
+    fi
     # Build the inner command (what the detached wrapper will exec). Always go via the login
     # node -- some sites (e.g. Delta) block direct login->node ssh without re-auth in srun-mode, so even in
     # ssh-mode we keep the detach point on the login node for consistency.
@@ -415,6 +424,7 @@ cmd_sync() {  # re-mirror local code -> cluster isaaclab dir (and onto the live 
     ensure_master
     stage_node_exec
     rsync_code
+    push_env_cluster
     log "Synced to ${REMOTE_ISAACLAB_DIR}."
 }
 

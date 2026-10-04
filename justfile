@@ -128,9 +128,9 @@ sync host *args:
     python3 scripts/sync_machine.py {{host}} {{args}}
 
 # Cluster interface (scripts/cluster/): `add`/`setup`/`job`/`develop`/...; bare picks; leading name -> config/<name>.
+[positional-arguments]
 cluster *args:
-    @set -- {{args}}; \
-    name=""; \
+    @name=""; \
     if [ -n "${1:-}" ] && [ -d "scripts/cluster/config/${1}" ]; then name="$1"; shift; fi; \
     if [ -z "${1:-}" ]; then \
         set -- "$( {{venv_py}} scripts/tools/ask.py select 'Cluster subcommand:' setup job develop repush build add )"; \
@@ -147,9 +147,9 @@ cluster *args:
     else scripts/cluster/cluster_interface.sh "$@"; fi
 
 # Ray interface (scripts/ray/): `setup`, `job`, `bench`, `push`, `list`, `logs`, `stop`; bare shows a picker.
+[positional-arguments]
 ray *args:
-    @set -- {{ args }}; \
-    if [ -z "${1:-}" ]; then \
+    @if [ -z "${1:-}" ]; then \
         set -- "$( {{venv_py}} scripts/tools/ask.py select 'Ray subcommand:' setup job bench push list logs stop )"; \
     fi; \
     scripts/ray/ray_interface.sh "$@"

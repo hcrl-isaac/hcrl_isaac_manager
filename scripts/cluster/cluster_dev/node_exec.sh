@@ -5,7 +5,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-source "${SCRIPT_DIR}/../.env.cluster"
+if [ -n "${NODE_EXEC_ENV:-}" ] && [ -f "$NODE_EXEC_ENV" ]; then
+    source "$NODE_EXEC_ENV"
+else
+    source "${SCRIPT_DIR}/../.env.cluster"
+fi
 source "${SCRIPT_DIR}/../../.env.wandb"  2>/dev/null || true
 # .env.base is only present in source mode; default the container paths so `set -u` doesn't trip.
 source "${SCRIPT_DIR}/../../.env.base" 2>/dev/null || true
