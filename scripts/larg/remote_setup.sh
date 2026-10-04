@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Build the `ilab` venv on a LARG box, from the workspace already rsynced to the shared home.
-#
-# Code lives in the shared, quota'd NFS home; the venv and every cache go to per-box /var/local
-# scratch, so the venv is built once per box.
+# Build the `ilab` venv on a LARG box from the workspace already rsynced to the shared home.
+# The venv and every cache go to per-box /var/local scratch, off the quota'd NFS home.
 #
 #   bash scripts/larg/remote_setup.sh          # build if missing
 #   FORCE=1 bash scripts/larg/remote_setup.sh  # rebuild from scratch
@@ -17,7 +15,7 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-$SCRATCH/uv_cache}"
 export UV_PROJECT_ENVIRONMENT="$VENV"
 export ACCEPT_EULA=Y OMNI_KIT_ACCEPT_EULA=YES
 export PATH="$HOME/.local/bin:$PATH"
-# Kit writes GB-scale shader and extension caches; left on $HOME they blow the shared quota.
+# Kit's shader and extension caches
 export OMNI_CACHE_DIR="$SCRATCH/omni_cache"
 export XDG_CACHE_HOME="$SCRATCH/xdg_cache"
 
@@ -71,8 +69,7 @@ for d in resources/robot_rl resources/*_tasks resources/*_robots resources/holos
     fi
 done
 
-# Isaac Lab's URDF/MJCF conversion scratch is hard-coded to /tmp/IsaacLab, which one user owns on a
-# shared box; make it honour TMPDIR.
+# Isaac Lab hard-codes its asset-conversion scratch to /tmp/IsaacLab, which one user owns on a shared box.
 CONV="$VENV/lib/python3.11/site-packages/isaaclab/source/isaaclab/isaaclab/sim/converters/asset_converter_base.py"
 if [ -f "$CONV" ] && grep -q 'f"/tmp/IsaacLab/usd_' "$CONV"; then
     python3 - "$CONV" <<'PATCH'

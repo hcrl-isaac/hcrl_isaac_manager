@@ -11,21 +11,21 @@ source "$HERE/common.sh"
 # LARG home is one quota'd NFS share across every box, so bulk data must stay excluded; keep the
 # patterns matched to the flat resources/ layout (stale paths exclude nothing).
 EXCLUDES=(
-  # virtualenvs (rebuilt per box on /var/local scratch)
+  # virtualenvs
   --exclude='.venv/'
   --exclude='ilab/'
-  # git metadata + lfs (code-state not needed on remote; store_code_state=False)
+  # git metadata
   --exclude='.git/'
-  # local run outputs / logs / wandb
+  # local run outputs
   --exclude='wandb/'
   --exclude='outputs/'
   --exclude='logs/'
   --exclude='worktrees/'
   --exclude='artifacts/'
-  # container images: the cluster .sif alone is ~9G and LARG runs in a venv, not a container
+  # container images
   --exclude='scripts/cluster/'
   --exclude='resources/IsaacLab/docker/'
-  # large datasets for OTHER tasks (FB-CPR motions / GRAB / GigaHands / loco_mujoco)
+  # datasets other tasks use
   --exclude='resources/motion_datasets/'
   --exclude='resources/gigahands/'
   --exclude='resources/gigahands_leap_csv/'
@@ -34,7 +34,7 @@ EXCLUDES=(
   --exclude='resources/loco_mujoco_g1/'
   --exclude='resources/lafan1_lvhaidong/'
   --exclude='resources/robot_rl-cudagraph/'
-  # onnx duplicates of the .pt policies (training loads .pt only)
+  # onnx duplicates of the .pt policies
   --exclude='*.onnx'
   # python caches
   --exclude='__pycache__/'
@@ -48,8 +48,7 @@ EXCLUDES=(
 for host in "$@"; do
   target="$(larg_target "$host")"
   echo "=== rsync -> ${target}:${LARG_REMOTE_DIR}/ ==="
-  # -a archive, -z compress, -L copy-unsafe symlinks as files? No: keep symlinks
-  # (the locomanip policy symlinks point within the synced tree, so they resolve).
+  # Symlinks stay links: their targets are inside the synced tree.
   rsync -az --partial --mkpath --info=stats1,progress2 \
     "${EXCLUDES[@]}" \
     -e "ssh -o ConnectTimeout=10" \

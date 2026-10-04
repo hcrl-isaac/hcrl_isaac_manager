@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """Interactively select which projects + IsaacLab mode this workspace composes.
 
-Reads the committed catalog (``workspace.defaults.yaml``), prompts the user (arrow keys + space to
-toggle projects, enter to confirm), and writes the per-user selection to a gitignored
-``workspace.yaml`` (just ``projects`` + ``isaaclab.mode``: pip/source/none). ``resolve_workspace.py`` merges the two.
+Reads the committed catalog (``workspace.defaults.yaml``) and writes the per-user selection to a gitignored
+``workspace.yaml`` (``projects`` + ``isaaclab.mode``: pip/source/none), which ``resolve_workspace.py`` merges.
 
 Modes:
-    (default, "ensure")  Write a selection from the catalog defaults if ``workspace.yaml`` is absent;
-                         otherwise leave it untouched. Never prompts -- safe for ``just resolve``/CI.
-    --interactive        On a TTY, always (re)open the picker pre-filled with the current selection (so a
-                         plain ``just setup`` reconfigures). With no TTY, keep the existing selection, or
-                         write catalog defaults if none exists. Used by ``just setup``.
+    (default)      Write the catalog defaults if ``workspace.yaml`` is absent, else leave it. Never prompts.
+    --interactive  On a TTY, open the picker pre-filled with the current selection. With no TTY, keep the
+                   existing selection, or write catalog defaults if none exists.
 """
 
 from __future__ import annotations

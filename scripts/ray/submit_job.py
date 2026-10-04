@@ -3,54 +3,15 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""
-This script submits aggregate job(s) to cluster(s) described in a
-config file containing ``name: <NAME> address: http://<IP>:<PORT>`` on
-a new line for each cluster. For KubeRay clusters, this file
-can be automatically created with :file:`grok_cluster_with_kubectl.py`
+"""Submit aggregate job(s) to the Ray cluster(s) listed in a config file.
 
-Aggregate job(s) are matched with cluster(s) via the following relation:
-cluster_line_index_submitted_to = job_index % total_cluster_count
-
-Aggregate jobs are separated by the * delimiter. The ``--aggregate_jobs`` argument must be
-the last argument supplied to the script.
-
-An aggregate job could be a :file:`../tuner.py` tuning job, which automatically
-creates several individual jobs when started on a cluster. Alternatively, an aggregate job
-could be a :file:'../wrap_resources.py` resource-wrapped job,
-which may contain several individual sub-jobs separated by
-the + delimiter. An aggregate job could also be a :file:`../task_runner.py` multi-task submission job,
-where each sub-job and its resource requirements are defined in a YAML configuration file.
-In this mode, :file:`../task_runner.py` will read the YAML file (via --task_cfg), and
-submit all defined sub-tasks to the Ray cluster, supporting per-job resource specification and
-real-time streaming of sub-job outputs.
-
-If there are more aggregate jobs than cluster(s), aggregate jobs will be submitted
-as clusters become available via the defined relation above. If there are less aggregate job(s)
-than clusters, some clusters will not receive aggregate job(s). The maximum number of
-aggregate jobs that can be run simultaneously is equal to the number of workers created by
-default by a ThreadPoolExecutor on the machine submitting jobs due to fetching the log output after
-jobs finish, which is unlikely to constrain overall-job submission.
+The config file holds one ``name: <NAME> address: http://<IP>:<PORT>`` line per cluster. Aggregate jobs are
+separated by the ``*`` delimiter and assigned by ``job_index % cluster_count``; ``--aggregate_jobs`` must be the
+last argument. An aggregate job is a ``wrap_resources.py`` (sub-jobs separated by ``+``), ``tuner.py`` or
+``task_runner.py`` invocation.
 
 Usage:
-
-.. code-block:: bash
-
-    # Example; submitting a tuning job
-    python3 scripts/reinforcement_learning/ray/submit_job.py \
-    --aggregate_jobs /workspace/isaaclab/scripts/reinforcement_learning/ray/tuner.py \
-        --cfg_file hyperparameter_tuning/vision_cartpole_cfg.py \
-        --cfg_class CartpoleTheiaJobCfg --mlflow_uri <ML_FLOW_URI>
-
-    # Example: Submitting resource wrapped job
-    python3 scripts/reinforcement_learning/ray/submit_job.py --aggregate_jobs wrap_resources.py --test
-
-    # Example: submitting tasks with specific resources, and supporting pip packages and py_modules
-    # You may use relative paths for task_cfg and py_modules, placing them in the scripts/reinforcement_learning/ray directory, which will be uploaded to the cluster.
-    python3 scripts/reinforcement_learning/ray/submit_job.py --aggregate_jobs task_runner.py --task_cfg tasks.yaml
-
-    # For all command line arguments
-    python3 scripts/reinforcement_learning/ray/submit_job.py -h
+    python scripts/ray/submit_job.py --config_file <cfg> --job_config <yaml> --aggregate_jobs <job> [* <job>]
 """
 
 import argparse
@@ -125,7 +86,6 @@ def submit_jobs_to_clusters(
 
     with ThreadPoolExecutor() as executor:
         for idx, job_command in enumerate(jobs):
-            # Cycle through clusters using modulus to wrap around if there are more jobs than clusters
             cluster = clusters[idx % len(clusters)]
             executor.submit(submit_job, cluster, job_command, runtime_env, metadata, other_data)
 
