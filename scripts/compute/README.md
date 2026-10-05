@@ -72,7 +72,17 @@ just res eval path/to/census.py --any --pool larg-a100 --holder "<session>" \
     --env CENSUS_N=512 -- --script-flag value
 just res eval probe.py --on hazard:2 --holder "<session>" --checkpoint ./model_200.pt   # exported as CHECKPOINT
 just res eval probe.py --lease <id> --holder "<session>" --wt my-feature                 # your lease, a worktree set
+just res eval hcrl_isaaclab:scripts/train.py --wt legacy --on pepi:1 --holder "<session>" --detach \
+    -- --task hhlm/T1-Kick-v0 --headless --video on                                     # train a branch on LARG
 ```
+
+- A script is a file on this machine (copied to the target) or `<repo>:<path>` inside a shipped repo, which runs
+  from its shipped copy, so its own sibling imports resolve (e.g. `hcrl_isaaclab:scripts/train.py`). It runs in a
+  writable working dir of its own, `<scratch>/res-eval/work/<stage id>`, where relative outputs such as `logs/` land
+  and stay.
+- `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
+  owns its stage dir, and its lease stays held until the card goes idle (or `just res release <id>`). `--timeout`
+  and `--stall` do not apply to a detached run.
 
 - The card comes from `--on host:gpu`, `--any` or `--lease <id>`. A lease `eval` takes is released when the script
   ends, success or failure; a `--lease` you pass stays yours. `ray` and `slurm` pools are refused (use

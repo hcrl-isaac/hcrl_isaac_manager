@@ -245,15 +245,18 @@ def _describe(src: str) -> str:
         return "(not a git checkout)"
 
 
-def runner_script(t: Target, stage: str, script: str, env_names: list[str], pythonpath: list[str]) -> str:
+def runner_script(
+    t: Target, stage: str, script: str, env_names: list[str], pythonpath: list[str], cwd: str = ""
+) -> str:
     """The bash that runs on the target: a stage log, isolated caches, the given PYTHONPATH, the script's status.
 
     Args:
         t: The target.
         stage: The stage dir on the target.
-        script: The local script (run under its basename in the stage).
+        script: The script's path on the target.
         env_names: Names of the exported variables, for the log.
         pythonpath: PYTHONPATH entries on the target.
+        cwd: Directory to run the script from (default: the target workspace).
 
     Returns:
         The run.sh text.
@@ -270,6 +273,7 @@ set -u
 exec > >(tee -a {q(stage + "/log")}) 2>&1
 cd {q(t.workspace)} || {{ echo "[res] no workspace {t.workspace} on {t.host}"; exit 97; }}
 set -a; source {q(stage + "/env")}; set +a
+rm -f {q(stage + "/env")}  # credentials stay in this process's environment only
 {pin}
 export TMPDIR={q(stage + "/tmp")} XDG_CACHE_HOME={q(cache + "/xdg")} OMNI_CACHE_DIR={q(cache + "/omni")}
 export HCRL_ARTIFACT_ROOT={q(t.scratch + "/res-eval/artifacts")}
@@ -279,8 +283,10 @@ gomp="$(ls ilab/lib/python3.11/site-packages/torch/lib/libgomp-*.so.1 2>/dev/nul
 [ -n "$gomp" ] && export LD_PRELOAD="$gomp${{LD_PRELOAD:+:$LD_PRELOAD}}"
 export PYTHONPATH={q(":".join(pythonpath))}"${{PYTHONPATH:+:$PYTHONPATH}}"
 cat {q(stage + "/MANIFEST")}
-echo "[res] {t.host}:gpu{t.gpu} ({t.pin}) python=$PWD/ilab/bin/python env: {" ".join(env_names) or "-"}"
-./ilab/bin/python {q(stage + "/" + os.path.basename(script))} "$@"
+py="$PWD/ilab/bin/python"
+echo "[res] {t.host}:gpu{t.gpu} ({t.pin}) python=$py env: {" ".join(env_names) or "-"}"
+mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
+"$py" {q(script)} "$@"
 """
 
 
@@ -466,6 +472,28 @@ class Stage:
             )
         return self.proc
 
+    def start_detached(self, argv: list[str]) -> None:
+        """Start the runner in its own session, detached from this process (pid in ``<stage>/pid``).
+
+        Args:
+            argv: The script's arguments.
+        """
+        q = shlex.quote
+        if self.t.kind == "local":
+            proc = subprocess.Popen(
+                ["bash", f"{self.dir}/run.sh", *argv],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            Path(f"{self.dir}/pid").write_text(str(proc.pid))
+            return
+        args = " ".join(q(a) for a in argv)
+        cmd = f"cd {q(self.dir)} && {{ setsid nohup bash run.sh {args} < /dev/null > /dev/null 2>&1 & echo $! > pid; }}"
+        if self._ssh(cmd).returncode != 0:
+            sys.exit(f"[res] could not start the run on {self.t.host}")
+
     def kill(self) -> bool:
         """Kill the runner's process group on the target (TERM, then KILL) and report whether it is gone."""
         if self.t.kind == "local" and self.proc is not None:
@@ -610,6 +638,41 @@ def _interrupt(signum: int, _frame: object) -> None:
     raise KeyboardInterrupt(signal.Signals(signum).name)
 
 
+def _repo_script(spec: str, wt: str) -> tuple[str, str]:
+    """``(repo, path)`` for a ``<repo>:<path>`` script inside a shipped package repo, else ``("", "")``.
+
+    Args:
+        spec: The script argument.
+        wt: The worktree set, which decides where the file is checked.
+
+    Returns:
+        The repo and the path within it; exits when the repo is not shipped or the file is missing.
+    """
+    if os.path.exists(spec) or ":" not in spec:
+        return "", ""
+    repo, _, rel = spec.partition(":")
+    code = local_code(local_workspace(), wt)
+    if repo not in code:
+        sys.exit(f"[res] {spec}: {repo} is not a shipped repo ({', '.join(code)})")
+    if not os.path.isfile(os.path.join(code[repo], rel)):
+        sys.exit(f"[res] {spec}: no {rel} in {code[repo]}")
+    return repo, rel
+
+
+def _print_detached(stage: Stage, taken: ls.Lease | None) -> None:
+    """How to follow, stop and release a detached run."""
+    q = shlex.quote
+    on = (lambda c: f"ssh {stage.t.ssh} {q(c)}") if stage.t.kind == "ssh" else (lambda c: c)
+    print(f"[res] started detached on {stage.t.host}:gpu{stage.t.gpu} (stage {stage.dir})", file=sys.stderr)
+    print(f"[res] follow: {on('tail -f ' + q(stage.dir + '/log'))}", file=sys.stderr)
+    print(f"[res] stop:   {on('kill -TERM -- -$(cat ' + q(stage.dir + '/pid') + ')')}", file=sys.stderr)
+    if taken is not None:
+        print(
+            f"[res] lease {taken.id} stays held; it releases once the card idles, or: just res release {taken.id}",
+            file=sys.stderr,
+        )
+
+
 def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> None:
     """Run a script on one leased card, then kill what is left of it, clean up and release the lease it took.
 
@@ -618,8 +681,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         pools: Configured pools.
         claim: ``res.claim``, which leases the card.
     """
-    script = os.path.abspath(args.script)
-    if not os.path.isfile(script):
+    repo, rel = _repo_script(args.script, args.wt)
+    script = os.path.abspath(args.script) if not repo else rel
+    if not repo and not os.path.isfile(script):
         sys.exit(f"[res] no script {args.script}")
     if sum(map(bool, (args.on, args.any, args.lease))) != 1:
         sys.exit("[res] pick the card with exactly one of --on host:gpu, --any or --lease <id>")
@@ -649,7 +713,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         pool = next(p for p in pools if p.name == rep.pool.split("/")[0])
         host, gpu = card.host, card.index
         print(f"[res] leased {taken.id}: {taken.card} for {args.holder}", file=sys.stderr)
-    rc, stage = 1, None
+    rc, stage, detached = 1, None, False
     handlers = {sig: signal.signal(sig, _interrupt) for sig in (signal.SIGTERM, signal.SIGHUP)}
     try:
         t = make_target(pool, host, gpu)
@@ -657,23 +721,41 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         stage.make()
         paths = {ref.name: stage.link_checkpoint(fetch_checkpoint(ref), ref.name) for ref in refs}
         source = t.workspace if t.kind == "local" else local_workspace()
-        pythonpath, manifest = stage.sync_code(local_code(source, args.wt))
+        code = local_code(source, args.wt)
+        pythonpath, manifest = stage.sync_code(code)
         stage.write("\n".join(manifest) + "\n", "MANIFEST", mode=0o644)
-        stage.put(script, os.path.basename(script), mode=0o644)
+        if repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
+            root = dict(zip(code, pythonpath, strict=True))[repo]
+            target_script = f"{root}/{rel}"
+            # snapshots are read-only and runs may be concurrent, so relative outputs (train.py's logs/) go to a
+            # writable working dir of this run's own, kept afterwards
+            cwd = f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}"
+        else:
+            cwd, target_script = "", stage.put(script, os.path.basename(script), mode=0o644)
         lines = [f"{k}={shlex.quote(v)}" for k, v in {**wandb_env(), **env, **paths}.items()]
         stage.write("\n".join(lines) + "\n", "env")
-        runner = runner_script(t, stage.dir, script, sorted({**env, **paths}), pythonpath)
+        runner = runner_script(t, stage.dir, target_script, sorted({**env, **paths}), pythonpath, cwd)
         stage.write(runner, "run.sh", mode=0o700)
         if taken is not None:
             _touch_lease(taken.id)
-        print(f"[res] running {os.path.basename(script)} on {t.host}:gpu{t.gpu} (stage {stage.dir})", file=sys.stderr)
-        rc = run(stage, args.script_args, args.timeout, args.stall)
+        if args.detach:
+            stage.start_detached(args.script_args)
+            detached = True
+            _print_detached(stage, taken)
+            rc = 0
+        else:
+            print(
+                f"[res] running {os.path.basename(script)} on {t.host}:gpu{t.gpu} (stage {stage.dir})", file=sys.stderr
+            )
+            rc = run(stage, args.script_args, args.timeout, args.stall)
     except KeyboardInterrupt as exc:
         rc = 130
         print(f"[res] interrupted ({exc or 'SIGINT'})", file=sys.stderr)
     finally:
         for sig, old in handlers.items():
             signal.signal(sig, old)
+        if detached:  # the run owns its stage and lease now
+            sys.exit(rc)
         gone = True
         if stage is not None and stage.proc is not None and not stage.dead:
             gone = stage.kill()
@@ -707,7 +789,10 @@ def _duration(text: str) -> float:
 def add_parser(sub: argparse._SubParsersAction) -> None:
     """Register `eval` on the `just res` subparsers."""
     ev = sub.add_parser("eval", help="run a one-off script on a leased GPU (local or ssh pools)")
-    ev.add_argument("script", help="script on this machine (copied to the target); its arguments follow --")
+    ev.add_argument(
+        "script", help="script on this machine, or <repo>:<path> inside a shipped repo; its arguments follow --"
+    )
+    ev.add_argument("--detach", action="store_true", help="start the run and return; the lease stays held")
     ev.add_argument("--on", help="card as host:gpu")
     ev.add_argument("--any", action="store_true", help="take any free card")
     ev.add_argument("--lease", help="run on a card you already lease (left leased afterwards)")

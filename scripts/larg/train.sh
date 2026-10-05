@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Launch a training run on a LARG box from its synced workspace, detached (setsid nohup).
 #
-# Passes --video async: the A100s lack RT cores, so videos render elsewhere. Extra train.py flags pass via `--`.
-# One GPU runs train.py directly; LARG_NPROC > 1 runs it under torchrun with --distributed.
+# A40 runs record video in-process (--video on; the Vulkan clamp layer in the LARG home lets them render); the A100s
+# lack RT cores, so their runs pass --video async and render elsewhere. Extra train.py flags pass via `--` (a --video
+# there wins). One GPU runs train.py directly; LARG_NPROC > 1 runs it under torchrun with --distributed.
 #
 # Usage:
 #   scripts/larg/train.sh <host> <task> <run_name> [run_group] [num_envs] [-- extra train.py args]
@@ -12,6 +13,7 @@
 #   LARG_NPROC            GPUs for the run (default 1)
 #   CUDA_VISIBLE_DEVICES  physical GPUs to pin the run to (e.g. 2 or 0,1); also tags the run dir
 #   LARG_SCRATCH          per-box scratch for run logs and Kit caches (default /var/local/$LARG_USER)
+#   LARG_HOLDER           your session name: lease the pinned cards with `just res claim` before launching
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/common.sh"
@@ -35,7 +37,9 @@ if [ "${1:-}" = "--" ]; then shift; extra=("$@"); fi
 [ -n "$host" ] && [ -n "$task" ] && [ -n "$run_name" ] || {
   echo "usage: $0 <host> <task> <run_name> [run_group] [num_envs] [-- extra]"; exit 1; }
 
-args=(--video async --task "$task" --run_name "$run_name" --run_group "$run_group")
+video=async
+for h in "${LARG_A40_HOSTS[@]}"; do [ "${host%%.*}" = "$h" ] && video=on; done
+args=(--video "$video" --task "$task" --run_name "$run_name" --run_group "$run_group")
 [ -n "$num_envs" ] && args+=(--num_envs "$num_envs")
 args+=("${extra[@]}")
 if [ "$NPROC" -gt 1 ]; then
@@ -45,10 +49,17 @@ else
 fi
 
 gpus="${CUDA_VISIBLE_DEVICES:-}"
+if [ -n "${LARG_HOLDER:-}" ]; then
+  [ -n "$gpus" ] || { echo "[larg] LARG_HOLDER needs CUDA_VISIBLE_DEVICES to name the cards to lease"; exit 1; }
+  cards=(); for g in ${gpus//,/ }; do cards+=("${host%%.*}:$g"); done
+  python3 "$HERE/../compute/res.py" claim "${cards[@]}" --holder "$LARG_HOLDER" --note "$run_name" || exit 1
+else
+  echo "[larg] WARNING: LARG_HOLDER unset, so the run's cards are not leased; other sessions see them only as busy, and its Kit cache starts cold"
+fi
 tag="${task//\//_}_$(date +%Y%m%d-%H%M%S)${gpus:+_gpu${gpus//,/-}}"
 run_dir="$RUNS/$tag"
-# per run: TMPDIR and the log; per GPU set: Kit caches, so concurrent runs on one box never share one
-cache="${RUNS%/*}/kit-cache/gpu${gpus:-all}"
+# per run: TMPDIR and the log. Kit caches are per GPU set when the cards are leased (one run per card), else per run
+if [ -n "${LARG_HOLDER:-}" ]; then cache="${RUNS%/*}/kit-cache/gpu${gpus}"; else cache="$run_dir/kit-cache"; fi
 q() { printf '%q ' "$@"; }
 remote="set -u
 mkdir -p $(q "$run_dir/tmp" "$cache/xdg" "$cache/omni") || exit 1

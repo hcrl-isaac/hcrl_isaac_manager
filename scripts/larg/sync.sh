@@ -54,5 +54,18 @@ for host in "$@"; do
     -e "ssh -o ConnectTimeout=10" \
     "${LARG_LOCAL_DIR}/" \
     "${target}:${LARG_REMOTE_DIR}/"
+  # a renamed or new repo must be importable in the box's venv; --no-deps leaves torch and Isaac untouched. Only a
+  # venv that serves this tree is touched: on some boxes ilab links into another tree, whose installs must not move
+  larg_ssh "$host" "cd $(larg_remote_path) && [ -x ilab/bin/python ] || exit 0
+    ws=\$(pwd -P); venv=\$(readlink -f ilab)
+    serves=\$(ilab/bin/python -c 'import importlib.util as u; s = u.find_spec(\"hcrl_isaaclab\"); print(s.origin if s else \"\")')
+    case \"\$venv/\" in \"\$ws\"/*) ;; *) case \"\$serves\" in \"\$ws\"/*) ;; *)
+      echo \"[sync] WARNING: ilab resolves to \$venv, whose hcrl_isaaclab is \${serves:-missing}, not this tree:\"
+      echo \"[sync]   skipping the package installs; set this tree's venv up with scripts/larg/deploy.sh\"
+      exit 0 ;; esac ;; esac
+    for d in resources/hcrl_isaaclab resources/robot_rl resources/*_tasks resources/*_robots; do
+      [ -f \"\$d/pyproject.toml\" ] || [ -f \"\$d/setup.py\" ] || continue
+      ~/.local/bin/uv pip install -q --python ilab/bin/python --no-deps -e \"\$d\" || echo \"[sync] could not install \$d\"
+    done"
   echo "=== done: ${host} ==="
 done
