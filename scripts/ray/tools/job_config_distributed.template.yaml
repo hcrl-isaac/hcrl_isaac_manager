@@ -25,4 +25,4 @@ init_commands: []
   - "**/.venv/**"
   - "nohup.out"
   - "**/style_data/**"
-  - "**/policies/**/bfmzero_*/**"
+  - "**/policies/*/*/*"
