@@ -13,6 +13,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+import evaluate
 import leases as ls
 from inventory import Pool, load_config, load_pools
 from probe import HELD_UTIL, Card, Report, probe_local, probe_ray, probe_slurm_login, probe_ssh_host
@@ -249,10 +250,16 @@ def _choose(seen: list[tuple[Card, Report]], taken: set[str], args: argparse.Nam
     return chosen
 
 
-def cmd_claim(args: argparse.Namespace, pools: list[Pool]) -> None:
-    """Lease named cards, or --any free ones, after a fresh probe; all or nothing."""
-    if not args.cards and not args.any:
-        sys.exit("[res] name cards (host:gpu ...) or pass --any")
+def claim(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple[ls.Lease, Card, Report]], dict]:
+    """Lease named cards, or --any free ones, after a fresh probe; all or nothing (exits when refused).
+
+    Args:
+        args: cards, any, count, min_free_gb, pool, holder, note and for_ as `just res claim` takes them.
+        pools: Pools to probe.
+
+    Returns:
+        The new leases with their cards and reports, and the lease windows.
+    """
     reports = probe_all(select_pools(pools, args.pool))
     seen = [(c, r) for r in reports for c in r.cards]
     windows = lease_windows()
@@ -271,7 +278,15 @@ def cmd_claim(args: argparse.Namespace, pools: list[Pool]) -> None:
         sys.exit(f"[res] nothing claimed: {exc}")
     if refused is not None:
         raise refused
-    for lease, (card, rep) in zip(new, chosen, strict=True):
+    return [(lease, c, r) for lease, (c, r) in zip(new, chosen, strict=True)], windows
+
+
+def cmd_claim(args: argparse.Namespace, pools: list[Pool]) -> None:
+    """Lease named cards, or --any free ones, after a fresh probe; all or nothing."""
+    if not args.cards and not args.any:
+        sys.exit("[res] name cards (host:gpu ...) or pass --any")
+    taken, windows = claim(args, pools)
+    for lease, _card, rep in taken:
         box = f", time box {int(args.for_ // 60)} min" if args.for_ else ""
         print(f"claimed {lease.id}: {lease.card} ({rep.pool}{box}) for {lease.holder}")
     print(
@@ -363,7 +378,10 @@ def main() -> None:
     rl.add_argument("--force", action="store_true", help="release someone else's lease")
     sub.add_parser("leases", help="list leases (no probe)")
     sub.add_parser("pools", help="list the configured pools")
-    args = parser.parse_args(sys.argv[1:] or ["status"])
+    evaluate.add_parser(sub)
+    argv, script_args = evaluate.split_script_args(sys.argv[1:] or ["status"])
+    args = parser.parse_args(argv)
+    args.script_args = script_args
 
     try:
         pools = load_pools()
@@ -373,6 +391,9 @@ def main() -> None:
         for p in pools:
             detail = p.settings.get("hosts") or p.settings.get("login") or p.settings.get("address") or ""
             print(f"{p.name:<16} {p.kind:<6} {detail}")
+        return
+    if args.cmd == "eval":
+        evaluate.cmd_eval(args, pools, claim)
         return
     commands = {"status": cmd_status, "claim": cmd_claim, "release": cmd_release, "leases": cmd_leases}
     commands[args.cmd](args, pools)
