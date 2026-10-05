@@ -40,9 +40,7 @@ def workspace_repos(resources: str = RESOURCES_DIR) -> list[str]:
             if listed is None or r in listed:
                 repos.append(r)
             else:
-                print(
-                    f"[worktree_env] skipping resources/{r}: not in gitman.yaml (run `just resolve`?)", file=sys.stderr
-                )
+                print(f"[worktree_env] skipping resources/{r}: not a gitman.yaml source", file=sys.stderr)
     return repos
 
 

@@ -73,16 +73,24 @@ cmd="$*"; [ -n "$cmd" ] || cmd="/isaac-sim/python.sh --version"
 # NODE_EXEC_RESOURCES (set by `exec --tree`) points at a staged tree's resources/ instead of the shared one.
 RESOURCES="${NODE_EXEC_RESOURCES:-${CLUSTER_ISAACLAB_DIR}/resources}"
 if [ -n "${NODE_EXEC_RESOURCES:-}" ]; then
-    # `trees rm` refuses while this marker's step is still in squeue
-    IN_USE="$(dirname "$RESOURCES")/.in-use/${SLURM_JOB_ID:-$(hostname -s)}.${SLURM_STEP_ID:-$$}"
+    # `trees rm` refuses while this marker's step (or job, outside a step) is still in squeue
+    if [ -n "${SLURM_JOB_ID:-}" ]; then
+        IN_USE="$(dirname "$RESOURCES")/.in-use/${SLURM_JOB_ID}.${SLURM_STEP_ID:-nostep}"
+    else
+        IN_USE="$(dirname "$RESOURCES")/.in-use/$(hostname -s).$$"
+    fi
     mkdir -p "$(dirname "$IN_USE")" && touch "$IN_USE"
     trap 'rm -f "$IN_USE"' EXIT
+    trap 'exit 143' TERM INT HUP
 fi
 EXT_BINDS=""
 for d in "${RESOURCES}"/*/; do
     name="$(basename "$d")"
     [ "$name" = "IsaacLab" ] && continue   # handled by the source overlay below, not /workspace/ext
     if [ -n "${NODE_EXEC_RESOURCES:-}" ] && [ ! -L "${d%/}" ]; then
+        # the artifact root (and the links into it) live in the shared checkout, writable
+        [ "$name" = hcrl_isaaclab ] && mkdir -p "${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/.artifacts" &&
+            EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/.artifacts:/workspace/ext/hcrl_isaaclab/.artifacts:rw"
         # a staged repo is read-only (its files are hardlinked to other trees), with writable run-output dirs:
         # hcrl_isaaclab's logs in the shared logs dir, the rest node-local
         EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:ro"

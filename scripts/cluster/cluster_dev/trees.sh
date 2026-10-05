@@ -11,7 +11,7 @@ _tree_valid() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$1" != "." ] && [ "$1" != 
 _tree_files() {
     local f
     git -C "$1" ls-files -z --cached --others --exclude-standard | while IFS= read -r -d '' f; do
-        [ -e "$1/$f" ] && printf '%s\0' "$f"
+        [ -e "$1/$f" ] && printf './%s\0' "$f"
     done
 }
 
@@ -118,6 +118,12 @@ cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new
             _tree_files "$src" | rsync -rlp --checksum --info=progress2 --from0 --files-from=- "${links[@]}" \
                 -e "ssh ${SSH_OPTS[*]}" "${src}/" "${CLUSTER_LOGIN}:${STAGE_PART}/resources/${repo}/" || exit 1
             for d in "${TREE_RW_DIRS[@]}"; do on_login "mkdir -p '${STAGE_PART}/resources/${repo}/${d}'" || exit 1; done
+            [ "$repo" = hcrl_isaaclab ] && { on_login "mkdir -p '${STAGE_PART}/resources/${repo}/.artifacts'" || exit 1; }
+            # W&B artifacts are gitignored links into the shared artifact root: carry the shared checkout's links
+            on_login "cd '${REMOTE_ISAACLAB_DIR}/resources/${repo}' 2>/dev/null || exit 0; \
+                find . -path ./worktrees -prune -o -type l -lname '*/.artifacts/*' -print | while IFS= read -r l; do \
+                t='${STAGE_PART}/resources/${repo}/'\"\$l\"; [ -e \"\$t\" ] || [ -L \"\$t\" ] && continue; \
+                mkdir -p \"\$(dirname \"\$t\")\" && cp -P \"\$l\" \"\$t\"; done" || exit 1
         done
         rsync -t -e "ssh ${SSH_OPTS[*]}" "${SCRIPT_DIR}/node_exec.sh" \
             "${CLUSTER_LOGIN}:${STAGE_PART}/scripts/cluster/cluster_dev/node_exec.sh" || exit 1
@@ -150,7 +156,6 @@ _stage_cleanup() {  # trap: drop this run's temporary checkouts and any partial 
     local entry
     for entry in "${STAGE_CHECKOUTS[@]}"; do
         git -C "${entry%%=*}" worktree remove --force "${entry#*=}" 2>/dev/null
-        git -C "${entry%%=*}" worktree prune 2>/dev/null
     done
     [ -n "${STAGE_WORK:-}" ] && rm -rf "$STAGE_WORK"
     [ -n "${STAGE_PART:-}" ] && on_login "rm -rf '${STAGE_PART}'" 2>/dev/null
@@ -194,12 +199,23 @@ _trees_rm() {
     local id="${1:-}" force="${2:-}" marker live=""
     _tree_valid "$id" && [[ "$id" =~ -[0-9a-f]{10}$ ]] || { err "usage: trees rm <name>-<fingerprint> [--force] | --partials"; exit 1; }
     on_login "[ -d '${TREES_DIR}/${id}' ]" || { err "no tree ${id}"; exit 1; }
-    # node_exec.sh holds .in-use/<job>.<step> while each run lasts, and a step squeue no longer lists has ended
+    # node_exec.sh holds .in-use/<job>.<step|nostep> while each run lasts, and one squeue no longer lists has ended
     if [ "$force" != --force ]; then
+        local job sq rc
         while IFS= read -r marker; do
             [ -n "$marker" ] || continue
-            if [[ "$marker" =~ ^([0-9]+)\.[0-9]+$ ]]; then
-                on_login "squeue -h -s -j '${BASH_REMATCH[1]}' -o %i 2>/dev/null" | grep -qx "$marker" && live+="${marker} "
+            if [[ "$marker" =~ ^([0-9]+)\.([0-9]+|nostep)$ ]]; then
+                job="${BASH_REMATCH[1]}"
+                sq="$(on_login "squeue -h -s -j '${job}' -o %i 2>&1")" && rc=0 || rc=$?
+                if [ "$rc" -ne 0 ]; then
+                    grep -q "Invalid job id" <<< "$sq" && continue
+                    err "cannot check job ${job}: $(head -1 <<< "$sq"); pass --force if its runs are gone"; exit 1
+                fi
+                if [ "${marker#*.}" = nostep ]; then
+                    grep -q "^${job}\." <<< "$sq" && live+="${marker} "
+                else
+                    grep -qx "$marker" <<< "$sq" && live+="${marker} "
+                fi
             else
                 live+="${marker} "
             fi

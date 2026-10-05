@@ -33,7 +33,22 @@ check "its outputs are writable node-locally" "$T/tmp/cluster_dev_7/tree-rw/t-01
 check "its wandb dir is writable node-locally" "$T/tmp/cluster_dev_7/tree-rw/t-0123456789/hcrl_isaaclab/wandb:/workspace/ext/hcrl_isaaclab/wandb:rw"
 check "a linked shared repo stays read-write" "$T/shared/resources/hcrl_robots:/workspace/ext/hcrl_robots:rw"
 check "the run holds an in-use marker for its step" "marker 7.3"
+check "the shared artifact root is bound writable" \
+    "$T/shared/resources/hcrl_isaaclab/.artifacts:/workspace/ext/hcrl_isaaclab/.artifacts:rw"
 if [ -z "$(ls -A "$TREE/.in-use")" ]; then echo "PASS the marker is removed on exit"; else echo "FAIL the marker is removed on exit"; fails=$((fails + 1)); fi
+
+PATH="$T/bin:$PATH" TMPDIR="$T/tmp" SLURM_JOB_ID=7 NODE_EXEC_ENV="$T/env" NODE_EXEC_RESOURCES="$TREE/resources" \
+    bash "$T/scripts/cluster/cluster_dev/node_exec.sh" true > "$T/out" 2>&1
+check "outside a step the marker names the job" "marker 7.nostep"
+printf '#!/usr/bin/env bash\nsleep 30 & wait\n' > "$T/bin/apptainer"
+PATH="$T/bin:$PATH" TMPDIR="$T/tmp" SLURM_JOB_ID=7 SLURM_STEP_ID=4 NODE_EXEC_ENV="$T/env" NODE_EXEC_RESOURCES="$TREE/resources" \
+    bash "$T/scripts/cluster/cluster_dev/node_exec.sh" true > /dev/null 2>&1 &
+pid=$!
+for _ in $(seq 50); do [ -e "$TREE/.in-use/7.4" ] && break; sleep 0.1; done
+kill -TERM "$pid"
+wait "$pid" 2>/dev/null
+if [ ! -e "$TREE/.in-use/7.4" ]; then echo "PASS SIGTERM removes the marker"; else echo "FAIL SIGTERM removes the marker"; fails=$((fails + 1)); fi
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@"\n' > "$T/bin/apptainer"
 
 run > "$T/out" 2>&1
 check "shared mode binds the shared repo read-write" "$T/shared/resources/hcrl_isaaclab:/workspace/ext/hcrl_isaaclab:rw"

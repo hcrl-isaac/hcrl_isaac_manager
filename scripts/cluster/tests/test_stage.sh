@@ -19,7 +19,8 @@ while [ $# -gt 0 ]; do
 done
 exec bash -c "$*"
 EOF
-printf '#!/usr/bin/env bash\ncat "%s/running_jobs" 2>/dev/null\n' "$T" > "$T/bin/squeue"
+printf '#!/usr/bin/env bash\n[ -f "%s/squeue_err" ] && { cat "%s/squeue_err" >&2; exit 1; }\ncat "%s/running_jobs" 2>/dev/null\n' \
+    "$T" "$T" "$T" > "$T/bin/squeue"
 chmod +x "$T/bin/ssh" "$T/bin/squeue"
 
 L="$T/local"
@@ -35,6 +36,8 @@ mkdir -p "$G" "$R/resources/hcrl_isaaclab" "$R/resources/hcrl_robots"
 cp "$G/code.py" "$G/big.bin" "$R/resources/hcrl_isaaclab/"
 touch -d 2020-01-01 "$R/resources/hcrl_isaaclab/big.bin"  # an old copy: linking must go by content, not mtime
 echo asset > "$R/resources/hcrl_robots/t1.urdf"
+mkdir -p "$R/resources/hcrl_isaaclab/pol"
+ln -s /workspace/ext/hcrl_isaaclab/.artifacts/abc "$R/resources/hcrl_isaaclab/pol/bfmzero_x"
 printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\n' "$R" > "$T/scripts/cluster/config/zz/.env.cluster"
 printf '#!/usr/bin/env bash\n#SBATCH -p test\n' > "$T/scripts/cluster/config/zz/submit_job_slurm.sh"
 dev() { PATH="$T/bin:$PATH" HOME="$T" CLUSTER=zz LOCAL_ISAACLAB_DIR="$L" bash "$T/scripts/cluster/cluster_dev/cluster_dev.sh" "$@"; }
@@ -54,6 +57,9 @@ check "manifest records the commit" "grep -q \"hcrl_isaaclab feat \$(git -C '$G'
 check "manifest lists shared repos as live" "grep -q '^hcrl_robots shared-live ' '$tree/MANIFEST'"
 check "unstaged repos link to the shared checkout" "[ -L '$tree/resources/hcrl_robots' ] && [ -f '$tree/resources/hcrl_robots/t1.urdf' ]"
 check "staged repo has writable mount points" "[ -d '$tree/resources/hcrl_isaaclab/logs' ] && [ -d '$tree/resources/hcrl_isaaclab/outputs' ] && [ -d '$tree/resources/hcrl_isaaclab/wandb' ]"
+check "artifact links from the shared checkout are carried" \
+    "[ \"\$(readlink '$tree/resources/hcrl_isaaclab/pol/bfmzero_x')\" = /workspace/ext/hcrl_isaaclab/.artifacts/abc ]"
+check "hcrl_isaaclab has an artifact mount point" "[ -d '$tree/resources/hcrl_isaaclab/.artifacts' ]"
 check "tree carries its own node_exec.sh" "[ -f '$tree/scripts/cluster/cluster_dev/node_exec.sh' ]"
 check "shared checkout untouched" "grep -qx main '$R/resources/hcrl_isaaclab/code.py'"
 check "no inode is shared with the mutable shared checkout" \
@@ -145,13 +151,23 @@ mkdir -p "$tree/.in-use" && touch "$tree/.in-use/4242.0"
 printf '4242.0\n4242.1\n' > "$T/running_jobs"
 dev trees rm "$id" > "$T/out6" 2>&1
 check "rm refuses a tree whose step still runs" "[ $? -ne 0 ] && [ -d '$tree' ]"
+echo 'Socket timed out on send/recv operation' > "$T/squeue_err"
+dev trees rm "$id" > "$T/out6" 2>&1
+check "a failing squeue refuses instead of removing" "[ $? -ne 0 ] && [ -d '$tree' ] && grep -q 'cannot check job 4242' '$T/out6'"
+rm "$T/squeue_err"
 echo 4242.1 > "$T/running_jobs"
+touch "$tree/.in-use/4242.nostep"
+dev trees rm "$id" > "$T/out6" 2>&1
+check "a no-step marker holds while its job runs" "[ $? -ne 0 ] && grep -q '4242.nostep' '$T/out6'"
+rm "$tree/.in-use/4242.nostep"
 touch "$tree/.in-use/node7.99"
 dev trees rm "$id" > "$T/out6" 2>&1
 check "an ended step on a live job does not hold it, a non-slurm marker does" "[ $? -ne 0 ] && grep -q 'node7.99' '$T/out6' && ! grep -q '4242.0' '$T/out6'"
 rm "$tree/.in-use/node7.99"
+echo 'slurm_load_jobs error: Invalid job id specified' > "$T/squeue_err"
 dev trees rm "$id" > "$T/out6" 2>&1
 check "rm removes it once the step ended" "[ $? -eq 0 ] && [ ! -e '$tree' ]"
+rm -f "$T/squeue_err"
 check "rm needs the full id" "! dev trees rm r > /dev/null 2>&1"
 mkdir -p "$R/trees/old.partial.1/a" "$R/trees/new.partial.2" "$R/trees/busy.partial.3/a"
 touch -d '2 hours ago' "$R/trees/old.partial.1/a" "$R/trees/old.partial.1" "$R/trees/busy.partial.3"
