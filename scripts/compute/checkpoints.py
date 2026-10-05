@@ -80,16 +80,32 @@ def _cli_args(core: str) -> types.ModuleType:
 
 
 def download(core: str, cache: str, run_path: str, model: str) -> str:
-    """Download one W&B checkpoint into ``<cache>/models/<run_id>/`` (reused when complete) and return its path."""
+    """Download one W&B checkpoint to ``<cache>/<entity>/<project>/<run_id>/<model>`` and return its path.
+
+    The file is downloaded into a private directory and renamed into place, so a path in the cache is always
+    complete and concurrent callers never read a partial file.
+    """
+    import shutil
+    import uuid
+
     import wandb
 
-    cli = _cli_args(core)
     if not model:
         names = [f.name for f in wandb.Api().run(run_path).files() if re.fullmatch(r"model_\d+\.pt", f.name)]
         if not names:
             raise FileNotFoundError(f"no model_*.pt checkpoints in W&B run {run_path}")
         model = max(names, key=lambda n: int(n[6:-3]))
-    return cli.download_checkpoint_from_wandb(cache, run_path, model)
+    final = os.path.join(cache, run_path, model)
+    if os.path.isfile(final):
+        return final
+    tmp = os.path.join(cache, f".tmp-{uuid.uuid4().hex}")
+    try:
+        got = _cli_args(core).download_checkpoint_from_wandb(tmp, run_path, model)
+        os.makedirs(os.path.dirname(final), exist_ok=True)
+        os.replace(got, final)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return final
 
 
 def main() -> None:

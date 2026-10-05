@@ -75,18 +75,26 @@ just res eval probe.py --lease <id> --holder "<session>" --wt my-feature        
   `--load_run` (cached in `~/.cache/hcrl_res/checkpoints`), so a checkpoint is no longer tied to the box that
   trained it.
 - The script runs this machine's code: the package repos (`hcrl_isaaclab`, `robot_rl`, `*_tasks`; a `--wt` worktree
-  set where one exists) go on `PYTHONPATH`. On an ssh pool their tracked and non-ignored files are copied into a
-  per-card `<scratch>/res-eval/code/<host>-gpu<N>/` (one lease per card, so no other run writes it; nothing is
-  deleted there), next to links to the target's own asset repos. The interpreter is the target workspace's `ilab`
-  python, with `CUDA_VISIBLE_DEVICES` set to the card, a per-run `TMPDIR` and per-card `XDG_CACHE_HOME` /
-  `OMNI_CACHE_DIR`. `--env KEY=VALUE` (repeatable) and the W&B credentials from `scripts/.env.wandb` reach it through
-  a 0600 env file, never the command line.
-- It stages into a fresh `<scratch>/res-eval/<id>/` (never an rsync `--delete`), removed after success; a failed run
-  keeps it, minus checkpoints and credentials. The exit status is the script's own, and an exit 0 after a Python
-  traceback counts as a failure.
-- Pool settings: `workspace` (the manager checkout on the target; default `/var/local/<user>/hcrl_isaac_manager` on
-  ssh pools, this machine's checkout locally; it provides the venv and the asset repos) and `scratch` (default
-  `/var/local/<user>`, `~/tmp` locally).
+  set where one exists) go on `PYTHONPATH`. A local pool imports the checkouts in place. On an ssh pool each repo
+  becomes an immutable snapshot `<scratch>/res-eval/code/<repo>-<fingerprint>` (tracked and non-ignored files, written
+  under a `.partial` name and renamed into place, hardlinked from the previous snapshot), and the run gets a fresh
+  `<stage>/resources/` of links to those snapshots and to the target's own asset repos. A changed or deleted file
+  makes a new snapshot, and nothing is ever synced into the target's shared checkout.
+- The interpreter is the target workspace's `ilab` python, with a per-run `TMPDIR`, per-card `XDG_CACHE_HOME` /
+  `OMNI_CACHE_DIR` and `HCRL_ARTIFACT_ROOT` under `<scratch>/res-eval/`. The card: pools with `pin = "cvd"`
+  (default) mask `CUDA_VISIBLE_DEVICES` to it; `pin = "device"` (the A40 pool, where Kit has refused masked GPUs)
+  leaves it unmasked. Either way `RES_EVAL_DEVICE` names the card the script should use (`cuda:0` when masked).
+- `--env KEY=VALUE` (repeatable) and the W&B credentials from `scripts/.env.wandb` reach the script through a 0600 env
+  file, never the command line.
+- The run starts in its own process group. `--timeout` (default none) and `--stall` (no output for 15 min; `0` turns
+  it off) kill the whole group and confirm it is gone; so does Ctrl-C. The exit status is the script's own, an exit 0
+  after a Python traceback counts as a failure, and a killed run reports 124.
+- Everything goes to `<stage>/log`, which starts with a MANIFEST of each repo's commit and dirty count. The stage is
+  removed after success; a failed run keeps its log, MANIFEST and run.sh (its checkpoints and credentials are always
+  removed). A lease `eval` took is released whatever happens. Old snapshots are not pruned yet.
+- Pool settings: `workspace` (the manager checkout on the target, providing the venv and the asset repos; default
+  `/var/local/<user>/hcrl_isaac_manager` on ssh pools, this machine's checkout locally), `scratch` (default
+  `/var/local/<user>`, `~/tmp` locally) and `pin`.
 
 ## Pools
 
