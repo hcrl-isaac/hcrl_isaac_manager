@@ -191,6 +191,49 @@ class PartialReportTest(unittest.TestCase):
         reports = self.slurm("42|gpuA40x4|acct|COMPLETING|gpub001|1|0:00|N/A|gres/gpu:4|box\n")
         self.assertEqual([(r.pool, bool(r.error)) for r in reports[1:]], [("delta (delta) job 42", True)])
 
+    def ray(self, nodes: dict, jobs: list) -> Report:
+        class Resp:
+            def __init__(self, body: object) -> None:
+                self.body = json.dumps(body).encode()
+
+            def __enter__(self) -> io.BytesIO:
+                return io.BytesIO(self.body)
+
+            def __exit__(self, *exc: object) -> None:
+                return None
+
+        saved = probe.urllib.request.urlopen
+        probe.urllib.request.urlopen = lambda url, timeout: Resp(nodes if "nodes" in url else jobs)
+        try:
+            return probe.probe_ray(Pool("ray", "ray", {"address": "http://x"}))[0]
+        finally:
+            probe.urllib.request.urlopen = saved
+
+    def test_a_card_reading_idle_under_a_running_job_is_busy(self) -> None:
+        gpu = {
+            "index": 0,
+            "uuid": "GPU-r",
+            "name": "RTX 5090",
+            "memoryUsed": 545,
+            "memoryTotal": 32607,
+            "utilizationGpu": 0,
+            "processesPids": [],
+        }
+        node = {"hostname": "w1.x", "ip": "10.0.0.5", "raylet": {"state": "ALIVE"}, "gpus": [gpu]}
+        nodes = {"data": {"summary": [node]}}
+        running = {
+            "submission_id": "raysubmit_a",
+            "status": "RUNNING",
+            "entrypoint": "python x.py",
+            "driver_info": {"node_ip_address": "10.0.0.5"},
+        }
+        rep = self.ray(nodes, [running])
+        self.assertEqual((rep.cards[0].state, rep.cards[0].note), ("busy", "Ray job raysubmit_a runs on this node"))
+        done = dict(running, status="SUCCEEDED")
+        self.assertEqual(self.ray(nodes, [done]).cards[0].state, "free")
+        elsewhere = dict(running, driver_info={"node_ip_address": "10.0.0.9"})
+        self.assertEqual(self.ray(nodes, [elsewhere]).cards[0].state, "free")
+
     def test_non_alive_ray_node_marks_the_report_partial(self) -> None:
         nodes = {"data": {"summary": [{"hostname": "n1", "raylet": {"state": "DEAD"}, "gpus": []}]}}
 
