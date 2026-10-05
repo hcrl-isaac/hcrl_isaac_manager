@@ -20,6 +20,8 @@ done
 exec bash -c "$*"
 EOF
 # Delta's quota table: the remote dir is under a 100G-soft quota with $T/used in use
+# df reports ample room, so the quota table decides (the test machine's own disk is not the point)
+printf '#!/usr/bin/env bash\necho "Filesystem 1024-blocks Used Available Capacity Mounted"\necho "fake 9999999999 0 9999999999 0%% /"\n' > "$T/bin/df"
 cat > "$T/bin/quota" <<EOF
 #!/usr/bin/env bash
 echo "| Filesystem | Usage | Quota | Limit |"

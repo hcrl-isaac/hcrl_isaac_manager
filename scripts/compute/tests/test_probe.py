@@ -95,8 +95,15 @@ class ParseFailureTest(unittest.TestCase):
     def test_repeated_marker(self) -> None:
         self.assert_fails(output().replace("@@PS rc=0", "@@APPS rc=1\n@@PS rc=0"))
 
-    def test_output_after_end(self) -> None:
-        self.assert_fails(output() + "stray line\n")
+    def test_a_job_wrapper_around_the_query_is_ignored(self) -> None:
+        # TACC's srun prints its checks on the step's stdout and leaves the first marker mid-line
+        text = (
+            "--> Verifying valid jobname...OK\n--> Checking available allocation (IRI26004)..."
+            + output()
+            + "OK\n--> Quotas are not currently enabled for filesystem /home1/x...OK\n"
+        )
+        cards = parse_gpu_query(text, "p", "h")
+        self.assertEqual([c.state for c in cards], ["busy", "free", "held", "busy", "held"])
 
 
 class RayCardTest(unittest.TestCase):
