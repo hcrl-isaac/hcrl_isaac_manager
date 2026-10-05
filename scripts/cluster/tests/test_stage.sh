@@ -41,7 +41,7 @@ ln -s /workspace/ext/hcrl_isaaclab/.artifacts/abc "$R/resources/hcrl_isaaclab/po
 mkdir -p "$T/art/.artifacts/k/v0" "$T/art/.artifacts/k/v1"
 echo w > "$T/art/.artifacts/k/v0/w.pt" && echo w > "$T/art/.artifacts/k/v1/w.pt"
 ln -s "$T/art/.artifacts/k/v0" "$R/resources/hcrl_isaaclab/pol/bfmzero_y"
-printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\n' "$R" > "$T/scripts/cluster/config/zz/.env.cluster"
+printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nCLUSTER_MIN_FREE_GB=0\n' "$R" > "$T/scripts/cluster/config/zz/.env.cluster"
 printf '#!/usr/bin/env bash\n#SBATCH -p test\n' > "$T/scripts/cluster/config/zz/submit_job_slurm.sh"
 dev() { PATH="$T/bin:$PATH" HOME="$T" CLUSTER=zz LOCAL_ISAACLAB_DIR="$L" bash "$T/scripts/cluster/cluster_dev/cluster_dev.sh" "$@"; }
 ntrees() { ls -d "$R"/trees/"$1"-* 2>/dev/null | grep -c . ; }

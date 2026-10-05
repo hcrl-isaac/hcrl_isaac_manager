@@ -2,7 +2,7 @@
 # Staged code trees on the remote: <remote>/trees/<name>-<fingerprint>/ holds named repos at named refs (no
 # --delete, the shared checkout untouched), and every other repo is a link to the shared one. Sourced by cluster_dev.sh.
 
-TREES_DIR="${REMOTE_ISAACLAB_DIR}/trees"
+TREES_DIR="${CLUSTER_TREES_DIR:-${REMOTE_ISAACLAB_DIR}/trees}"  # a profile points it off a quota'd home
 TREE_RW_DIRS=(logs outputs wandb)  # mount points that redirect run output out of a staged repo
 
 _tree_valid() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$1" != "." ] && [ "$1" != ".." ]; }
@@ -52,7 +52,9 @@ _tree_checkout() {  # _tree_checkout REPO_DIR REF DEST -> prints "<commit> <orig
     echo "$commit $kind"
 }
 
-cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new tree
+cmd_stage() {  # stage [--no-space-check] NAME REPO=REF|REPO=PATH ... : upload those repos as a new tree
+    local space_check=1
+    [ "${1:-}" = --no-space-check ] && { space_check=""; shift; }
     local name="${1:-}"; shift || true
     [ -n "$name" ] && [ $# -gt 0 ] || { err "usage: stage <name> <repo>=<ref|/path/to/worktree> ..."; exit 1; }
     _tree_valid "$name" || { err "tree name '${name}': use letters, digits, . _ -"; exit 1; }
@@ -69,6 +71,7 @@ cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new
         seen+="${repo} "
     done
     ensure_master
+    [ -n "$space_check" ] && check_space "$TREES_DIR" "staged trees"
     STAGE_WORK="$(mktemp -d "${TMPDIR:-/tmp}/tree-stage.XXXXXX")"
     STAGE_CHECKOUTS=(); STAGE_PART=""
     trap _stage_cleanup EXIT

@@ -54,6 +54,9 @@ when the job ends (`REMOVE_CODE_COPY_AFTER_JOB`); training logs and the job's `s
 | `CLUSTER_APPTAINER_FLAGS` | extra `apptainer exec` flags; default `--fakeroot`, which TACC needs to read the image's `/isaac-sim` |
 | `CLUSTER_MODULE_LOAD` | Lmod module(s) providing apptainer on compute nodes (TACC: `tacc-apptainer`); blank if it is on `PATH` |
 | `OMP_NUM_THREADS` | threads per process |
+| `CLUSTER_LOGS_DIR` | run logs and checkpoints (default: inside `CLUSTER_ISAACLAB_DIR`); put it on project/scratch storage, not a quota'd home |
+| `CLUSTER_TREES_DIR` | staged code trees (default `CLUSTER_ISAACLAB_DIR/trees`); same advice |
+| `CLUSTER_MIN_FREE_GB` | `develop stage` / `exec` refuse below this much free space (default 10; quota-aware where `quota -s` prints a table) |
 | `CLUSTER_VKCLAMP_DIR` | where the Vulkan clamp layer is installed; default `${CLUSTER_SIF_PATH}/vkclamp` |
 
 **Rendering on newer drivers.** Drivers 595.71 (Delta) and 615.71 (Stampede3 RTX nodes) make Isaac Sim's RTX

@@ -67,6 +67,12 @@ run > "$T/out" 2>&1
 check "shared mode binds the shared repo read-write" "$T/shared/resources/hcrl_isaaclab:/workspace/ext/hcrl_isaaclab:rw"
 if grep -q ":ro$" "$T/out"; then echo "FAIL shared mode has no read-only binds"; fails=$((fails + 1)); else echo "PASS shared mode has no read-only binds"; fi
 
+echo "CLUSTER_LOGS_DIR=$T/work_logs" >> "$T/env"
+run > "$T/out" 2>&1
+check "CLUSTER_LOGS_DIR is bound over the shared repo's logs" "$T/work_logs:/workspace/ext/hcrl_isaaclab/logs:rw"
+NODE_EXEC_RESOURCES="$TREE/resources" run > "$T/out" 2>&1
+check "and over a staged repo's logs" "$T/work_logs:/workspace/ext/hcrl_isaaclab/logs:rw"
+
 if [ "$fails" -ne 0 ]; then
     echo "--- apptainer args"; cat "$T/out"
     exit 1

@@ -71,9 +71,10 @@ mv "$JOB_TMPDIR/docker-isaac-sim/cache/computecache" "$HOME_DIR/.nv/ComputeCache
 mv "$JOB_TMPDIR/docker-isaac-sim/logs" "$HOME_DIR/.nvidia-omniverse/logs"
 mv "$JOB_TMPDIR/docker-isaac-sim/data" "$HOME_DIR/.local/share/ov/data"
 
-# make sure logs directory exists (in the permanent isaaclab directory)
-mkdir -p "$CLUSTER_ISAACLAB_DIR/logs"
-touch "$CLUSTER_ISAACLAB_DIR/logs/.keep"
+# run logs and checkpoints; a profile points CLUSTER_LOGS_DIR off a quota'd home
+LOGS_DIR="${CLUSTER_LOGS_DIR:-$CLUSTER_ISAACLAB_DIR/logs}"
+mkdir -p "$LOGS_DIR"
+touch "$LOGS_DIR/.keep"
 
 # copy the temporary isaaclab directory with the latest changes to the compute node
 cp -r $1 $JOB_TMPDIR
@@ -122,7 +123,7 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B $HOME_DIR:${DOCKER_USER_HOME}:rw \
     $EXT_BINDS $VK_BINDS \
     -B $JOB_TMPDIR/tmp:/tmp:rw \
-    -B $CLUSTER_ISAACLAB_DIR/logs:/workspace/ext/hcrl_isaaclab/logs:rw \
+    -B $LOGS_DIR:/workspace/ext/hcrl_isaaclab/logs:rw \
     --nv --writable-tmpfs --containall --no-home $JOB_TMPDIR/$2.sif \
     bash -c "export HOME=${DOCKER_USER_HOME} && export OMP_NUM_THREADS=$OMP_NUM_THREADS && export OMNI_KIT_ACCEPT_EULA=YES && cd /workspace/ext/hcrl_isaaclab && /usr/local/bin/hcrl-entrypoint /isaac-sim/python.sh ${CLUSTER_PYTHON_EXECUTABLE} ${@:3}"
 
@@ -145,8 +146,8 @@ rm -rf $JOB_TMPDIR
 SLURM_OUT="$1/slurm-${SLURM_JOB_ID}.out"
 out_kept=true
 if [ -f "$SLURM_OUT" ]; then
-    if mv "$SLURM_OUT" "$CLUSTER_ISAACLAB_DIR/logs/"; then
-        echo "(run_singularity.py): Slurm output moved to $CLUSTER_ISAACLAB_DIR/logs/"
+    if mv "$SLURM_OUT" "$LOGS_DIR/"; then
+        echo "(run_singularity.py): Slurm output moved to $LOGS_DIR/"
     else
         out_kept=false
         echo "(run_singularity.py): could not move $SLURM_OUT; keeping the code copy"

@@ -65,6 +65,9 @@ just cluster delta develop trees rm --partials         # clear interrupted stage
 - Each run holds `.in-use/<job>.<step>` until it exits, and `trees rm` refuses while squeue still lists that step.
   `trees rm --partials` removes interrupted stages in which nothing changed for an hour. `develop sync` leaves
   `trees/` alone. Trees are not removed automatically.
+- `stage` and `exec` first check the free space where trees and run logs go (`CLUSTER_TREES_DIR`, `CLUSTER_LOGS_DIR`)
+  and refuse below `CLUSTER_MIN_FREE_GB`: a full quota fails every checkpoint write while the run keeps going.
+  `--no-space-check` skips it.
 - `scripts/cluster/tests/test_stage.sh` checks the artifact resolver against a staged tree only where an
   hcrl_isaaclab checkout exists (locally, or with `HCRL_ISAACLAB_DIR`); CI skips that check.
 
