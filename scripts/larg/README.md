@@ -10,7 +10,8 @@ reachable directly over SSH. Training runs in a per-box `ilab` uv venv that mirr
 
 All scripts live in `scripts/larg/` and share config — host list, SSH helpers, and remote paths — via
 `common.sh`. A host may be given as a short name (`mckennie`) or a full SSH target. Override defaults with
-env vars: `LARG_USER`, `LARG_DOMAIN`, `LARG_REMOTE_DIR` (remote path under `$HOME`), `LARG_LOCAL_DIR`,
+env vars: `LARG_USER`, `LARG_DOMAIN`, `LARG_REMOTE_DIR` (the workspace on each box; default `/var/local/$LARG_USER/hcrl_isaac_manager`, off the
+quota'd NFS home), `LARG_LOCAL_DIR`,
 `LARG_SCRATCH` (per-box scratch for the venv + uv cache; the NFS home is quota-limited).
 
 ## One-time setup
@@ -39,7 +40,10 @@ Excludes venvs, datasets, logs, docker images, and other large/rebuilt artifacts
 
 ## Launch a training run
 
-Single-node, multi-GPU `torchrun` job under `nohup`:
+A detached (`setsid nohup`) run from the box's synced workspace: one GPU runs `train.py` directly, `LARG_NPROC` > 1
+runs it under `torchrun` with `--distributed`. Each run gets a dir under `$LARG_SCRATCH/larg-runs/` holding its
+`train.log` and `TMPDIR`; Kit caches are per GPU set (`$LARG_SCRATCH/kit-cache/gpu<N>`), so concurrent runs on one
+box never share one.
 
 ```bash
 scripts/larg/train.sh <host> <task> <run_name> [run_group] [num_envs] [-- extra train.py args]
@@ -51,7 +55,8 @@ rendering in-process. `run_group` defaults to `larg`; `num_envs` is optional.
 
 | Env var | Purpose |
 | --- | --- |
-| `LARG_NPROC` | GPUs for the run (`torchrun --nproc_per_node`); default 4. |
+| `LARG_NPROC` | GPUs for the run; default 1 (> 1 uses `torchrun --nproc_per_node`). |
+| `LARG_SCRATCH` | per-box scratch for run dirs and Kit caches; default `/var/local/$LARG_USER`. |
 | `CUDA_VISIBLE_DEVICES` | Pin the run to specific physical GPUs so several runs can share one box (also tags the log filename). |
 
 Example — a 2-GPU run on physical GPUs 0,1 of `pepi`:

@@ -7,8 +7,8 @@ set -euo pipefail
 LARG_USER="${LARG_USER:-sturman}"
 LARG_DOMAIN="${LARG_DOMAIN:-cs.utexas.edu}"
 
-# Remote path (relative to remote $HOME) where the manager tree is synced.
-LARG_REMOTE_DIR="${LARG_REMOTE_DIR:-hcrl_isaac_manager}"
+# The manager tree on each box: per-box local disk, off the quota'd NFS home (absolute, or a name under $HOME).
+LARG_REMOTE_DIR="${LARG_REMOTE_DIR:-/var/local/${LARG_USER}/hcrl_isaac_manager}"
 
 # Remote manager path: an absolute LARG_REMOTE_DIR as-is, a bare name relative to the remote $HOME.
 larg_remote_path() {
