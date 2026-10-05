@@ -54,6 +54,13 @@ when the job ends (`REMOVE_CODE_COPY_AFTER_JOB`); training logs and the job's `s
 | `CLUSTER_APPTAINER_FLAGS` | extra `apptainer exec` flags; default `--fakeroot`, which TACC needs to read the image's `/isaac-sim` |
 | `CLUSTER_MODULE_LOAD` | Lmod module(s) providing apptainer on compute nodes (TACC: `tacc-apptainer`); blank if it is on `PATH` |
 | `OMP_NUM_THREADS` | threads per process |
+| `CLUSTER_VKCLAMP_DIR` | where the Vulkan clamp layer is installed; default `${CLUSTER_SIF_PATH}/vkclamp` |
+
+**Rendering on newer drivers.** Drivers 595.71 (Delta) and 615.71 (Stampede3 RTX nodes) make Isaac Sim's RTX
+renderer segfault at startup, so every `enable_cameras` run (video, cameras) dies; headless training is fine.
+`scripts/cluster/tools/install_vkclamp.sh <cluster>` builds the clamp layer from `scripts/vulkan/` into
+`CLUSTER_VKCLAMP_DIR`. `node_exec.sh` and `run_singularity.sh` bind it at `/opt/vkclamp` when it is present and
+point the container's `XDG_CONFIG_DIRS` at it, with no image rebuild. `VKCLAMP_DISABLE=1` turns it off.
 
 The job's resources (`-p`, `-A`, `-n`, `--cpus-per-task`, `--time`, mail) are the `#SBATCH` lines of
 `submit_job_slurm.sh`; `develop` reuses them for its sentinel.
