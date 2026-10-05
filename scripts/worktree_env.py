@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import sys
 
 MANAGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RESOURCES_DIR = os.path.join(MANAGER_DIR, "resources")
@@ -35,7 +36,13 @@ def workspace_repos(resources: str = RESOURCES_DIR) -> list[str]:
     repos = ["hcrl_isaaclab", "robot_rl"]
     for pattern in ("*_tasks", "*_robots"):
         found = sorted(os.path.basename(p) for p in glob.glob(os.path.join(resources, pattern)))
-        repos += [r for r in found if listed is None or r in listed]
+        for r in found:
+            if listed is None or r in listed:
+                repos.append(r)
+            else:
+                print(
+                    f"[worktree_env] skipping resources/{r}: not in gitman.yaml (run `just resolve`?)", file=sys.stderr
+                )
     return repos
 
 

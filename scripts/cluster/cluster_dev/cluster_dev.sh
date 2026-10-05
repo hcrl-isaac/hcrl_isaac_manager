@@ -394,7 +394,6 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     if [ -n "$tree" ]; then
         tree="$(resolve_tree "$tree")" || exit 1
         log "Using tree ${tree}"
-        on_login "mkdir -p '${tree}/.in-use' && touch '${tree}/.in-use/${DD_JOBID}'"  # trees rm checks these jobs
         nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} NODE_EXEC_RESOURCES=${tree}/resources"
         nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh $*"
     fi

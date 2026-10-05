@@ -40,15 +40,19 @@ just cluster delta develop trees                       # list staged trees
 just cluster delta develop trees rm push-foot-<fp>     # remove one (refused while a job that used it runs)
 just cluster delta develop trees rm --partials         # clear interrupted stages older than an hour
 ```
-`stage` uploads each named repo at a ref (fetched; `origin/<ref>` preferred) or a local worktree path
-(`hcrl_isaaclab=../wt`, tracked and untracked non-ignored files) into a new
-`<CLUSTER_ISAACLAB_DIR>/trees/<name>-<fingerprint>/`. It never uses `--delete` and never touches the shared checkout:
-every repo not named is a link to the shared one, files identical to the shared copy or a recent tree are hardlinked
-instead of re-sent, and the tree's `MANIFEST` records each repo's commit and content hash. Staging the same content
-again reuses the tree; a failed stage leaves nothing behind. `exec --tree <id>` takes the full `<name>-<fingerprint>`
-id, or a bare name when exactly one tree has it. Staged repos are mounted read-only with their own `node_exec.sh`;
-`hcrl_isaaclab/logs` goes to the shared logs dir and the other `logs`/`outputs`/`wandb` dirs are node-local.
-`develop sync` leaves `trees/` alone. Trees are not removed automatically.
+`stage` uploads each named repo at a ref (fetched; `origin/<ref>` preferred) or a local worktree
+(`hcrl_isaaclab=./resources/hcrl_isaaclab/worktrees/wt`: the worktree top, `/`, `./` or `../`, relative to the manager dir under
+`just`, carrying tracked and untracked non-ignored files) into a new `<CLUSTER_ISAACLAB_DIR>/trees/<name>-<fingerprint>/`.
+It never uses `--delete` and never touches the shared checkout. Every repo not named is a link to the shared one;
+asset repos (`*_robots`, where URDF->USD conversion writes) and `IsaacLab` always are, and cannot be staged. Files
+identical to one in a recent tree are hardlinked instead of re-sent (never to the shared checkout, which runs write
+to). `MANIFEST` records each repo's ref or absolute path, commit and content hash (modes and symlink targets
+included). Staging the same content again reuses the tree, and a failed stage leaves no tree, partial or temporary
+checkout behind. `exec --tree <id>` takes the full `<name>-<fingerprint>` id, or a bare name when exactly one tree
+has it. Staged repos are mounted read-only with their own `node_exec.sh`; `hcrl_isaaclab/logs` goes to the shared
+logs dir and the other `logs`/`outputs`/`wandb` dirs are node-local. Each run holds `.in-use/<job>.<step>` until it
+exits, and `trees rm` refuses while squeue still lists that step. `trees rm --partials` removes interrupted stages
+in which nothing changed for an hour. `develop sync` leaves `trees/` alone. Trees are not removed automatically.
 
 ## Config
 The sentinel reuses the `#SBATCH` directives of the cluster's own `config/<cluster>/submit_job_slurm.sh`

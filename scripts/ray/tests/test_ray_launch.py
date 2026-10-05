@@ -1,5 +1,7 @@
 """Ray launcher: argument quoting and the artifact pre-flight (no Ray, no W&B)."""
 
+import contextlib
+import io
 import shlex
 import sys
 import tempfile
@@ -44,7 +46,9 @@ class WorkspaceReposTest(unittest.TestCase):
     def test_checkouts_missing_from_gitman_are_not_mounted(self) -> None:
         names = ["hcrl_isaaclab", "robot_rl", "hhlm_tasks", "hcrl_robots"]
         (self.resources.parent / "gitman.yaml").write_text("".join(f"- name: {n}\n  rev: main\n" for n in names))
-        self.assertEqual(workspace_repos(str(self.resources)), names)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(workspace_repos(str(self.resources)), names)
+        self.assertIn("umrl_tasks", err.getvalue())
 
     def test_without_gitman_every_checkout_counts(self) -> None:
         self.assertIn("umrl_tasks", workspace_repos(str(self.resources)))

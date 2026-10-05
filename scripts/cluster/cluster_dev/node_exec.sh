@@ -72,13 +72,19 @@ cmd="$*"; [ -n "$cmd" ] || cmd="/isaac-sim/python.sh --version"
 # in-repo resource symlinks need the asset repos mounted. The entrypoint PYTHONPATHs only the packages.
 # NODE_EXEC_RESOURCES (set by `exec --tree`) points at a staged tree's resources/ instead of the shared one.
 RESOURCES="${NODE_EXEC_RESOURCES:-${CLUSTER_ISAACLAB_DIR}/resources}"
+if [ -n "${NODE_EXEC_RESOURCES:-}" ]; then
+    # `trees rm` refuses while this marker's step is still in squeue
+    IN_USE="$(dirname "$RESOURCES")/.in-use/${SLURM_JOB_ID:-$(hostname -s)}.${SLURM_STEP_ID:-$$}"
+    mkdir -p "$(dirname "$IN_USE")" && touch "$IN_USE"
+    trap 'rm -f "$IN_USE"' EXIT
+fi
 EXT_BINDS=""
 for d in "${RESOURCES}"/*/; do
     name="$(basename "$d")"
     [ "$name" = "IsaacLab" ] && continue   # handled by the source overlay below, not /workspace/ext
     if [ -n "${NODE_EXEC_RESOURCES:-}" ] && [ ! -L "${d%/}" ]; then
-        # a staged repo is read-only (its files are hardlinked to other trees and the shared checkout); only its
-        # run-output dirs are writable: hcrl_isaaclab's logs in the shared logs dir, the rest node-local
+        # a staged repo is read-only (its files are hardlinked to other trees), with writable run-output dirs:
+        # hcrl_isaaclab's logs in the shared logs dir, the rest node-local
         EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:ro"
         for rw in logs outputs wandb; do
             if [ "$name/$rw" = hcrl_isaaclab/logs ]; then

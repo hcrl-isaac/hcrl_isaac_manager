@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Immutable code trees on the remote: <remote>/trees/<name>-<fingerprint>/ holds named repos at named refs (no
-# --delete, the shared checkout untouched); other repos are links to the shared tree. Sourced by cluster_dev.sh.
+# --delete, the shared checkout untouched), and every other repo is a link to the shared one. Sourced by cluster_dev.sh.
 
 TREES_DIR="${REMOTE_ISAACLAB_DIR}/trees"
 TREE_RW_DIRS=(logs outputs wandb)  # mount points the container gets writable inside a read-only staged repo
@@ -15,8 +15,21 @@ _tree_files() {
     done
 }
 
-_tree_content_hash() {  # hash of exactly the carried files, so untracked edits change the fingerprint
-    (cd "$1" && _tree_files . | sort -z | xargs -0 -r sha256sum | sha256sum | cut -c1-12)
+# Hash of exactly the carried files: modes, symlink targets and regular-file content.
+_tree_content_hash() {  # _tree_content_hash DIR -> 12 hex chars
+    (
+        set -o pipefail
+        cd "$1" || exit 1
+        list="$(mktemp)" || exit 1
+        trap 'rm -f "$list"' EXIT
+        _tree_files . | sort -z > "$list" || exit 1
+        {
+            xargs -0 -r stat -c '%A %n' < "$list" || exit 1
+            xargs -0 -r sh -c 'for f; do [ -L "$f" ] && printf "%s -> %s\n" "$f" "$(readlink "$f")"; done; true' sh < "$list"
+            xargs -0 -r sh -c 'for f; do [ -L "$f" ] || [ -d "$f" ] || printf "%s\0" "$f"; done' sh < "$list" |
+                xargs -0 -r sha256sum || exit 1
+        } | sha256sum | cut -c1-12
+    )
 }
 
 # Check out <ref> of a local repo into DEST (a detached git worktree, so LFS files are real files).
@@ -28,7 +41,7 @@ _tree_checkout() {  # _tree_checkout REPO_DIR REF DEST -> prints "<commit> <orig
             err "$(basename "$repo"): unknown ref '${ref}' (push it, or pass a local worktree path)"; return 1; }
         kind=local-ref
     }
-    git -C "$repo" worktree add -q --detach "$dest" "$commit" >/dev/null || return 1
+    git -C "$repo" worktree add -q --detach "$dest" "$commit" >/dev/null || return 1  # the caller registered DEST
     if git -C "$dest" lfs ls-files >/dev/null 2>&1 && [ -n "$(git -C "$dest" lfs ls-files)" ]; then
         git -C "$dest" lfs pull >/dev/null 2>&1
         if git -C "$dest" lfs ls-files | grep -q '^[0-9a-f]* - '; then
@@ -48,6 +61,9 @@ cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new
         repo="${spec%%=*}"; ref="${spec#*=}"
         [ "$repo" != "$spec" ] && [ -n "$ref" ] || { err "bad spec '${spec}' (want repo=ref)"; exit 1; }
         _tree_valid "$repo" || { err "repo '${repo}': use letters, digits, . _ -"; exit 1; }
+        case "$repo" in  # USD conversion writes into the asset repos, and IsaacLab is a separate overlay
+            *_robots | IsaacLab) err "${repo} cannot be staged: it stays linked to the shared checkout"; exit 1 ;;
+        esac
         [ -d "${LOCAL_ISAACLAB_DIR}/resources/${repo}" ] || { err "no repo resources/${repo} in ${LOCAL_ISAACLAB_DIR}"; exit 1; }
         case "$seen" in *" ${repo} "*) err "repo '${repo}' named twice"; exit 1 ;; esac
         seen+="${repo} "
@@ -61,21 +77,23 @@ cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new
         repo="${spec%%=*}"; ref="${spec#*=}"
         case "$ref" in
             /* | ./* | ../*)
-                src="$(cd "$ref" 2>/dev/null && pwd)" || { err "no directory ${ref}"; exit 1; }
+                src="$(cd "$ref" 2>/dev/null && pwd -P)" || { err "no directory ${ref}"; exit 1; }
                 [ "$(git -C "$src" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" = \
-                  "$(git -C "${LOCAL_ISAACLAB_DIR}/resources/${repo}" rev-parse --path-format=absolute --git-common-dir)" ] ||
-                    { err "${ref} is not a worktree of ${repo}"; exit 1; }
+                  "$(git -C "${LOCAL_ISAACLAB_DIR}/resources/${repo}" rev-parse --path-format=absolute --git-common-dir)" ] &&
+                [ "$(cd "$(git -C "$src" rev-parse --show-toplevel)" && pwd -P)" = "$src" ] ||
+                    { err "${ref} is not the top of a worktree of ${repo}"; exit 1; }
+                ref="$src"
                 commit="$(git -C "$src" rev-parse HEAD)"
                 kind=worktree; [ -n "$(git -C "$src" status --porcelain)" ] && kind=worktree-dirty
                 ;;
             *)
+                STAGE_CHECKOUTS+=("${LOCAL_ISAACLAB_DIR}/resources/${repo}=${STAGE_WORK}/${repo}")
                 out="$(_tree_checkout "${LOCAL_ISAACLAB_DIR}/resources/${repo}" "$ref" "${STAGE_WORK}/${repo}")" || exit 1
                 commit="${out% *}"; kind="${out#* }"
-                STAGE_CHECKOUTS+=("${LOCAL_ISAACLAB_DIR}/resources/${repo}=${STAGE_WORK}/${repo}")
                 src="${STAGE_WORK}/${repo}"
                 ;;
         esac
-        content="$(_tree_content_hash "$src")"
+        content="$(_tree_content_hash "$src")" || { err "could not hash the files of ${repo} (${src})"; exit 1; }
         srcs+=("$repo=$src")
         manifest+="${repo} ${ref} ${commit} ${kind} ${content}"$'\n'
     done
@@ -91,9 +109,8 @@ cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new
         for entry in "${srcs[@]}"; do
             repo="${entry%%=*}"; src="${entry#*=}"
             log "Uploading ${repo} -> ${STAGE_PART}/resources/${repo}"
-            # identical files are hardlinked from the shared checkout or the newest earlier trees with this repo
-            # (no -t: a fresh checkout's mtimes never match, content does)
-            links=(--link-dest="${REMOTE_ISAACLAB_DIR}/resources/${repo}/")
+            # identical files are hardlinked from the newest earlier trees with this repo, never the mutable shared copy
+            links=()
             while IFS= read -r prev; do
                 [ -n "$prev" ] && links+=(--link-dest="${prev}/")
             done < <(on_login "for d in \$(ls -1dt '${TREES_DIR}'/*/resources/'${repo}' 2>/dev/null); do \
@@ -131,7 +148,10 @@ cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new
 
 _stage_cleanup() {  # trap: drop this run's temporary checkouts and any partial upload
     local entry
-    for entry in "${STAGE_CHECKOUTS[@]}"; do git -C "${entry%%=*}" worktree remove --force "${entry#*=}" 2>/dev/null; done
+    for entry in "${STAGE_CHECKOUTS[@]}"; do
+        git -C "${entry%%=*}" worktree remove --force "${entry#*=}" 2>/dev/null
+        git -C "${entry%%=*}" worktree prune 2>/dev/null
+    done
     [ -n "${STAGE_WORK:-}" ] && rm -rf "$STAGE_WORK"
     [ -n "${STAGE_PART:-}" ] && on_login "rm -rf '${STAGE_PART}'" 2>/dev/null
     return 0
@@ -166,16 +186,25 @@ cmd_trees() {  # trees [rm <name>-<fp> [--force] | rm --partials] : list, or rem
 
 _trees_rm() {
     if [ "${1:-}" = --partials ]; then
-        on_login "find '${TREES_DIR}' -maxdepth 1 -name '*.partial.*' -mmin +60 -print -exec rm -rf {} +"; return
+        # a partial is abandoned once nothing in it has changed for an hour (an upload keeps writing into it)
+        on_login "for p in '${TREES_DIR}'/*.partial.*; do [ -d \"\$p\" ] || continue; \
+            [ -n \"\$(find \"\$p\" -mmin -60 -print -quit)\" ] && continue; echo \"\$p\"; rm -rf \"\$p\"; done"
+        return
     fi
-    local id="${1:-}" force="${2:-}" jobs active
+    local id="${1:-}" force="${2:-}" marker live=""
     _tree_valid "$id" && [[ "$id" =~ -[0-9a-f]{10}$ ]] || { err "usage: trees rm <name>-<fingerprint> [--force] | --partials"; exit 1; }
     on_login "[ -d '${TREES_DIR}/${id}' ]" || { err "no tree ${id}"; exit 1; }
-    # exec --tree leaves .in-use/<jobid>; refuse while any of those jobs is still queued or running
-    jobs="$(on_login "ls -1 '${TREES_DIR}/${id}/.in-use' 2>/dev/null" | tr '\n' ',' | sed 's/,$//')"
-    if [ -n "$jobs" ] && [ "$force" != --force ]; then
-        active="$(on_login "squeue -h -j '${jobs}' -o %i 2>/dev/null")" || { err "cannot check jobs ${jobs}; pass --force"; exit 1; }
-        [ -z "$active" ] || { err "tree ${id} is in use by running job(s): $(echo "$active" | tr '\n' ' ')"; exit 1; }
+    # node_exec.sh holds .in-use/<job>.<step> while each run lasts, and a step squeue no longer lists has ended
+    if [ "$force" != --force ]; then
+        while IFS= read -r marker; do
+            [ -n "$marker" ] || continue
+            if [[ "$marker" =~ ^([0-9]+)\.[0-9]+$ ]]; then
+                on_login "squeue -h -s -j '${BASH_REMATCH[1]}' -o %i 2>/dev/null" | grep -qx "$marker" && live+="${marker} "
+            else
+                live+="${marker} "
+            fi
+        done < <(on_login "ls -1 '${TREES_DIR}/${id}/.in-use' 2>/dev/null")
+        [ -z "$live" ] || { err "tree ${id} is in use by ${live}(pass --force if those runs are gone)"; exit 1; }
     fi
     on_login "rm -rf '${TREES_DIR}/${id}'" && log "Removed ${TREES_DIR}/${id}"
 }

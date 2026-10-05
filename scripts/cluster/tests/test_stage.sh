@@ -56,8 +56,8 @@ check "unstaged repos link to the shared checkout" "[ -L '$tree/resources/hcrl_r
 check "staged repo has writable mount points" "[ -d '$tree/resources/hcrl_isaaclab/logs' ] && [ -d '$tree/resources/hcrl_isaaclab/outputs' ] && [ -d '$tree/resources/hcrl_isaaclab/wandb' ]"
 check "tree carries its own node_exec.sh" "[ -f '$tree/scripts/cluster/cluster_dev/node_exec.sh' ]"
 check "shared checkout untouched" "grep -qx main '$R/resources/hcrl_isaaclab/code.py'"
-check "identical file hardlinked, not re-sent" \
-    "[ \"\$(stat -c %i '$tree/resources/hcrl_isaaclab/big.bin')\" = \"\$(stat -c %i '$R/resources/hcrl_isaaclab/big.bin')\" ]"
+check "no inode is shared with the mutable shared checkout" \
+    "[ \"\$(stat -c %i '$tree/resources/hcrl_isaaclab/big.bin')\" != \"\$(stat -c %i '$R/resources/hcrl_isaaclab/big.bin')\" ]"
 check "temporary checkout cleaned up" "[ \"\$(git -C '$G' worktree list | wc -l)\" -eq 1 ]"
 check "run hint names the full tree id" "grep -q \"exec --tree \$(basename '$tree')\" '$T/out1'"
 
@@ -69,17 +69,20 @@ dev stage t3 hcrl_isaaclab=feat > "$T/out_t3" 2>&1
 check "earlier trees serve as hardlink sources too" \
     "[ \"\$(stat -c %i \"\$(ls -d '$R'/trees/t3-*)/resources/hcrl_isaaclab/big.bin\")\" = \"\$(stat -c %i '$tree/resources/hcrl_isaaclab/big.bin')\" ]"
 
-# B1: names are validated before anything is touched
-for spec in "../../../resources/hcrl_isaaclab=feat" "=feat" "hcrl_isaacla=feat" "hcrl_isaaclab=feat hcrl_isaaclab=main"; do
+# names are validated before anything is touched
+mkdir -p "$L/resources/hcrl_robots" "$L/resources/IsaacLab"
+for spec in "../../../resources/hcrl_isaaclab=feat" "=feat" "hcrl_isaacla=feat" "hcrl_isaaclab=feat hcrl_isaaclab=main" \
+    "hcrl_robots=main" "IsaacLab=main" "hcrl_isaaclab=$G/sub"; do
     # shellcheck disable=SC2086
     dev stage bad $spec > "$T/out_b1" 2>&1
     check "rejects spec '$spec'" "[ $? -ne 0 ] && [ \$(ntrees bad) -eq 0 ]"
 done
 dev stage "../x" hcrl_isaaclab=feat > "$T/out_b1" 2>&1
 check "rejects a tree name with /" "[ $? -ne 0 ]"
+mkdir -p "$G/sub"
 check "bad input left the shared checkout alone" "grep -qx main '$R/resources/hcrl_isaaclab/code.py' && [ ! -e '$R/resources/hcrl_isaaclab/hcrl_isaaclab' ]"
 
-# B2: untracked files are uploaded and fingerprinted
+# untracked files are uploaded and fingerprinted
 echo v1 > "$G/new_mod.py"
 dev stage wt "hcrl_isaaclab=$G" > "$T/out_b2" 2>&1
 echo v2 > "$G/new_mod.py"
@@ -88,9 +91,19 @@ check "an untracked edit is a new tree" "[ \$(ntrees wt) -eq 2 ]"
 check "the newest tree carries it" "grep -qx v2 \"\$(ls -td '$R'/trees/wt-*/ | head -1)resources/hcrl_isaaclab/new_mod.py\""
 check "ignored files are not uploaded" "mkdir -p '$G/logs' && touch '$G/logs/run.txt' && dev stage wt2 'hcrl_isaaclab=$G' >/dev/null 2>&1 && \
     [ ! -e \"\$(ls -d '$R'/trees/wt2-* | head -1)/resources/hcrl_isaaclab/logs/run.txt\" ]"
-rm -f "$G/new_mod.py"
+check "manifest records the absolute worktree path" "grep -q '^hcrl_isaaclab $G ' \"\$(ls -td '$R'/trees/wt-*/ | head -1)MANIFEST\""
+mkdir -p "$G/pkg_a" "$G/pkg_b" && echo a > "$G/pkg_a/f" && echo b > "$G/pkg_b/f" && ln -s pkg_a "$G/link_dir"
+dev stage sl "hcrl_isaaclab=$G" > "$T/out_sl1" 2>&1
+check "a symlink to a directory stages" "[ $? -eq 0 ] && [ -L \"\$(ls -d '$R'/trees/sl-* | head -1)/resources/hcrl_isaaclab/link_dir\" ]"
+ln -sfn pkg_b "$G/link_dir"
+dev stage sl "hcrl_isaaclab=$G" > /dev/null 2>&1
+check "retargeting a symlink is a new tree" "[ \$(ntrees sl) -eq 2 ]"
+chmod +x "$G/pkg_a/f"
+dev stage sl "hcrl_isaaclab=$G" > /dev/null 2>&1
+check "a mode change is a new tree" "[ \$(ntrees sl) -eq 3 ]"
+rm -rf "$G/new_mod.py" "$G/pkg_a" "$G/pkg_b" "$G/link_dir" "$G/sub"
 
-# B3: resolution is exact and refuses ambiguity
+# resolution is exact and refuses ambiguity
 dev stage r hcrl_isaaclab=main > /dev/null 2>&1
 dev stage r-x hcrl_isaaclab=main > /dev/null 2>&1
 check "one tree named r resolves" "dev __resolve_tree r 2>/dev/null | grep -q '/trees/r-[0-9a-f]\{10\}$'"
@@ -99,11 +112,18 @@ check "two trees named r are refused" "! dev __resolve_tree r > /dev/null 2>&1"
 check "the full id still resolves" "dev __resolve_tree \"\$(basename \"\$(ls -d '$R'/trees/r-* | grep -v r-x | head -1)\")\" > /dev/null 2>&1"
 check "a prefix-sharing name is not matched" "dev __resolve_tree r-x 2>/dev/null | grep -q '/trees/r-x-'"
 
-# B5: failures clean up and never report success
+# failures clean up and never report success
 dev stage multi hcrl_isaaclab=feat hcrl_robots=nope > "$T/out_b5" 2>&1
 check "a failing spec fails the stage" "[ $? -ne 0 ] && [ \$(ntrees multi) -eq 0 ]"
 check "it leaves no temporary checkout" "[ \"\$(git -C '$G' worktree list | wc -l)\" -eq 1 ]"
 check "it leaves no partial" "! ls -d '$R'/trees/*.partial.* 2>/dev/null"
+mkdir -p "$T/lfsbin"
+printf '#!/usr/bin/env bash\n[ "$1" = ls-files ] && echo "0123abcd - big.bin"\nexit 0\n' > "$T/lfsbin/git-lfs"
+chmod +x "$T/lfsbin/git-lfs"
+PATH="$T/lfsbin:$T/bin:$PATH" HOME="$T" CLUSTER=zz LOCAL_ISAACLAB_DIR="$L" \
+    bash "$T/scripts/cluster/cluster_dev/cluster_dev.sh" stage lfs hcrl_isaaclab=feat > "$T/out_lfs" 2>&1
+check "missing LFS objects fail the stage" "[ $? -ne 0 ] && grep -q 'LFS objects missing' '$T/out_lfs' && [ \$(ntrees lfs) -eq 0 ]"
+check "and leave no worktree registered" "[ \"\$(git -C '$G' worktree list | wc -l)\" -eq 1 ]"
 chmod 555 "$R/trees"
 dev stage ro hcrl_isaaclab=feat > "$T/out_b5b" 2>&1
 rc=$?
@@ -121,17 +141,23 @@ check "trees lists them" "[ \"\$(grep -c '^t1-' '$T/out5')\" -eq 1 ]"
 
 # trees rm: refused while a job that used the tree is running
 id="$(basename "$tree")"
-mkdir -p "$tree/.in-use" && touch "$tree/.in-use/4242"
-echo 4242 > "$T/running_jobs"
+mkdir -p "$tree/.in-use" && touch "$tree/.in-use/4242.0"
+printf '4242.0\n4242.1\n' > "$T/running_jobs"
 dev trees rm "$id" > "$T/out6" 2>&1
-check "rm refuses a tree in use" "[ $? -ne 0 ] && [ -d '$tree' ]"
-: > "$T/running_jobs"
+check "rm refuses a tree whose step still runs" "[ $? -ne 0 ] && [ -d '$tree' ]"
+echo 4242.1 > "$T/running_jobs"
+touch "$tree/.in-use/node7.99"
 dev trees rm "$id" > "$T/out6" 2>&1
-check "rm removes it once the job ended" "[ $? -eq 0 ] && [ ! -e '$tree' ]"
+check "an ended step on a live job does not hold it, a non-slurm marker does" "[ $? -ne 0 ] && grep -q 'node7.99' '$T/out6' && ! grep -q '4242.0' '$T/out6'"
+rm "$tree/.in-use/node7.99"
+dev trees rm "$id" > "$T/out6" 2>&1
+check "rm removes it once the step ended" "[ $? -eq 0 ] && [ ! -e '$tree' ]"
 check "rm needs the full id" "! dev trees rm r > /dev/null 2>&1"
-mkdir -p "$R/trees/old.partial.1" "$R/trees/new.partial.2" && touch -d '2 hours ago' "$R/trees/old.partial.1"
+mkdir -p "$R/trees/old.partial.1/a" "$R/trees/new.partial.2" "$R/trees/busy.partial.3/a"
+touch -d '2 hours ago' "$R/trees/old.partial.1/a" "$R/trees/old.partial.1" "$R/trees/busy.partial.3"
 dev trees rm --partials > /dev/null 2>&1
-check "rm --partials removes only stale partials" "[ ! -e '$R/trees/old.partial.1' ] && [ -e '$R/trees/new.partial.2' ]"
+check "rm --partials removes only partials idle for an hour" \
+    "[ ! -e '$R/trees/old.partial.1' ] && [ -e '$R/trees/new.partial.2' ] && [ -e '$R/trees/busy.partial.3' ]"
 
 dev sync --dry-run > "$T/out7" 2>&1
 check "develop sync leaves trees alone" "! grep -q '^\*deleting *trees/' '$T/out7'"
