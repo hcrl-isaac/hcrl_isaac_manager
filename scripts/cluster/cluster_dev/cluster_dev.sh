@@ -13,7 +13,7 @@
 # config/<cluster>/.env.cluster, selected with CLUSTER=<name>. Nothing here is Delta-specific.
 #
 # Open master only:         ./cluster_dev.sh open             (approve ONE 2FA prompt; no sync)
-# Queue a job:              ./cluster_dev.sh start            (approve ONE 2FA prompt)
+# Queue a job:              ./cluster_dev.sh start [--no-sync]   (approve ONE 2FA prompt)
 # Then it self-tracks the (possibly multi-hour) queue wait in the background.
 # Check anytime:            ./cluster_dev.sh status
 # Mirror code:              ./cluster_dev.sh sync [--dry-run] (--dry-run lists what would change or be deleted)
@@ -235,9 +235,13 @@ job_state() { on_login "squeue -j $1 -h -o '%T'" 2>/dev/null | tr -d '[:space:]'
 # Subcommands
 #============================================================================
 cmd_start() {
+    local sync=1
+    [ "${1:-}" = --no-sync ] && { sync=""; shift; }
     ensure_master
     # 1) mirror local code up first so the node has the latest on attach.
-    if [ -d "$LOCAL_ISAACLAB_DIR" ]; then
+    if [ -z "$sync" ]; then
+        log "Skipping the code sync: run from staged trees (develop stage / exec --tree) or 'develop sync' later."
+    elif [ -d "$LOCAL_ISAACLAB_DIR" ]; then
         log "Syncing code -> ${REMOTE_ISAACLAB_DIR} (excludes git/venv/logs/wandb)..."
         stage_node_exec
         rsync_code || err "rsync failed (continuing; you can re-run './cluster_dev.sh sync')."

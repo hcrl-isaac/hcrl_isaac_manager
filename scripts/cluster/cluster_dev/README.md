@@ -14,7 +14,7 @@ persistent **ControlMaster** socket — opened once, kept warm — is what avoid
 ## User command
 ```bash
 # from the manager dir; the leading name selects scripts/cluster/config/<cluster>/
-just cluster rtx-small develop start   # approve ONE 2FA prompt; rest is non-interactive
+just cluster rtx-small develop start   # approve ONE 2FA prompt; rest is non-interactive (--no-sync: skip the code sync)
 ```
 `develop` dispatches to `cluster_dev.sh` with `CLUSTER` set. `start` opens the SSH master (the
 only 2FA prompt), mirrors the IsaacLab tree up, submits the sentinel job, and launches a
