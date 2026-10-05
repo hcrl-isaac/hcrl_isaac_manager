@@ -32,6 +32,10 @@ The watcher writes `~/.cluster_dev/<cluster>/state` (and `watch.log` next to it)
 `JOB_STATE=RUNNING` and `NODE` is set, the box is ready. A Claude session can poll `status` and
 drive `exec`/`attach` over the live master with zero auth.
 
+`exec -- <cmd> <args...>` reaches the container with its argv unchanged, so for shell syntax use
+`exec -- bash -lc 'a; b && c'`. A single argument (`exec -- "python scripts/train.py --task X"`) is run as a
+command string inside the container.
+
 ## Code trees (run specific branches without syncing)
 ```bash
 just cluster delta develop stage push-foot hhlm_tasks=feat/push-foot-contact-penalty hcrl_isaaclab=main robot_rl=main

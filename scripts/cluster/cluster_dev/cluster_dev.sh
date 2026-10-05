@@ -407,12 +407,14 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     require_running
     # exec always runs with the current local config, even on a destination that hasn't been synced
     push_env_cluster || { err "could not push ${ENV_FILE} to ${REMOTE_ENV_FILE}"; exit 1; }
-    local nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} bash ${REMOTE_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh $*"
+    # every hop re-parses the command, so each one gets its own %q layer and the argv arrives intact
+    local args; args="$(printf '%q ' "$@")"
+    local nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} bash ${REMOTE_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
     if [ -n "$tree" ]; then
         tree="$(resolve_tree "$tree")" || exit 1
         log "Using tree ${tree}"
         nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} NODE_EXEC_RESOURCES=${tree}/resources"
-        nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh $*"
+        nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
     fi
     if [ -z "$detach" ]; then
         log "[${DD_MODE}] container exec on job ${DD_JOBID}: $*"
@@ -420,7 +422,7 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
             ssh "${SSH_OPTS[@]}" -J "$CLUSTER_LOGIN" "${DEV_USER}@${DD_NODE}" "$nodecmd"
         else
             ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
-                "srun --jobid=${DD_JOBID} --overlap ${DEV_SRUN_OPTS} bash -lc '${nodecmd}'"
+                "srun --jobid=${DD_JOBID} --overlap ${DEV_SRUN_OPTS} bash -lc $(printf %q "$nodecmd")"
         fi
         return
     fi
@@ -436,16 +438,14 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     # ssh-mode we keep the detach point on the login node for consistency.
     local inner
     if [ "$DD_MODE" = "ssh" ]; then
-        inner="ssh -J ${CLUSTER_LOGIN} ${DEV_USER}@${DD_NODE} bash -lc '${nodecmd}'"
+        inner="ssh -J ${CLUSTER_LOGIN} ${DEV_USER}@${DD_NODE} bash -lc $(printf %q "$(printf %q "$nodecmd")")"
     else
-        inner="srun --jobid=${DD_JOBID} --overlap ${DEV_SRUN_OPTS} bash -lc '${nodecmd}'"
+        inner="srun --jobid=${DD_JOBID} --overlap ${DEV_SRUN_OPTS} bash -lc $(printf %q "$nodecmd")"
     fi
     log "[${DD_MODE} detached] container exec on job ${DD_JOBID}: $*"
     log "Log on login node: ${logfile}   (follow with: $(basename "${BASH_SOURCE[0]}") tail)"
-    # Wrap `inner` in double-quotes for bash -c, escaping any inner " (rare for python args).
-    local wrapped="${inner//\"/\\\"}"
     ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
-        "nohup setsid bash -c \"${wrapped}\" > ${logfile} 2>&1 < /dev/null & disown; sleep 0.3; echo \"[cluster_dev] login-side wrapper pid=\$(pgrep -nf 'nohup setsid bash' || echo ?)\""
+        "nohup setsid bash -c $(printf %q "$inner") > ${logfile} 2>&1 < /dev/null & disown; sleep 0.3; echo \"[cluster_dev] login-side wrapper pid=\$(pgrep -nf 'nohup setsid bash' || echo ?)\""
     # DEV_JOBID means an ad-hoc target, typically ANOTHER session's job -- recording the log path would
     # overwrite the tracked session's LAST_RUN_LOG, so print it instead and leave shared state alone.
     if [ -n "${DEV_JOBID:-}" ]; then
