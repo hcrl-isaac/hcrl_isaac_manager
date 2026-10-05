@@ -54,5 +54,11 @@ for host in "$@"; do
     -e "ssh -o ConnectTimeout=10" \
     "${LARG_LOCAL_DIR}/" \
     "${target}:${LARG_REMOTE_DIR}/"
+  # a renamed or new repo must be importable in the box's venv; --no-deps leaves torch and Isaac untouched
+  larg_ssh "$host" "cd $(larg_remote_path) && [ -x ilab/bin/python ] || exit 0
+    for d in resources/hcrl_isaaclab resources/robot_rl resources/*_tasks resources/*_robots; do
+      [ -f \"\$d/pyproject.toml\" ] || [ -f \"\$d/setup.py\" ] || continue
+      ~/.local/bin/uv pip install -q --python ilab/bin/python --no-deps -e \"\$d\" || echo \"[sync] could not install \$d\"
+    done"
   echo "=== done: ${host} ==="
 done

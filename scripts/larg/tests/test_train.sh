@@ -49,6 +49,26 @@ wait_ran
 check "several GPUs run under torchrun with --distributed" \
     "grep -qx 'ARG<torch.distributed.run>' '$T/ran' && grep -qx 'ARG<--nproc_per_node=2>' '$T/ran' && grep -qx 'ARG<--distributed>' '$T/ran'"
 
+check "an A40 host records video in-process" "sed -n '/^ARG<--video>$/{n;p}' '$T/ran' | grep -qx 'ARG<on>'"
+check "an unleased launch says so" "grep -q 'LARG_HOLDER unset' '$T/out2'"
+
+rm -f "$T/ran"
+launch CUDA_VISIBLE_DEVICES=3 bash "$REPO/scripts/larg/train.sh" hazard hhlm/T1-CubeLift-v0 r > "$T/out3" 2>&1
+wait_ran
+check "an A100 host passes --video async" "sed -n '/^ARG<--video>$/{n;p}' '$T/ran' | grep -qx 'ARG<async>'"
+
+# LARG_HOLDER leases the pinned cards through `just res claim` first; a refused claim launches nothing
+printf '#!/usr/bin/env bash\necho "$@" > "%s/claimed"\nexit "${CLAIM_RC:-0}"\n' "$T" > "$T/bin/python3"
+chmod +x "$T/bin/python3"
+rm -f "$T/ran"
+launch LARG_HOLDER=me CUDA_VISIBLE_DEVICES=0,2 bash "$REPO/scripts/larg/train.sh" pogba hhlm/T1-CubeLift-v0 r > "$T/out4" 2>&1
+wait_ran
+check "LARG_HOLDER claims every pinned card" "grep -q 'claim pogba:0 pogba:2 --holder me --note r' '$T/claimed'"
+rm -f "$T/ran"
+launch CLAIM_RC=1 LARG_HOLDER=me CUDA_VISIBLE_DEVICES=1 bash "$REPO/scripts/larg/train.sh" pogba hhlm/T1-CubeLift-v0 r > "$T/out5" 2>&1
+sleep 1
+check "a refused claim launches nothing" "[ ! -e '$T/ran' ]"
+
 if [ "$fails" -ne 0 ]; then
     for f in "$T"/out* "$T/ran"; do echo "--- $f"; cat "$f" 2>/dev/null | tail -20; done
     exit 1

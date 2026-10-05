@@ -667,8 +667,10 @@ def _print_detached(stage: Stage, taken: ls.Lease | None) -> None:
     print(f"[res] follow: {on('tail -f ' + q(stage.dir + '/log'))}", file=sys.stderr)
     print(f"[res] stop:   {on('kill -TERM -- -$(cat ' + q(stage.dir + '/pid') + ')')}", file=sys.stderr)
     if taken is not None:
-        print(f"[res] lease {taken.id} stays held; it releases once the card idles, or: just res release {taken.id}",
-              file=sys.stderr)
+        print(
+            f"[res] lease {taken.id} stays held; it releases once the card idles, or: just res release {taken.id}",
+            file=sys.stderr,
+        )
 
 
 def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> None:
@@ -723,7 +725,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         pythonpath, manifest = stage.sync_code(code)
         stage.write("\n".join(manifest) + "\n", "MANIFEST", mode=0o644)
         if repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
-            cwd = dict(zip(code, pythonpath))[repo]
+            cwd = dict(zip(code, pythonpath, strict=True))[repo]
             target_script = f"{cwd}/{rel}"
         else:
             cwd, target_script = "", stage.put(script, os.path.basename(script), mode=0o644)
@@ -739,7 +741,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             _print_detached(stage, taken)
             rc = 0
         else:
-            print(f"[res] running {os.path.basename(script)} on {t.host}:gpu{t.gpu} (stage {stage.dir})", file=sys.stderr)
+            print(
+                f"[res] running {os.path.basename(script)} on {t.host}:gpu{t.gpu} (stage {stage.dir})", file=sys.stderr
+            )
             rc = run(stage, args.script_args, args.timeout, args.stall)
     except KeyboardInterrupt as exc:
         rc = 130
