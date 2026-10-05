@@ -8,7 +8,7 @@ trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/scripts/cluster/cluster_dev" "$T/shared/resources/hcrl_isaaclab" "$T/shared/resources/hcrl_robots" \
     "$T/sif" "$T/cache/docker-isaac-sim" "$T/tmp"
 cp "$REPO/scripts/cluster/cluster_dev/node_exec.sh" "$T/scripts/cluster/cluster_dev/"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@"\nls "%s/shared/trees/t-0123456789/.in-use" 2>/dev/null | sed "s/^/marker /"\n' "$T" > "$T/bin/apptainer"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@"\nls "%s/shared/trees/t-0123456789/.in-use" 2>/dev/null | sed "s/^/marker /"\necho "envkey $APPTAINERENV_WANDB_API_KEY"\n' "$T" > "$T/bin/apptainer"
 chmod +x "$T/bin/apptainer"
 touch "$T/sif/hcrl-isaac.sif"
 cat > "$T/env" <<EOF
@@ -19,7 +19,7 @@ EOF
 TREE="$T/shared/trees/t-0123456789"
 mkdir -p "$TREE/resources/hcrl_isaaclab/logs" "$TREE/resources/hcrl_isaaclab/outputs" "$TREE/resources/hcrl_isaaclab/wandb"
 ln -s "$T/shared/resources/hcrl_robots" "$TREE/resources/hcrl_robots"
-run() { PATH="$T/bin:$PATH" TMPDIR="$T/tmp" SLURM_JOB_ID=7 SLURM_STEP_ID=3 NODE_EXEC_ENV="$T/env" bash "$T/scripts/cluster/cluster_dev/node_exec.sh" true; }
+run() { PATH="$T/bin:$PATH" TMPDIR="$T/tmp" SLURM_JOB_ID=7 SLURM_STEP_ID=3 WANDB_API_KEY=sekret-key NODE_EXEC_ENV="$T/env" bash "$T/scripts/cluster/cluster_dev/node_exec.sh" true; }
 
 fails=0
 check() {
@@ -31,6 +31,12 @@ check "staged repo is read-only" "$TREE/resources/hcrl_isaaclab:/workspace/ext/h
 check "its logs go to the shared logs dir" "$T/shared/resources/hcrl_isaaclab/logs:/workspace/ext/hcrl_isaaclab/logs:rw"
 check "its outputs are writable node-locally" "$T/tmp/cluster_dev_7/tree-rw/t-0123456789/hcrl_isaaclab/outputs:/workspace/ext/hcrl_isaaclab/outputs:rw"
 check "its wandb dir is writable node-locally" "$T/tmp/cluster_dev_7/tree-rw/t-0123456789/hcrl_isaaclab/wandb:/workspace/ext/hcrl_isaaclab/wandb:rw"
+check "the W&B key reaches the container through its environment" "envkey sekret-key"
+if grep -v '^envkey ' "$T/out" | grep -q sekret-key; then
+    echo "FAIL the W&B key is not on apptainer's command line"; fails=$((fails + 1))
+else
+    echo "PASS the W&B key is not on apptainer's command line"
+fi
 check "a linked shared repo stays read-write" "$T/shared/resources/hcrl_robots:/workspace/ext/hcrl_robots:rw"
 check "the run holds an in-use marker for its step" "marker 7.3"
 check "the shared artifact root is bound writable" \

@@ -106,6 +106,8 @@ done
 
 echo "(run_singularity.py) apptainer: $(command -v apptainer || echo 'not found') $(apptainer --version 2>/dev/null)," \
     "flags: '${CLUSTER_APPTAINER_FLAGS:-}', modules: '${CLUSTER_MODULE_LOAD:-}'"
+# credentials go in through the environment (apptainer injects APPTAINERENV_*), never argv, which `ps` shows
+export APPTAINERENV_WANDB_USERNAME="${WANDB_USERNAME:-}" APPTAINERENV_WANDB_API_KEY="${WANDB_API_KEY:-}"
 # isaac-sim's python is called directly: the synced tree has no isaaclab.sh or isaac-sim symlink
 apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B $JOB_TMPDIR/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
@@ -114,7 +116,7 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B $JOB_TMPDIR/tmp:/tmp:rw \
     -B $CLUSTER_ISAACLAB_DIR/logs:/workspace/ext/hcrl_isaaclab/logs:rw \
     --nv --writable-tmpfs --containall --no-home $JOB_TMPDIR/$2.sif \
-    bash -c "export HOME=${DOCKER_USER_HOME} && export OMP_NUM_THREADS=$OMP_NUM_THREADS && export OMNI_KIT_ACCEPT_EULA=YES && export WANDB_USERNAME=$WANDB_USERNAME && export WANDB_API_KEY=$WANDB_API_KEY && cd /workspace/ext/hcrl_isaaclab && /usr/local/bin/hcrl-entrypoint /isaac-sim/python.sh ${CLUSTER_PYTHON_EXECUTABLE} ${@:3}"
+    bash -c "export HOME=${DOCKER_USER_HOME} && export OMP_NUM_THREADS=$OMP_NUM_THREADS && export OMNI_KIT_ACCEPT_EULA=YES && cd /workspace/ext/hcrl_isaaclab && /usr/local/bin/hcrl-entrypoint /isaac-sim/python.sh ${CLUSTER_PYTHON_EXECUTABLE} ${@:3}"
 
 EXIT_CODE=$?
 
