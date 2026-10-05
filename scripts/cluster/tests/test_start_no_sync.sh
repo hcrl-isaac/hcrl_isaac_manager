@@ -20,7 +20,7 @@ while [ $# -gt 0 ]; do
         *) shift; break ;;
     esac
 done
-exec bash -c "$*"
+cd "$HOME" && exec bash -c "$*"  # remote commands run from the remote home
 EOF
 printf '#!/usr/bin/env bash\necho 4242\n' > "$T/bin/sbatch"
 printf '#!/usr/bin/env bash\necho PENDING\n' > "$T/bin/squeue"
@@ -42,6 +42,12 @@ stop_watcher
 check "--no-sync submits the sentinel" "grep -qx 'JOBID=4242' '$T/.cluster_dev/zz/state'"
 check "--no-sync ships no code" "[ ! -e '$T/remote/resources/hcrl_isaaclab/a.py' ]"
 check "--no-sync says so" "grep -q 'Skipping the code sync' '$T/out1'"
+
+check "--no-sync warns that the remote node_exec.sh differs" "grep -q 'remote shared node_exec.sh differs' '$T/out1'"
+dev start --nosync > "$T/out3" 2>&1
+check "a misspelled flag is refused before anything runs" \
+    "[ $? -ne 0 ] && grep -q \"unknown argument '--nosync'\" '$T/out3' && [ ! -e '$T/remote/resources/hcrl_isaaclab/a.py' ]"
+check "nothing lands in the caller's directory" "[ ! -e '$REPO/.cluster_dev_sentinel.sbatch' ] && [ -e '$T/.cluster_dev_sentinel.sbatch' ]"
 
 dev start > "$T/out2" 2>&1
 stop_watcher
