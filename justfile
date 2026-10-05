@@ -159,7 +159,7 @@ ray *args:
     fi; \
     scripts/ray/ray_interface.sh "$@"
 
-# Upload managed large-file resources to W&B as versioned artifacts; args: --list, --all, or specific <key>...
+# Upload managed large-file resources to W&B as artifacts; args: --list, or <path> [--rel-path/--name/--tier].
 upload-artifacts *args:
     @if [ ! -f "scripts/.env.wandb" ]; then \
         echo "[ERROR] scripts/.env.wandb not found; run 'just deps' first."; \

@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import yaml
 from dotenv import dotenv_values
+from job_args import split_jobs
 from ray import job_submission
 
 
@@ -136,13 +137,9 @@ if __name__ == "__main__":
         help="This should be last argument. The aggregate jobs to submit separated by the * delimiter.",
     )
     args = parser.parse_args()
-    if args.aggregate_jobs is not None:
-        jobs = " ".join(args.aggregate_jobs)
-        formatted_jobs = jobs.split("*")
-        if len(formatted_jobs) > 1:
-            print("Warning; Split jobs by cluster with the * delimiter")
-    else:
-        formatted_jobs = []
+    formatted_jobs = split_jobs(args.aggregate_jobs or [])
+    if len(formatted_jobs) > 1:
+        print("Warning; Split jobs by cluster with the * delimiter")
     print(f"[INFO] Isaac Ray Wrapper received jobs {formatted_jobs=}")
 
     clusters = read_cluster_spec(args.config_file)
