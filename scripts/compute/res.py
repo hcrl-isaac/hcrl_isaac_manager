@@ -214,6 +214,9 @@ def _named(spec: str, seen: list[tuple[Card, Report]]) -> tuple[Card, Report]:
 
 def _choose(seen: list[tuple[Card, Report]], taken: set[str], args: argparse.Namespace) -> list[tuple[Card, Report]]:
     """The cards a claim takes: all named ones, or --any free ones packed onto partly used hosts first."""
+    adopt = getattr(args, "adopt", False)
+    if args.any and adopt:
+        sys.exit("[res] --adopt takes over named cards; name them (host:gpu ...)")
     if args.any:
         explicit_ray = {
             r.pool for _, r in seen if r.kind == "ray" and any(r.pool.startswith(s) for s in args.pool or [])
@@ -241,8 +244,11 @@ def _choose(seen: list[tuple[Card, Report]], taken: set[str], args: argparse.Nam
     for spec in dict.fromkeys(args.cards):
         card, rep = _named(spec, seen)
         key = ls.card_key(card)
-        if card.state != "free" or key in taken:
-            sys.exit(f"[res] {spec} is {'leased' if key in taken else card.state}; nothing claimed")
+        if key in taken:
+            sys.exit(f"[res] {spec} is leased; move it with `just res transfer {spec} --to <holder>`; nothing claimed")
+        if card.state != "free" and not (adopt and card.state in ("busy", "held")):
+            hint = "; pass --adopt to take over the run on it" if card.state in ("busy", "held") else ""
+            sys.exit(f"[res] {spec} is {card.state}{hint}; nothing claimed")
         if key in {ls.card_key(c) for c, _ in chosen}:
             continue
         chosen.append((card, rep))
@@ -265,7 +271,8 @@ def cmd_claim(args: argparse.Namespace, pools: list[Pool]) -> None:
             except SystemExit as exc:  # keep the reconcile result even when the claim is refused
                 refused = exc
             else:
-                new = [ls.new_lease(c, r, args.holder, args.note, args.for_) for c, r in chosen]
+                run = getattr(args, "run", "")
+                new = [ls.new_lease(c, r, args.holder, args.note, args.for_, run=run) for c, r in chosen]
                 leases.extend(new)
     except ls.LeaseStoreError as exc:
         sys.exit(f"[res] nothing claimed: {exc}")
@@ -273,7 +280,9 @@ def cmd_claim(args: argparse.Namespace, pools: list[Pool]) -> None:
         raise refused
     for lease, (card, rep) in zip(new, chosen, strict=True):
         box = f", time box {int(args.for_ // 60)} min" if args.for_ else ""
-        print(f"claimed {lease.id}: {lease.card} ({rep.pool}{box}) for {lease.holder}")
+        verb = "adopted" if card.state != "free" else "claimed"
+        run = f", run {lease.run}" if lease.run else ""
+        print(f"{verb} {lease.id}: {lease.card} ({rep.pool}{box}{run}) for {lease.holder}")
     print(
         f"A lease ends after {windows['grace_min']:g} min unused or {windows['idle_min']:g} min idle, measured from "
         "the first idle observation. Release early with: just res release <id> --holder <you>"
@@ -308,6 +317,30 @@ def cmd_release(args: argparse.Namespace, _pools: list[Pool]) -> None:
         sys.exit(f"[res] no lease for: {', '.join(sorted(missing))}")
 
 
+def cmd_transfer(args: argparse.Namespace, _pools: list[Pool]) -> None:
+    """Hand leases (by id or card) to another holder; only the holder may, unless --force."""
+    try:
+        with ls.locked_store() as leases:
+            targets = set(args.targets) | {_slurm_label(t) for t in args.targets}
+            moving = [x for x in leases if x.id in targets or x.card in targets or x.key in targets]
+            found = {x.id for x in moving} | {x.card for x in moving} | {x.key for x in moving}
+            missing = {t for t in args.targets if t not in found and _slurm_label(t) not in found}
+            if missing:
+                sys.exit(f"[res] no lease for: {', '.join(sorted(missing))}; nothing transferred")
+            foreign = [x for x in moving if x.holder != args.holder]
+            if foreign and not args.force:
+                names = ", ".join(f"{x.id} ({x.holder})" for x in foreign)
+                sys.exit(f"[res] held by someone else: {names}; pass --force to transfer anyway")
+            for lease in moving:
+                lease.previous, lease.holder = lease.holder, args.to
+                lease.note = args.note or lease.note
+                lease.run = args.run or lease.run
+    except ls.LeaseStoreError as exc:
+        sys.exit(f"[res] nothing transferred: {exc}")
+    for lease in moving:
+        print(f"transferred {lease.id}: {lease.card} {lease.previous} -> {lease.holder}")
+
+
 def cmd_leases(_args: argparse.Namespace, _pools: list[Pool]) -> None:
     """List the stored leases without probing (activity as of the last res call)."""
     try:
@@ -323,7 +356,8 @@ def cmd_leases(_args: argparse.Namespace, _pools: list[Pool]) -> None:
             act += f", idle since {_ago(x.idle_since)} ago"
         box = f", time box ends in {int((x.expires - time.time()) // 60)}m" if x.expires else ""
         flag = " CONFLICT" if x.conflict else ""
-        print(f"{x.id}  {x.card:<22} {x.report:<28} {x.holder:<24} {act}{box}{flag}  {x.note}")
+        extra = "".join(f" [{k} {v}]" for k, v in (("run", x.run), ("from", x.previous)) if v)
+        print(f"{x.id}  {x.card:<22} {x.report:<28} {x.holder:<24} {act}{box}{flag}  {x.note}{extra}")
 
 
 def _positive_int(text: str) -> int:
@@ -357,10 +391,19 @@ def main() -> None:
     cl.add_argument("--holder", required=True, help="who holds it (your session name)")
     cl.add_argument("--note", default="", help="what it is for")
     cl.add_argument("--for", dest="for_", type=_duration, default=0.0, help="hard time box, e.g. 90m or 2h")
+    cl.add_argument("--adopt", action="store_true", help="take over named busy cards whose run you are taking on")
+    cl.add_argument("--run", default="", help="the run the lease covers (W&B id, job.step)")
     rl = sub.add_parser("release", help="release your leases by id or host:gpu")
     rl.add_argument("targets", nargs="+")
     rl.add_argument("--holder", required=True, help="your session name (must match the lease)")
     rl.add_argument("--force", action="store_true", help="release someone else's lease")
+    tr = sub.add_parser("transfer", help="hand your leases (id or host:gpu) to another holder")
+    tr.add_argument("targets", nargs="+")
+    tr.add_argument("--holder", required=True, help="the current holder (must match the lease)")
+    tr.add_argument("--to", required=True, help="the new holder")
+    tr.add_argument("--note", default="", help="new note (default: keep)")
+    tr.add_argument("--run", default="", help="the run the lease covers (default: keep)")
+    tr.add_argument("--force", action="store_true", help="transfer someone else's lease")
     sub.add_parser("leases", help="list leases (no probe)")
     sub.add_parser("pools", help="list the configured pools")
     args = parser.parse_args(sys.argv[1:] or ["status"])
@@ -374,7 +417,13 @@ def main() -> None:
             detail = p.settings.get("hosts") or p.settings.get("login") or p.settings.get("address") or ""
             print(f"{p.name:<16} {p.kind:<6} {detail}")
         return
-    commands = {"status": cmd_status, "claim": cmd_claim, "release": cmd_release, "leases": cmd_leases}
+    commands = {
+        "status": cmd_status,
+        "claim": cmd_claim,
+        "release": cmd_release,
+        "transfer": cmd_transfer,
+        "leases": cmd_leases,
+    }
     commands[args.cmd](args, pools)
 
 
