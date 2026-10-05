@@ -55,11 +55,18 @@ This should display a blank table, like so:
 
 Robot assets, motion datasets, and exported policies are excluded from the per-job upload (they would
 blow Ray's size limit) and fetched at runtime as W&B artifacts instead. `just ray setup` uploads them
-(it calls `just upload-artifacts`); re-run it whenever they change, or upload directly:
+(it calls `just upload-artifacts`), and every `just ray job` refreshes the ones present locally. Before
+submitting, a pre-flight (`scripts/ray/preflight.py`) fails naming any excluded dir (`**/policies/**/bfmzero_*`,
+`**/style_data`) in the mounted sources that has no artifact at its path, with the command to publish it:
 
 ```bash
-just upload-artifacts --all     # or --list to see the registry, or pass specific keys
+just upload-artifacts --list                         # what is published, and where it resolves
+just upload-artifacts <path>                         # publish a dir at the path it sits in
+just upload-artifacts <path> --rel-path <rel> --tier cache   # publish from a worktree under the main path
 ```
+
+Job arguments keep their quoting (`--run_group "push foot contact"` stays one argument). `WT=<name>` mounts
+`resources/<repo>/worktrees/<name>` wherever one exists; without it the job runs the shared checkout's branches.
 
 See [Large-file resources](#large-file-resources) for how the runtime resolver fetches them and how to
 register a new file.
@@ -129,16 +136,16 @@ never collide.
 
 ### Adding / updating a large file
 
-1. Register it in `REGISTRY` in `hcrl_isaaclab/utils/artifacts.py` (key, artifact type, canonical
-   `dest`, the `marker` substring that signals a cfg uses it, and `tier`: `persistent` for static
-   bulk, `cache` for LRU-prunable mid-size files).
-2. Upload it from its local path. From the manager directory:
-   ```bash
-   just upload-artifacts <key>   # or --all / --list
-   ```
-   This sources W&B credentials from `scripts/.env.wandb` and runs the uploader in the `ilab` venv
-   (equivalent to `source/hcrl_isaaclab/scripts/tools/upload_artifacts.py <key>`).
-   Re-uploading dedupes unchanged content by hash, so it is cheap to re-run when a file changes.
+There is no registry to edit: each artifact stores its placement (`rel_path`, `tier`) in its W&B
+metadata, and the resolver discovers it. Upload the path once from the manager directory:
+
+```bash
+just upload-artifacts <path> [--tier cache] [--name <existing name>] [--rel-path <rel>]
+```
+
+This sources W&B credentials from `scripts/.env.wandb` and runs the uploader in the `ilab` venv. Uploading
+under an existing `--name` re-points that artifact; unchanged content is deduped by hash, so re-running is
+cheap. A run whose cfg needs a file that is neither present nor published stops at start, naming it.
 
 ### Cleanup
 
