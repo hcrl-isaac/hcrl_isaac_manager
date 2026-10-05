@@ -13,7 +13,7 @@ case $LOG_SPEC in
 esac
 [ "${EVERY:-0}" -gt 0 ] 2>/dev/null || EVERY=0   # 0 disables the periodic metric line
 
-ERRPAT='Traceback|error running python|Error executing|CUDA out of memory|Could not override|No contact sensors|Segmentation fault|Killed|srun: error'
+ERRPAT='Traceback|error running python|Error executing|CUDA out of memory|Could not override|No contact sensors|Segmentation fault|Killed|srun: error|Disk quota exceeded|Worker exited -11'
 # benign boot-time noise: ranks starting together, and srun failing to load its unused http_parser plugin
 BENIGNPAT='omni/kit/pipapi|no current CUDA context|ignore_import_check|_process_ext_pipapi_config|http_parser'
 
