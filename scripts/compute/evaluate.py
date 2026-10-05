@@ -285,7 +285,7 @@ export PYTHONPATH={q(":".join(pythonpath))}"${{PYTHONPATH:+:$PYTHONPATH}}"
 cat {q(stage + "/MANIFEST")}
 py="$PWD/ilab/bin/python"
 echo "[res] {t.host}:gpu{t.gpu} ({t.pin}) python=$py env: {" ".join(env_names) or "-"}"
-cd {q(cwd or t.workspace)} || exit 97
+mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
 "$py" {q(script)} "$@"
 """
 
@@ -725,8 +725,10 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         pythonpath, manifest = stage.sync_code(code)
         stage.write("\n".join(manifest) + "\n", "MANIFEST", mode=0o644)
         if repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
-            cwd = dict(zip(code, pythonpath, strict=True))[repo]
-            target_script = f"{cwd}/{rel}"
+            root = dict(zip(code, pythonpath, strict=True))[repo]
+            target_script = f"{root}/{rel}"
+            # snapshots are read-only, so relative outputs (train.py's logs/) need a writable working dir
+            cwd = root if t.kind == "local" else f"{t.scratch}/res-eval/work"
         else:
             cwd, target_script = "", stage.put(script, os.path.basename(script), mode=0o644)
         lines = [f"{k}={shlex.quote(v)}" for k, v in {**wandb_env(), **env, **paths}.items()]

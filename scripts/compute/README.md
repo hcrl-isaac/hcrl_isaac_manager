@@ -77,7 +77,8 @@ just res eval hcrl_isaaclab:scripts/train.py --wt legacy --on pepi:1 --holder "<
 ```
 
 - A script is a file on this machine (copied to the target) or `<repo>:<path>` inside a shipped repo, which runs
-  from that repo's snapshot root so its own sibling imports resolve (e.g. `hcrl_isaaclab:scripts/train.py`).
+  from its shipped copy, so its own sibling imports resolve (e.g. `hcrl_isaaclab:scripts/train.py`). On an ssh pool it
+  runs in the writable `<scratch>/res-eval/work`, where relative outputs such as `logs/` land; locally, in the repo.
 - `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
   owns its stage dir, and its lease stays held until the card goes idle (or `just res release <id>`). `--timeout`
   and `--stall` do not apply to a detached run.
