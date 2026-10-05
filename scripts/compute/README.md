@@ -32,7 +32,15 @@ just res claim --any --count 2 --min-free-gb 40 --pool larg --holder "<session>"
 just res claim gpub065:2 --holder "<session>" --for 2h                   # time-boxed interactive work
 just res leases                                                          # list (no probe)
 just res release <id|host:gpu|host:job:gpu> --holder "<session>"         # --force for someone else's
+just res transfer <id|host:gpu> --holder "<you>" --to "<session>"        # hand a lease over (--force: not yours)
+just res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take over a busy card's running run
 ```
+
+- A handover moves the lease (`transfer`, which records the previous holder) instead of releasing and reclaiming:
+  a released card that is still running reads `busy`, and a plain claim refuses it. `--adopt` is for a busy card
+  whose run you take on when nobody leases it any more; it needs named cards and refuses leased or unknown ones. An
+  adopted lease starts active, so its run renews it and the run's end releases it as usual. `--run` records the run
+  a lease covers.
 
 - A claim probes first and succeeds only on cards it sees as free that nobody holds; all named cards or none.
   `--any` fills partly used hosts first and skips Ray unless `--pool ray` is given (Ray schedules onto its cards).

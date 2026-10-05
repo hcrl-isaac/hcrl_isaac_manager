@@ -46,6 +46,8 @@ class Lease:
         expires: Hard end for time-boxed leases (0 = none).
         conflict: The card's processes belong to someone else.
         missing_since: First probe that no longer listed the card (0 = listed).
+        run: The run the lease covers (W&B id, job.step, ...), when known.
+        previous: Holder the lease came from (transfer) or the run was adopted from.
     """
 
     id: str
@@ -62,6 +64,8 @@ class Lease:
     expires: float = 0.0
     conflict: bool = False
     missing_since: float = 0.0
+    run: str = ""
+    previous: str = ""
 
 
 def card_key(card: Card) -> str:
@@ -225,8 +229,11 @@ def reconcile(
     return released
 
 
-def new_lease(card: Card, report: Report, holder: str, note: str, for_s: float) -> Lease:
-    """Lease on a card the probe saw as free, held by `holder` (attributed to the report's OS user)."""
+def new_lease(
+    card: Card, report: Report, holder: str, note: str, for_s: float, run: str = "", previous: str = ""
+) -> Lease:
+    """Lease on a card, held by `holder` (attributed to the report's OS user); a card already in use (adopted) starts
+    active, so its run renews the lease and its end releases it."""
     now = time.time()
     return Lease(
         id=uuid.uuid4().hex[:6],
@@ -239,6 +246,9 @@ def new_lease(card: Card, report: Report, holder: str, note: str, for_s: float) 
         note=note,
         created=now,
         expires=now + for_s if for_s else 0.0,
+        last_active=now if card.state in ("busy", "held") else 0.0,
+        run=run,
+        previous=previous,
     )
 
 

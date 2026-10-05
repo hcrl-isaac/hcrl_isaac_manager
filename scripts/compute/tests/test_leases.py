@@ -1,6 +1,8 @@
 """Unit tests for card leases (run all script tests: just test-scripts). Every test uses a temporary store."""
 
 import argparse
+import contextlib
+import io
 import json
 import subprocess
 import sys
@@ -318,6 +320,65 @@ class CommandTest(TempStore):
                     res.lease_windows()
         finally:
             res.load_config = saved
+
+    def leases(self) -> list[ls.Lease]:
+        with ls.locked_store() as leases:
+            return list(leases)
+
+    def transfer(self, *targets: str, **kw: object) -> None:
+        args = {"targets": list(targets), "holder": "s", "to": "t", "note": "", "run": "", "force": False}
+        args.update(kw)
+        res.cmd_transfer(argparse.Namespace(**args), self.pools)
+
+    def test_a_busy_card_needs_adopt_and_says_so(self) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim("mckennie:2")
+        self.assertIn("--adopt", str(ctx.exception.code))
+        self.assertEqual(self.stored(), [])
+
+    def test_adopt_takes_a_busy_card_and_its_run_renews_it(self) -> None:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.claim("mckennie:2", adopt=True, run="ni2cb9af", holder="b")
+        [lease] = self.leases()
+        self.assertIn("adopted", out.getvalue())
+        self.assertEqual((lease.holder, lease.run), ("b", "ni2cb9af"))
+        self.assertGreater(lease.last_active, 0, "an adopted lease starts active")
+        idle = card(index=2)  # the run ended: the card is free again
+        later = lease.last_active + 31 * MIN
+        ls.reconcile([lease], [report(idle)], now=later)
+        released = ls.reconcile([lease], [report(idle)], now=later + 31 * MIN)
+        self.assertEqual([x.id for x, _ in released], [lease.id])
+
+    def test_adopt_refuses_any_leased_and_unknown_cards(self) -> None:
+        with self.assertRaises(SystemExit):
+            self.claim(any=True, adopt=True)
+        self.claim("mckennie:0")
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim("mckennie:0", adopt=True, holder="b")
+        self.assertIn("just res transfer", str(ctx.exception.code))
+        self.cards = [card(index=3, state="unknown")]
+        with self.assertRaises(SystemExit):
+            self.claim("mckennie:3", adopt=True)
+        self.assertEqual(self.stored(), ["mckennie:0"])
+
+    def test_transfer_moves_the_lease_and_records_the_previous_holder(self) -> None:
+        self.claim("mckennie:0", note="seed 1")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.transfer("mckennie:0", run="u1ae5im1")
+        [lease] = self.leases()
+        self.assertEqual((lease.holder, lease.previous, lease.note, lease.run), ("t", "s", "seed 1", "u1ae5im1"))
+
+    def test_transfer_needs_the_holder_or_force_and_an_existing_lease(self) -> None:
+        self.claim("mckennie:0")
+        with self.assertRaises(SystemExit):
+            self.transfer("mckennie:0", holder="other")
+        with self.assertRaises(SystemExit):
+            self.transfer("mckennie:1")
+        self.assertEqual([x.holder for x in self.leases()], ["s"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.transfer("mckennie:0", holder="other", force=True)
+        self.assertEqual([x.holder for x in self.leases()], ["t"])
 
     def test_release_needs_the_holder_or_force(self) -> None:
         self.claim("mckennie:0")
