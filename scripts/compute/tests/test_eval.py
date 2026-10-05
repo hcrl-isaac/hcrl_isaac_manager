@@ -289,9 +289,12 @@ class SshStageTest(Isolated):
                 raise KeyboardInterrupt
             return real(cmd, **kw)
 
-        with mock.patch.object(ev.subprocess, "run", side_effect=interrupt_rsync), self.assertRaises(KeyboardInterrupt):
-            with contextlib.redirect_stderr(io.StringIO()):
-                stage.sync_code({"robot_rl": str(self.src)})
+        with (
+            mock.patch.object(ev.subprocess, "run", side_effect=interrupt_rsync),
+            self.assertRaises(KeyboardInterrupt),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            stage.sync_code({"robot_rl": str(self.src)})
         self.assertEqual(list((self.tmp / "scratch" / "res-eval" / "code").glob("*.partial.*")), [])
 
     def test_the_env_file_is_never_readable_by_others(self) -> None:
@@ -434,14 +437,18 @@ class EvalRunTest(Isolated):
             pids.append(int(next(x for x in proc.stdout if x.startswith("PID ")).split()[1]))
             raise BrokenPipeError
 
-        with mock.patch.object(ev, "run", side_effect=broken), self.assertRaises(BrokenPipeError):
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                parser = argparse.ArgumentParser()
-                ev.add_parser(parser.add_subparsers(dest="cmd"))
-                args = parser.parse_args(["eval", str(self.script), "--holder", "me", "--any"])
-                args.script_args = []
-                with mock.patch.dict(os.environ, {"MODE": "hang"}):
-                    ev.cmd_eval(args, [self.pool], self._claim)
+        parser = argparse.ArgumentParser()
+        ev.add_parser(parser.add_subparsers(dest="cmd"))
+        args = parser.parse_args(["eval", str(self.script), "--holder", "me", "--any"])
+        args.script_args = []
+        with (
+            mock.patch.object(ev, "run", side_effect=broken),
+            mock.patch.dict(os.environ, {"MODE": "hang"}),
+            self.assertRaises(BrokenPipeError),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            ev.cmd_eval(args, [self.pool], self._claim)
         self.assertFalse(_alive(pids[0]))
         self.assertEqual(self._leases(), [])
 
@@ -451,7 +458,7 @@ class EvalRunTest(Isolated):
             raise KeyboardInterrupt
 
         with mock.patch.object(ev, "run", side_effect=stuck), mock.patch.object(ev.Stage, "kill", return_value=False):
-            rc, out = self._eval("--any", "--env", "MODE=hang")
+            _, out = self._eval("--any", "--env", "MODE=hang")
         self.assertIn("KEPT lease", out)
         self.assertEqual(len(self._leases()), 1)
         [stage] = self._stages()
