@@ -116,6 +116,8 @@ done
 # Bind list mirrors scripts/cluster/run_singularity.sh -- with extra `-B ...:/u/esturman` so HOME is
 # writable inside the container. CLUSTER_APPTAINER_FLAGS carries site quirks (TACC: --fakeroot, which
 # unprivileged apptainer needs to create bind points like /root/Documents that don't exist in the image).
+# credentials go in through the environment (apptainer injects APPTAINERENV_*), never argv, which `ps` shows
+export APPTAINERENV_WANDB_USERNAME="${WANDB_USERNAME:-}" APPTAINERENV_WANDB_API_KEY="${WANDB_API_KEY:-}"
 apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B ${STAGE}/docker-isaac-sim/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -129,4 +131,4 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     ${EXT_BINDS} \
     -B ${STAGE}/tmp:/tmp:rw \
     --nv --writable-tmpfs --containall --no-home "$SIF" \
-    bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES && export WANDB_USERNAME=${WANDB_USERNAME:-} && export WANDB_API_KEY=${WANDB_API_KEY:-} && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
+    bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
