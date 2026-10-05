@@ -63,6 +63,7 @@ class TemplateExcludesTest(unittest.TestCase):
             excludes = {line.strip()[3:-1] for line in path.read_text().splitlines() if line.startswith('  - "')}
             with self.subTest(template=path.name):
                 self.assertTrue(set(preflight.ARTIFACT_EXCLUDES) <= excludes, sorted(excludes))
+                self.assertIn("**/.claude/**", excludes, "gitignored session docs ship otherwise")
                 self.assertFalse(any("bfmzero" in e for e in excludes))
 
 

@@ -109,10 +109,18 @@ echo "(run_singularity.py) apptainer: $(command -v apptainer || echo 'not found'
 # credentials go in through the environment (apptainer injects APPTAINERENV_*), never argv, which `ps` shows
 export APPTAINERENV_WANDB_USERNAME="${WANDB_USERNAME:-}" APPTAINERENV_WANDB_API_KEY="${WANDB_API_KEY:-}"
 # isaac-sim's python is called directly: the synced tree has no isaaclab.sh or isaac-sim symlink
+# the Vulkan clamp layer (scripts/vulkan/), when installed for this cluster: Isaac Sim's RTX renderer
+# segfaults at startup on drivers that report a UINT64_MAX maxMemoryAllocationSize (595.71, 615.71)
+VK_BINDS=""
+VKCLAMP_DIR="${CLUSTER_VKCLAMP_DIR:-${CLUSTER_SIF_PATH}/vkclamp}"
+if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ]; then
+    VK_BINDS="-B ${VKCLAMP_DIR}:/opt/vkclamp:ro"
+    export APPTAINERENV_XDG_CONFIG_DIRS="/opt/vkclamp/conf:/etc/xdg"
+fi
 apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B $JOB_TMPDIR/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B $HOME_DIR:${DOCKER_USER_HOME}:rw \
-    $EXT_BINDS \
+    $EXT_BINDS $VK_BINDS \
     -B $JOB_TMPDIR/tmp:/tmp:rw \
     -B $CLUSTER_ISAACLAB_DIR/logs:/workspace/ext/hcrl_isaaclab/logs:rw \
     --nv --writable-tmpfs --containall --no-home $JOB_TMPDIR/$2.sif \
