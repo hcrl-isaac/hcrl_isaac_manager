@@ -20,8 +20,8 @@ init_commands: []
   - "**/worktrees/**"
   - "**/wandb/**"
   - "**/logs/**"
-  - "**/.git/objects/**"
-  - "**/.git/lfs/**"
+  # git state stays local: the worker never reads it, and a shipped .git collides with the worker's own
+  - "**/.git"
   - "**/.venv/**"
   - "nohup.out"
   # session working docs and renders (gitignored, but submit ships gitignored files)

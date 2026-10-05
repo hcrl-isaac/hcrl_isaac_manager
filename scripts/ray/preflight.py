@@ -17,6 +17,8 @@ RESOURCES = os.path.join(MANAGER_DIR, "resources")
 SKIP_DIRS = {".git", "worktrees", "logs", "outputs", "wandb", "__pycache__", ".claude"}
 # the excludes every job template must carry for artifact_only_dirs() to describe what the job leaves out
 ARTIFACT_EXCLUDES = ("**/policies/*/*/*", "**/style_data/**")
+# other excludes every job template must carry: gitignored session docs, and git state (which collides on the worker)
+UPLOAD_EXCLUDES = ("**/.claude/**", "**/.git")
 
 sys.path.insert(0, os.path.join(MANAGER_DIR, "scripts"))
 
