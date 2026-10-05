@@ -727,8 +727,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
             root = dict(zip(code, pythonpath, strict=True))[repo]
             target_script = f"{root}/{rel}"
-            # snapshots are read-only, so relative outputs (train.py's logs/) need a writable working dir
-            cwd = root if t.kind == "local" else f"{t.scratch}/res-eval/work"
+            # snapshots are read-only and runs may be concurrent, so relative outputs (train.py's logs/) go to a
+            # writable working dir of this run's own, kept afterwards
+            cwd = f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}"
         else:
             cwd, target_script = "", stage.put(script, os.path.basename(script), mode=0o644)
         lines = [f"{k}={shlex.quote(v)}" for k, v in {**wandb_env(), **env, **paths}.items()]

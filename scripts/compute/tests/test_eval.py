@@ -529,9 +529,14 @@ class EvalRunTest(Isolated):
         self.script = "robot_rl:scripts/train.py"
         with mock.patch.object(ev, "local_workspace", return_value=str(self.tmp / "ws")):
             rc, out = self._eval("--any")
+            _, out2 = self._eval("--any")
         self.assertEqual(rc, 0, out)
-        self.assertIn(f"CWD {self.tmp / 'ws' / 'resources' / 'robot_rl'}", out)
         self.assertIn("HELPER helper ok", out)
+        cwd = Path(next(line.split(" ", 1)[1] for line in out.splitlines() if line.startswith("CWD ")))
+        self.assertEqual(cwd.parent, self.tmp / "scratch" / "res-eval" / "work")
+        self.assertTrue(cwd.is_dir(), "the work dir is kept after the run")
+        cwd2 = next(line.split(" ", 1)[1] for line in out2.splitlines() if line.startswith("CWD "))
+        self.assertNotEqual(str(cwd), cwd2, "each run gets its own work dir")
 
     def test_an_unshipped_repo_script_is_refused_before_a_lease(self) -> None:
         self.script = "nope:scripts/train.py"

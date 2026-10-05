@@ -54,12 +54,12 @@ if [ -n "${LARG_HOLDER:-}" ]; then
   cards=(); for g in ${gpus//,/ }; do cards+=("${host%%.*}:$g"); done
   python3 "$HERE/../compute/res.py" claim "${cards[@]}" --holder "$LARG_HOLDER" --note "$run_name" || exit 1
 else
-  echo "[larg] WARNING: LARG_HOLDER unset, so the run's cards are not leased; other sessions see them only as busy"
+  echo "[larg] WARNING: LARG_HOLDER unset, so the run's cards are not leased; other sessions see them only as busy, and its Kit cache starts cold"
 fi
 tag="${task//\//_}_$(date +%Y%m%d-%H%M%S)${gpus:+_gpu${gpus//,/-}}"
 run_dir="$RUNS/$tag"
-# per run: TMPDIR and the log; per GPU set: Kit caches, so concurrent runs on one box never share one
-cache="${RUNS%/*}/kit-cache/gpu${gpus:-all}"
+# per run: TMPDIR and the log. Kit caches are per GPU set when the cards are leased (one run per card), else per run
+if [ -n "${LARG_HOLDER:-}" ]; then cache="${RUNS%/*}/kit-cache/gpu${gpus}"; else cache="$run_dir/kit-cache"; fi
 q() { printf '%q ' "$@"; }
 remote="set -u
 mkdir -p $(q "$run_dir/tmp" "$cache/xdg" "$cache/omni") || exit 1

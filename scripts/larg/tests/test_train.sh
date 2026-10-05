@@ -39,8 +39,8 @@ check "one GPU runs the flat layout's train.py directly" "grep -qx 'ARG<resource
 check "run name and group keep their spaces" "grep -qx 'ARG<rate 0.5 seed 1>' '$T/ran' && grep -qx 'ARG<cube lift>' '$T/ran'"
 check "extra args and num_envs pass through" "grep -qx 'ARG<--headless>' '$T/ran' && grep -qx 'ARG<4096>' '$T/ran' && grep -qx 'ARG<--video>' '$T/ran'"
 check "the GPU pin is exported" "grep -qx 'CVD=2' '$T/ran'"
-check "TMPDIR is per run, Kit caches per GPU, both on scratch" \
-    "grep -q '^TMPDIR=$T/scratch/larg-runs/hhlm_T1-CubeLift-v0_.*_gpu2/tmp$' '$T/ran' && grep -qx 'OMNI=$T/scratch/kit-cache/gpu2/omni' '$T/ran'"
+check "TMPDIR and, unleased, the Kit cache are per run, on scratch" \
+    "grep -q '^TMPDIR=$T/scratch/larg-runs/hhlm_T1-CubeLift-v0_.*_gpu2/tmp$' '$T/ran' && grep -q '^OMNI=$T/scratch/larg-runs/hhlm_T1-CubeLift-v0_.*_gpu2/kit-cache/omni$' '$T/ran'"
 check "the log lands in the run dir" "grep -q 'log: $T/scratch/larg-runs/.*_gpu2/train.log' '$T/out1'"
 
 rm -f "$T/ran"
@@ -64,6 +64,7 @@ rm -f "$T/ran"
 launch LARG_HOLDER=me CUDA_VISIBLE_DEVICES=0,2 bash "$REPO/scripts/larg/train.sh" pogba hhlm/T1-CubeLift-v0 r > "$T/out4" 2>&1
 wait_ran
 check "LARG_HOLDER claims every pinned card" "grep -q 'claim pogba:0 pogba:2 --holder me --note r' '$T/claimed'"
+check "a leased run shares its cards' Kit cache" "grep -qx 'OMNI=$T/scratch/kit-cache/gpu0,2/omni' '$T/ran'"
 rm -f "$T/ran"
 launch CLAIM_RC=1 LARG_HOLDER=me CUDA_VISIBLE_DEVICES=1 bash "$REPO/scripts/larg/train.sh" pogba hhlm/T1-CubeLift-v0 r > "$T/out5" 2>&1
 sleep 1
