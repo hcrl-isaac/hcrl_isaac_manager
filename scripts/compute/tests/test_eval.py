@@ -518,6 +518,51 @@ class EvalRunTest(Isolated):
         rc, _ = self._eval("--lease", lease.id)
         self.assertIn("held by other", str(rc))
 
+    def test_a_repo_script_runs_from_its_repo_with_sibling_imports(self) -> None:
+        scripts = self.tmp / "ws" / "resources" / "robot_rl" / "scripts"
+        scripts.mkdir()
+        (scripts / "helper.py").write_text("NAME = 'helper ok'\n")
+        (scripts / "train.py").write_text(
+            "import os, sys\nsys.path.insert(0, os.path.dirname(__file__))\nimport helper\n"
+            "print('CWD', os.getcwd())\nprint('HELPER', helper.NAME)\n"
+        )
+        self.script = "robot_rl:scripts/train.py"
+        with mock.patch.object(ev, "local_workspace", return_value=str(self.tmp / "ws")):
+            rc, out = self._eval("--any")
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"CWD {self.tmp / 'ws' / 'resources' / 'robot_rl'}", out)
+        self.assertIn("HELPER helper ok", out)
+
+    def test_an_unshipped_repo_script_is_refused_before_a_lease(self) -> None:
+        self.script = "nope:scripts/train.py"
+        with mock.patch.object(ev, "local_workspace", return_value=str(self.tmp / "ws")):
+            rc, _ = self._eval("--any")
+        self.assertIn("not a shipped repo", str(rc))
+        self.assertEqual(self._leases(), [])
+
+    def test_detach_returns_at_once_and_keeps_the_lease(self) -> None:
+        start = time.monotonic()
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        self.assertLess(time.monotonic() - start, 15)
+        self.assertEqual(len(self._leases()), 1)
+        self.assertIn("lease", out)
+        [stage] = self._stages()
+        for _ in range(50):
+            if "PID " in (stage / "log").read_text() if (stage / "log").exists() else False:
+                break
+            time.sleep(0.2)
+        pid = self._pid((stage / "log").read_text())
+        self.assertTrue(_alive(pid))
+        self.assertFalse((stage / "env").exists(), "credentials removed once the run read them")
+        stop = next(line.split("stop:", 1)[1].strip() for line in out.splitlines() if "stop:" in line)
+        subprocess.run(["bash", "-c", stop], check=True)
+        for _ in range(50):
+            if not _alive(pid):
+                break
+            time.sleep(0.2)
+        self.assertFalse(_alive(pid))
+
     def test_exactly_one_card_selector(self) -> None:
         rc, _ = self._eval("--any", "--on", "box:1")
         self.assertIn("exactly one", str(rc))
