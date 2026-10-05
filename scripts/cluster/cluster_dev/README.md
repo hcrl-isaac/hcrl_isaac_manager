@@ -49,7 +49,8 @@ identical to one in a recent tree are hardlinked instead of re-sent (never to th
 to). `MANIFEST` records each repo's ref or absolute path, commit and content hash (modes and symlink targets
 included). Staging the same content again reuses the tree, and a failed stage leaves no tree, partial or temporary
 checkout behind. `exec --tree <id>` takes the full `<name>-<fingerprint>` id, or a bare name when exactly one tree
-has it. Staged repos are mounted read-only with their own `node_exec.sh`; `hcrl_isaaclab/logs` goes to the shared
+has it. Staged repos are mounted writable (the W&B artifact resolver re-links policies inside them) with the tree's own
+`node_exec.sh`. Runs must not edit tracked files in place, since a tree shares those inodes with earlier trees. `hcrl_isaaclab/logs` goes to the shared
 logs dir and the other `logs`/`outputs`/`wandb` dirs are node-local. W&B artifact links resolved in the shared checkout are
 carried into the tree, and the shared artifact root stays writable. Each run holds `.in-use/<job>.<step>` until it
 exits, and `trees rm` refuses while squeue still lists that step. `trees rm --partials` removes interrupted stages

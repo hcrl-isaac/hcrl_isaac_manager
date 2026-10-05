@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# node_exec.sh in tree mode, against a stub apptainer that prints its arguments: staged repos are mounted read-only
+# node_exec.sh in tree mode, against a stub apptainer that prints its arguments: staged repos are mounted writable
 # with writable logs/outputs/wandb, linked shared repos stay read-write, and the shared mode is unchanged.
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -27,7 +27,7 @@ check() {
 }
 
 NODE_EXEC_RESOURCES="$TREE/resources" run > "$T/out" 2>&1
-check "staged repo is read-only" "$TREE/resources/hcrl_isaaclab:/workspace/ext/hcrl_isaaclab:ro"
+check "staged repo is writable (the artifact resolver re-links inside it)" "$TREE/resources/hcrl_isaaclab:/workspace/ext/hcrl_isaaclab:rw"
 check "its logs go to the shared logs dir" "$T/shared/resources/hcrl_isaaclab/logs:/workspace/ext/hcrl_isaaclab/logs:rw"
 check "its outputs are writable node-locally" "$T/tmp/cluster_dev_7/tree-rw/t-0123456789/hcrl_isaaclab/outputs:/workspace/ext/hcrl_isaaclab/outputs:rw"
 check "its wandb dir is writable node-locally" "$T/tmp/cluster_dev_7/tree-rw/t-0123456789/hcrl_isaaclab/wandb:/workspace/ext/hcrl_isaaclab/wandb:rw"

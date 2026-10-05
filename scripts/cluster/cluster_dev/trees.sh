@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Immutable code trees on the remote: <remote>/trees/<name>-<fingerprint>/ holds named repos at named refs (no
+# Staged code trees on the remote: <remote>/trees/<name>-<fingerprint>/ holds named repos at named refs (no
 # --delete, the shared checkout untouched), and every other repo is a link to the shared one. Sourced by cluster_dev.sh.
 
 TREES_DIR="${REMOTE_ISAACLAB_DIR}/trees"
-TREE_RW_DIRS=(logs outputs wandb)  # mount points the container gets writable inside a read-only staged repo
+TREE_RW_DIRS=(logs outputs wandb)  # mount points that redirect run output out of a staged repo
 
 _tree_valid() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$1" != "." ] && [ "$1" != ".." ]; }
 
@@ -52,7 +52,7 @@ _tree_checkout() {  # _tree_checkout REPO_DIR REF DEST -> prints "<commit> <orig
     echo "$commit $kind"
 }
 
-cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new immutable tree
+cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new tree
     local name="${1:-}"; shift || true
     [ -n "$name" ] && [ $# -gt 0 ] || { err "usage: stage <name> <repo>=<ref|/path/to/worktree> ..."; exit 1; }
     _tree_valid "$name" || { err "tree name '${name}': use letters, digits, . _ -"; exit 1; }
@@ -133,7 +133,7 @@ cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new
                 "${CLUSTER_LOGIN}:${STAGE_PART}/scripts/${f}" || exit 1; }
         done
         # unstaged repos are the shared ones, which a later sync can change under a running tree job
-        printf '%s' "$manifest" | on_login "cat > '${STAGE_PART}/MANIFEST'; \
+        printf '%s' "$manifest" | on_login "{ echo '# writable tree: a file hardlinked between trees changes in all of them if written in place'; cat; } > '${STAGE_PART}/MANIFEST'; \
             for d in '${REMOTE_ISAACLAB_DIR}'/resources/*/; do n=\$(basename \"\$d\"); \
             [ -e '${STAGE_PART}/resources/'\"\$n\" ] && continue; ln -s \"\${d%/}\" '${STAGE_PART}/resources/'\"\$n\"; \
             echo \"\$n shared-live \${d%/}\" >> '${STAGE_PART}/MANIFEST'; done" || exit 1
