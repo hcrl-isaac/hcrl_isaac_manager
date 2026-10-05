@@ -14,6 +14,8 @@ domain = "cs.utexas.edu"
 kind = "ssh"
 hosts = ["pepi", "pulisic", "salah", "pogba"]
 domain = "cs.utexas.edu"
+# Kit has refused masked CUDA_VISIBLE_DEVICES on these boxes, so `res eval` scripts read RES_EVAL_DEVICE
+pin = "device"
 
 [compute.ray]
 kind = "ray"

@@ -9,6 +9,7 @@ just res status --pool larg   # pools whose name starts with "larg" (repeatable)
 just res status --json        # machine-readable
 just res pools                # the configured pools
 just res claim / release / leases   # card leases, below
+just res eval <script> ...    # run a one-off script on a leased card, below
 ```
 
 Card states:
@@ -59,6 +60,50 @@ just res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take 
   machines that share a home (the LARG boxes' NFS home) share it. It is locked with `flock`, which an NFS mount may
   not honour, so run `res` from one machine. A store that cannot be read or has wrong-typed fields is moved aside:
   `status` then shows no leases and `claim`/`release`/`leases` refuse.
+
+## One-off scripts (`just res eval`)
+
+Run an eval or analysis script on a leased card of a `local` or `ssh` pool, with its checkpoints brought along:
+
+```bash
+just res eval path/to/census.py --any --pool larg-a100 --holder "<session>" \
+    --checkpoint REORIENT_CKPT=hcrl-ssti/Crab_Agile/d1tafrx7@5999 \
+    --checkpoint TRAVERSE_CKPT=https://wandb.ai/hcrl-ssti/Crab_Agile/runs/d1tafrx7 \
+    --env CENSUS_N=512 -- --script-flag value
+just res eval probe.py --on hazard:2 --holder "<session>" --checkpoint ./model_200.pt   # exported as CHECKPOINT
+just res eval probe.py --lease <id> --holder "<session>" --wt my-feature                 # your lease, a worktree set
+```
+
+- The card comes from `--on host:gpu`, `--any` or `--lease <id>`. A lease `eval` takes is released when the script
+  ends, success or failure; a `--lease` you pass stays yours. `ray` and `slurm` pools are refused (use
+  `just ray job` or a dev-node `develop exec`).
+- `--checkpoint [NAME=]<ref>` (repeatable) exports the checkpoint's path on the target as `NAME` (default
+  `CHECKPOINT`). A ref is a local path, a W&B run URL or `entity/project/run_id`, with `@<iter>` for
+  `model_<iter>.pt` (default: the run's latest). W&B checkpoints download on this machine through the same code as
+  `--load_run` (cached in `~/.cache/hcrl_res/checkpoints`), so a checkpoint is no longer tied to the box that
+  trained it.
+- The script runs this machine's code: the package repos (`hcrl_isaaclab`, `robot_rl`, `*_tasks`; a `--wt` worktree
+  set where one exists) go on `PYTHONPATH`. A local pool imports the checkouts in place. On an ssh pool each repo
+  becomes an immutable snapshot `<scratch>/res-eval/code/<repo>-<fingerprint>` (tracked and non-ignored files, written
+  under a `.partial` name and renamed into place, hardlinked from the previous snapshot), and the run gets a fresh
+  `<stage>/resources/` of links to those snapshots and to the target's own asset repos. A changed or deleted file
+  makes a new snapshot, and nothing is ever synced into the target's shared checkout.
+- The interpreter is the target workspace's `ilab` python, with a per-run `TMPDIR`, per-card `XDG_CACHE_HOME` /
+  `OMNI_CACHE_DIR` and `HCRL_ARTIFACT_ROOT` under `<scratch>/res-eval/`. The card: pools with `pin = "cvd"`
+  (default) mask `CUDA_VISIBLE_DEVICES` to it; `pin = "device"` (the A40 pool, where Kit has refused masked GPUs)
+  leaves it unmasked. Either way `RES_EVAL_DEVICE` names the card the script should use (`cuda:0` when masked).
+- `--env KEY=VALUE` (repeatable) and the W&B credentials from `scripts/.env.wandb` reach the script through a 0600 env
+  file, never the command line.
+- The run starts in its own process group. `--timeout` (default none) and `--stall` (no output for 15 min; `0` turns
+  it off) kill the whole group and confirm it is gone; so does Ctrl-C. The exit status is the script's own, an exit 0
+  after a Python traceback counts as a failure, and a killed run reports 124.
+- Everything goes to `<stage>/log`, which starts with a MANIFEST of each repo's commit and dirty count. The stage is
+  removed after success; a failed run keeps its log, MANIFEST and run.sh (its checkpoints and credentials are always
+  removed). A lease `eval` took is released whatever happens. Old snapshots are not pruned yet.
+- Pool settings: `workspace` (the manager checkout on the target, providing the venv and the asset repos; default
+  `/var/local/<user>/hcrl_isaac_manager` on ssh pools, this machine's checkout locally), `scratch` (default
+  `/var/local/<user>`, `~/tmp` locally) and `pin`. Keep `scratch` on local disk, never a quota'd NFS home: snapshots,
+  checkpoints and Kit caches live there.
 
 ## Pools
 
