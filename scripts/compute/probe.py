@@ -117,15 +117,21 @@ MARKERS = ["@@CARDS", "@@APPS", "@@PS", "@@END"]
 
 
 def _sections(out: str) -> dict[str, list[str]]:
-    """Split GPU_QUERY output into its sections; lines before @@CARDS (login banners) are ignored."""
+    """Split GPU_QUERY output into its sections; banner text around them is ignored.
+
+    A site's job wrapper (TACC's srun) prints its own checks on the step's stdout, before the query and after it, and
+    can leave the first marker mid-line ("Checking available allocation (X)...@@CARDS").
+    """
     sections: dict[str, list[str]] = {"cards": [], "apps": [], "ps": []}
     keys = {"@@CARDS": "cards", "@@APPS": "apps", "@@PS": "ps"}
     rcs: dict[str, str] = {}
     seen: list[str] = []
     key = None
     for line in out.splitlines():
-        marker = line.split(" ", 1)[0] if line.startswith("@@") else None
+        at = line.find("@@")
+        marker = line[at:].split(" ", 1)[0] if at >= 0 else None
         if marker in MARKERS:
+            line = line[at:]
             if marker in seen or MARKERS.index(marker) != len(seen):
                 raise ProbeError(f"probe markers out of order at {marker}")
             seen.append(marker)
@@ -134,10 +140,7 @@ def _sections(out: str) -> dict[str, list[str]]:
             elif marker == "@@PS":
                 rcs["apps"] = line.partition("rc=")[2].strip()
             key = keys.get(marker)
-        elif key is None:
-            if seen and line.strip():
-                raise ProbeError(f"unexpected output after @@END: {line[:80]}")
-        elif line.strip():
+        elif key is not None and line.strip():
             sections[key].append(line)
     if seen != MARKERS:
         raise ProbeError("probe output truncated")
