@@ -54,6 +54,18 @@ class WorkspaceReposTest(unittest.TestCase):
         self.assertIn("umrl_tasks", workspace_repos(str(self.resources)))
 
 
+class TemplateExcludesTest(unittest.TestCase):
+    def test_every_job_template_excludes_what_preflight_checks(self) -> None:
+        tools = Path(__file__).resolve().parents[1] / "tools"
+        templates = sorted(tools.glob("*job_config*.template.yaml"))
+        self.assertGreaterEqual(len(templates), 3)
+        for path in templates:
+            excludes = {line.strip()[3:-1] for line in path.read_text().splitlines() if line.startswith('  - "')}
+            with self.subTest(template=path.name):
+                self.assertTrue(set(preflight.ARTIFACT_EXCLUDES) <= excludes, sorted(excludes))
+                self.assertFalse(any("bfmzero" in e for e in excludes))
+
+
 class PreflightTest(unittest.TestCase):
     def setUp(self) -> None:
         self.dir = tempfile.TemporaryDirectory()
@@ -67,18 +79,25 @@ class PreflightTest(unittest.TestCase):
             "scripts/bfmzero_not_a_policy",
         ):
             (root / d).mkdir(parents=True)
+        (root / "hhlm_tasks/policies/fbcpr/g1").mkdir(parents=True)
+        (root / "hhlm_tasks/policies/fbcpr/g1/buffer.hdf5").write_bytes(b"x")
+        (root / "hhlm_tasks/mcp/policies").mkdir(parents=True)
+        (root / "hhlm_tasks/mcp/policies/approach.pt").write_bytes(b"x")  # shallow: ships with the code
         self.root = root
+        self.all = [
+            "hhlm_tasks/hhlm_tasks/agile/crab/style_data",
+            "hhlm_tasks/hhlm_tasks/policies/cvae/t1/cvae_bfm_x",
+            "hhlm_tasks/hhlm_tasks/policies/fbcpr/g1/buffer.hdf5",
+            "hhlm_tasks/hhlm_tasks/policies/fbcpr/t1/bfmzero_a",
+        ]
         self.saved = preflight.mounted_sources, preflight._published_rel_paths
 
     def tearDown(self) -> None:
         preflight.mounted_sources, preflight._published_rel_paths = self.saved
         self.dir.cleanup()
 
-    def test_finds_only_artifact_only_dirs(self) -> None:
-        self.assertEqual(
-            preflight.artifact_only_dirs(str(self.root), "hhlm_tasks"),
-            ["hhlm_tasks/hhlm_tasks/agile/crab/style_data", "hhlm_tasks/hhlm_tasks/policies/fbcpr/t1/bfmzero_a"],
-        )
+    def test_finds_every_exported_policy_and_style_data(self) -> None:
+        self.assertEqual(preflight.artifact_only_dirs(str(self.root), "hhlm_tasks"), self.all)
 
     def run_main(self, published: set[str]) -> int:
         preflight.mounted_sources = lambda wt: [(str(self.root), "hhlm_tasks")]
@@ -90,11 +109,10 @@ class PreflightTest(unittest.TestCase):
         return 0
 
     def test_passes_when_all_published(self) -> None:
-        published = {"hhlm_tasks/hhlm_tasks/agile/crab/style_data", "hhlm_tasks/hhlm_tasks/policies/fbcpr/t1/bfmzero_a"}
-        self.assertEqual(self.run_main(published), 0)
+        self.assertEqual(self.run_main(set(self.all)), 0)
 
     def test_fails_naming_the_missing_dir(self) -> None:
-        self.assertEqual(self.run_main({"hhlm_tasks/hhlm_tasks/agile/crab/style_data"}), 1)
+        self.assertEqual(self.run_main(set(self.all[:-1])), 1)
 
     def test_unreadable_wandb_warns_and_passes(self) -> None:
         preflight.mounted_sources = lambda wt: [(str(self.root), "hhlm_tasks")]

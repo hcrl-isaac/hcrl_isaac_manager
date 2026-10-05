@@ -56,8 +56,10 @@ This should display a blank table, like so:
 Robot assets, motion datasets, and exported policies are excluded from the per-job upload (they would
 blow Ray's size limit) and fetched at runtime as W&B artifacts instead. `just ray setup` uploads them
 (it calls `just upload-artifacts`), and every `just ray job` refreshes the ones present locally. Before
-submitting, a pre-flight (`scripts/ray/preflight.py`) fails naming any excluded dir (`**/policies/**/bfmzero_*`,
-`**/style_data`) in the mounted sources that has no artifact at its path, with the command to publish it:
+submitting, a pre-flight (`scripts/ray/preflight.py`) fails naming any excluded entry (every exported policy,
+`**/policies/<task>/<robot>/<name>` whether a dir or a file, and `**/style_data`) in the mounted sources that has no
+artifact at its path, with the command to publish it. A new export therefore needs publishing before its first Ray
+job; Ray's 100 MiB `py_modules` limit is why exports cannot ship with the code:
 
 ```bash
 just upload-artifacts --list                         # what is published, and where it resolves
