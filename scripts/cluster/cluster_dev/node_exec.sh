@@ -70,14 +70,45 @@ mkdir -p \
 cmd="$*"; [ -n "$cmd" ] || cmd="/isaac-sim/python.sh --version"
 # Bind all workspace repos into /workspace/ext -- packages AND asset repos (e.g. hcrl_robots), since the
 # in-repo resource symlinks need the asset repos mounted. The entrypoint PYTHONPATHs only the packages.
+# NODE_EXEC_RESOURCES (set by `exec --tree`) points at a staged tree's resources/ instead of the shared one.
+RESOURCES="${NODE_EXEC_RESOURCES:-${CLUSTER_ISAACLAB_DIR}/resources}"
+if [ -n "${NODE_EXEC_RESOURCES:-}" ]; then
+    # `trees rm` refuses while this marker's step (or job, outside a step) is still in squeue
+    if [ -n "${SLURM_JOB_ID:-}" ]; then
+        IN_USE="$(dirname "$RESOURCES")/.in-use/${SLURM_JOB_ID}.${SLURM_STEP_ID:-nostep}"
+    else
+        IN_USE="$(dirname "$RESOURCES")/.in-use/$(hostname -s).$$"
+    fi
+    mkdir -p "$(dirname "$IN_USE")" && touch "$IN_USE"
+    trap 'rm -f "$IN_USE"' EXIT
+    trap 'exit 143' TERM INT HUP
+fi
 EXT_BINDS=""
-for d in "${CLUSTER_ISAACLAB_DIR}"/resources/*/; do
+for d in "${RESOURCES}"/*/; do
     name="$(basename "$d")"
     [ "$name" = "IsaacLab" ] && continue   # handled by the source overlay below, not /workspace/ext
-    EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:rw"
+    if [ -n "${NODE_EXEC_RESOURCES:-}" ] && [ ! -L "${d%/}" ]; then
+        # the artifact root (and the links into it) live in the shared checkout, writable
+        [ "$name" = hcrl_isaaclab ] && mkdir -p "${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/.artifacts" &&
+            EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/.artifacts:/workspace/ext/hcrl_isaaclab/.artifacts:rw"
+        # a staged repo is read-only (its files are hardlinked to other trees), with writable run-output dirs:
+        # hcrl_isaaclab's logs in the shared logs dir, the rest node-local
+        EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:ro"
+        for rw in logs outputs wandb; do
+            if [ "$name/$rw" = hcrl_isaaclab/logs ]; then
+                out="${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs"
+            else
+                out="${STAGE}/tree-rw/$(basename "$(dirname "$RESOURCES")")/${name}/${rw}"
+            fi
+            mkdir -p "$out"
+            EXT_BINDS="$EXT_BINDS -B ${out}:/workspace/ext/${name}/${rw}:rw"
+        done
+    else
+        EXT_BINDS="$EXT_BINDS -B $(readlink -f "${d%/}"):/workspace/ext/${name}:rw"
+    fi
 done
-[ -d "${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source" ] && \
-    EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/resources/IsaacLab/source:/workspace/isaaclab_source:rw"
+[ -d "${RESOURCES}/IsaacLab/source" ] && \
+    EXT_BINDS="$EXT_BINDS -B $(readlink -f "${RESOURCES}/IsaacLab/source"):/workspace/isaaclab_source:rw"
 # artifacts/ is the structural out-of-sync tree (see cluster_dev.sh rsync_code): cluster-only INPUT
 # data staged there still has to be readable inside the container, which the resources/* glob misses.
 [ -d "${CLUSTER_ISAACLAB_DIR}/artifacts" ] && \

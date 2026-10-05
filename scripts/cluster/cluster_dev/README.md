@@ -32,6 +32,29 @@ The watcher writes `~/.cluster_dev/<cluster>/state` (and `watch.log` next to it)
 `JOB_STATE=RUNNING` and `NODE` is set, the box is ready. A Claude session can poll `status` and
 drive `exec`/`attach` over the live master with zero auth.
 
+## Code trees (run specific branches without syncing)
+```bash
+just cluster delta develop stage push-foot hhlm_tasks=feat/push-foot-contact-penalty hcrl_isaaclab=main robot_rl=main
+just cluster delta develop exec --tree push-foot -- python scripts/train.py --task ...   # (--detach as usual)
+just cluster delta develop trees                       # list staged trees
+just cluster delta develop trees rm push-foot-<fp>     # remove one (refused while a job that used it runs)
+just cluster delta develop trees rm --partials         # clear interrupted stages older than an hour
+```
+`stage` uploads each named repo at a ref (fetched; `origin/<ref>` preferred) or a local worktree
+(`hcrl_isaaclab=./resources/hcrl_isaaclab/worktrees/wt`: the worktree top, `/`, `./` or `../`, relative to the manager dir under
+`just`, carrying tracked and untracked non-ignored files) into a new `<CLUSTER_ISAACLAB_DIR>/trees/<name>-<fingerprint>/`.
+It never uses `--delete` and never touches the shared checkout. Every repo not named is a link to the shared one;
+asset repos (`*_robots`, where URDF->USD conversion writes) and `IsaacLab` always are, and cannot be staged. Files
+identical to one in a recent tree are hardlinked instead of re-sent (never to the shared checkout, which runs write
+to). `MANIFEST` records each repo's ref or absolute path, commit and content hash (modes and symlink targets
+included). Staging the same content again reuses the tree, and a failed stage leaves no tree, partial or temporary
+checkout behind. `exec --tree <id>` takes the full `<name>-<fingerprint>` id, or a bare name when exactly one tree
+has it. Staged repos are mounted read-only with their own `node_exec.sh`; `hcrl_isaaclab/logs` goes to the shared
+logs dir and the other `logs`/`outputs`/`wandb` dirs are node-local. W&B artifact links resolved in the shared checkout are
+carried into the tree, and the shared artifact root stays writable. Each run holds `.in-use/<job>.<step>` until it
+exits, and `trees rm` refuses while squeue still lists that step. `trees rm --partials` removes interrupted stages
+in which nothing changed for an hour. `develop sync` leaves `trees/` alone. Trees are not removed automatically.
+
 ## Config
 The sentinel reuses the `#SBATCH` directives of the cluster's own `config/<cluster>/submit_job_slurm.sh`
 (minus `--job-name`/`--output`), so the dev box asks for what a `job` submission asks for. `attach`/`exec`

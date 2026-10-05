@@ -1,5 +1,7 @@
 """Ray launcher: argument quoting and the artifact pre-flight (no Ray, no W&B)."""
 
+import contextlib
+import io
 import shlex
 import sys
 import tempfile
@@ -7,8 +9,10 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import preflight
 from job_args import split_jobs
+from worktree_env import workspace_repos
 
 
 class SplitJobsTest(unittest.TestCase):
@@ -27,6 +31,27 @@ class SplitJobsTest(unittest.TestCase):
 
     def test_empty(self) -> None:
         self.assertEqual(split_jobs([]), [])
+
+
+class WorkspaceReposTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dir = tempfile.TemporaryDirectory()
+        self.resources = Path(self.dir.name) / "resources"
+        for repo in ("hhlm_tasks", "umrl_tasks", "hcrl_robots"):
+            (self.resources / repo).mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.dir.cleanup()
+
+    def test_checkouts_missing_from_gitman_are_not_mounted(self) -> None:
+        names = ["hcrl_isaaclab", "robot_rl", "hhlm_tasks", "hcrl_robots"]
+        (self.resources.parent / "gitman.yaml").write_text("".join(f"- name: {n}\n  rev: main\n" for n in names))
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(workspace_repos(str(self.resources)), names)
+        self.assertIn("umrl_tasks", err.getvalue())
+
+    def test_without_gitman_every_checkout_counts(self) -> None:
+        self.assertIn("umrl_tasks", workspace_repos(str(self.resources)))
 
 
 class PreflightTest(unittest.TestCase):
