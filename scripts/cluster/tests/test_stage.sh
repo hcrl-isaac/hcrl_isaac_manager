@@ -38,6 +38,9 @@ touch -d 2020-01-01 "$R/resources/hcrl_isaaclab/big.bin"  # an old copy: linking
 echo asset > "$R/resources/hcrl_robots/t1.urdf"
 mkdir -p "$R/resources/hcrl_isaaclab/pol"
 ln -s /workspace/ext/hcrl_isaaclab/.artifacts/abc "$R/resources/hcrl_isaaclab/pol/bfmzero_x"
+mkdir -p "$T/art/.artifacts/k/v0" "$T/art/.artifacts/k/v1"
+echo w > "$T/art/.artifacts/k/v0/w.pt" && echo w > "$T/art/.artifacts/k/v1/w.pt"
+ln -s "$T/art/.artifacts/k/v0" "$R/resources/hcrl_isaaclab/pol/bfmzero_y"
 printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\n' "$R" > "$T/scripts/cluster/config/zz/.env.cluster"
 printf '#!/usr/bin/env bash\n#SBATCH -p test\n' > "$T/scripts/cluster/config/zz/submit_job_slurm.sh"
 dev() { PATH="$T/bin:$PATH" HOME="$T" CLUSTER=zz LOCAL_ISAACLAB_DIR="$L" bash "$T/scripts/cluster/cluster_dev/cluster_dev.sh" "$@"; }
@@ -59,6 +62,16 @@ check "unstaged repos link to the shared checkout" "[ -L '$tree/resources/hcrl_r
 check "staged repo has writable mount points" "[ -d '$tree/resources/hcrl_isaaclab/logs' ] && [ -d '$tree/resources/hcrl_isaaclab/outputs' ] && [ -d '$tree/resources/hcrl_isaaclab/wandb' ]"
 check "artifact links from the shared checkout are carried" \
     "[ \"\$(readlink '$tree/resources/hcrl_isaaclab/pol/bfmzero_x')\" = /workspace/ext/hcrl_isaaclab/.artifacts/abc ]"
+ARTIFACTS_PY="${HCRL_ISAACLAB_DIR:-$(cd "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/resources/hcrl_isaaclab}/hcrl_isaaclab/utils/artifacts.py"
+if [ -f "$ARTIFACTS_PY" ]; then
+    HCRL_ARTIFACT_ROOT="$T/art/.artifacts" python3 "$REPO/scripts/cluster/tests/resolve_in_tree.py" "$ARTIFACTS_PY" \
+        "$tree/resources" hcrl_isaaclab/pol/bfmzero_y "$T/art/.artifacts/k/v1" > "$T/out_resolve" 2>&1
+    check "the artifact resolver re-links a dest inside the tree" "grep -qx '$T/art/.artifacts/k/v1' '$T/out_resolve'"
+    check "and leaves the shared checkout's link alone" "[ \"\$(readlink '$R/resources/hcrl_isaaclab/pol/bfmzero_y')\" = '$T/art/.artifacts/k/v0' ]"
+    rm -rf "$tree/resources/hcrl_isaaclab/hcrl_isaaclab"
+else
+    echo "SKIP artifact resolver checks (no hcrl_isaaclab checkout; set HCRL_ISAACLAB_DIR)"
+fi
 check "hcrl_isaaclab has an artifact mount point" "[ -d '$tree/resources/hcrl_isaaclab/.artifacts' ]"
 check "tree carries its own node_exec.sh" "[ -f '$tree/scripts/cluster/cluster_dev/node_exec.sh' ]"
 check "shared checkout untouched" "grep -qx main '$R/resources/hcrl_isaaclab/code.py'"

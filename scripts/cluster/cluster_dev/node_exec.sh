@@ -88,12 +88,12 @@ for d in "${RESOURCES}"/*/; do
     name="$(basename "$d")"
     [ "$name" = "IsaacLab" ] && continue   # handled by the source overlay below, not /workspace/ext
     if [ -n "${NODE_EXEC_RESOURCES:-}" ] && [ ! -L "${d%/}" ]; then
-        # the artifact root (and the links into it) live in the shared checkout, writable
+        # the artifact root lives in the shared checkout
         [ "$name" = hcrl_isaaclab ] && mkdir -p "${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/.artifacts" &&
             EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/.artifacts:/workspace/ext/hcrl_isaaclab/.artifacts:rw"
-        # a staged repo is read-only (its files are hardlinked to other trees), with writable run-output dirs:
-        # hcrl_isaaclab's logs in the shared logs dir, the rest node-local
-        EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:ro"
+        # writable, since the artifact resolver re-links policy dests inside the repo; run outputs are redirected:
+        # hcrl_isaaclab's logs to the shared logs dir, the rest node-local
+        EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:rw"
         for rw in logs outputs wandb; do
             if [ "$name/$rw" = hcrl_isaaclab/logs ]; then
                 out="${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs"
