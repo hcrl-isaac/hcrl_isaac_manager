@@ -24,5 +24,7 @@ init_commands: []
   - "**/.git/lfs/**"
   - "**/.venv/**"
   - "nohup.out"
+  # session working docs and renders (gitignored, but submit ships gitignored files)
+  - "**/.claude/**"
   - "**/style_data/**"
   - "**/policies/*/*/*"

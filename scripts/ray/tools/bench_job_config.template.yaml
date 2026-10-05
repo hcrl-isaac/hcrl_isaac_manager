@@ -21,6 +21,8 @@ init_commands: []
   - "**/.git/lfs/**"
   - "**/.venv/**"
   - "nohup.out"
+  # session working docs and renders (gitignored, but submit ships gitignored files)
+  - "**/.claude/**"
   - "**/style_data/**"
   # exported policies (policies/<task>/<robot>/<name>), fetched as W&B artifacts by rel_path
   - "**/policies/*/*/*"
