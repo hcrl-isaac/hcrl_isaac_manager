@@ -76,15 +76,25 @@ EXT_BINDS=""
 for d in "${RESOURCES}"/*/; do
     name="$(basename "$d")"
     [ "$name" = "IsaacLab" ] && continue   # handled by the source overlay below, not /workspace/ext
-    EXT_BINDS="$EXT_BINDS -B $(readlink -f "${d%/}"):/workspace/ext/${name}:rw"
+    if [ -n "${NODE_EXEC_RESOURCES:-}" ] && [ ! -L "${d%/}" ]; then
+        # a staged repo is read-only (its files are hardlinked to other trees and the shared checkout); only its
+        # run-output dirs are writable: hcrl_isaaclab's logs in the shared logs dir, the rest node-local
+        EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:ro"
+        for rw in logs outputs wandb; do
+            if [ "$name/$rw" = hcrl_isaaclab/logs ]; then
+                out="${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs"
+            else
+                out="${STAGE}/tree-rw/$(basename "$(dirname "$RESOURCES")")/${name}/${rw}"
+            fi
+            mkdir -p "$out"
+            EXT_BINDS="$EXT_BINDS -B ${out}:/workspace/ext/${name}/${rw}:rw"
+        done
+    else
+        EXT_BINDS="$EXT_BINDS -B $(readlink -f "${d%/}"):/workspace/ext/${name}:rw"
+    fi
 done
 [ -d "${RESOURCES}/IsaacLab/source" ] && \
     EXT_BINDS="$EXT_BINDS -B $(readlink -f "${RESOURCES}/IsaacLab/source"):/workspace/isaaclab_source:rw"
-# a tree is immutable: run logs still go to the shared hcrl_isaaclab/logs
-if [ -n "${NODE_EXEC_RESOURCES:-}" ]; then
-    mkdir -p "${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs"
-    EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs:/workspace/ext/hcrl_isaaclab/logs:rw"
-fi
 # artifacts/ is the structural out-of-sync tree (see cluster_dev.sh rsync_code): cluster-only INPUT
 # data staged there still has to be readable inside the container, which the resources/* glob misses.
 [ -d "${CLUSTER_ISAACLAB_DIR}/artifacts" ] && \

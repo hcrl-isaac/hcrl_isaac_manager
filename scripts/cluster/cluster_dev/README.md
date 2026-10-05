@@ -36,15 +36,19 @@ drive `exec`/`attach` over the live master with zero auth.
 ```bash
 just cluster delta develop stage push-foot hhlm_tasks=feat/push-foot-contact-penalty hcrl_isaaclab=main robot_rl=main
 just cluster delta develop exec --tree push-foot -- python scripts/train.py --task ...   # (--detach as usual)
-just cluster delta develop trees                                                          # list staged trees
+just cluster delta develop trees                       # list staged trees
+just cluster delta develop trees rm push-foot-<fp>     # remove one (refused while a job that used it runs)
+just cluster delta develop trees rm --partials         # clear interrupted stages older than an hour
 ```
-`stage` uploads each named repo at a pushed ref (or a local worktree path, uncommitted edits included) into a new
+`stage` uploads each named repo at a ref (fetched; `origin/<ref>` preferred) or a local worktree path
+(`hcrl_isaaclab=../wt`, tracked and untracked non-ignored files) into a new
 `<CLUSTER_ISAACLAB_DIR>/trees/<name>-<fingerprint>/`. It never uses `--delete` and never touches the shared checkout:
-every repo not named is a link to the shared one, files identical to the shared copy or an earlier tree are
-hardlinked instead of re-sent, and the tree's `MANIFEST` records each repo's commit. Staging the same refs again
-reuses the tree. `exec --tree <name>` runs the newest tree of that name with its repos mounted (and its own
-`node_exec.sh`); run logs still go to the shared `hcrl_isaaclab/logs`. `develop sync` leaves `trees/` alone.
-Old trees are not cleaned up automatically yet.
+every repo not named is a link to the shared one, files identical to the shared copy or a recent tree are hardlinked
+instead of re-sent, and the tree's `MANIFEST` records each repo's commit and content hash. Staging the same content
+again reuses the tree; a failed stage leaves nothing behind. `exec --tree <id>` takes the full `<name>-<fingerprint>`
+id, or a bare name when exactly one tree has it. Staged repos are mounted read-only with their own `node_exec.sh`;
+`hcrl_isaaclab/logs` goes to the shared logs dir and the other `logs`/`outputs`/`wandb` dirs are node-local.
+`develop sync` leaves `trees/` alone. Trees are not removed automatically.
 
 ## Config
 The sentinel reuses the `#SBATCH` directives of the cluster's own `config/<cluster>/submit_job_slurm.sh`

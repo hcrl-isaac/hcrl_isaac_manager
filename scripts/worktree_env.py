@@ -29,12 +29,24 @@ def workspace_repos(resources: str = RESOURCES_DIR) -> list[str]:
         resources: The workspace ``resources/`` directory to glob the per-project repos from.
 
     Returns:
-        Repo directory names (not checked for existence).
+        Repo directory names (not checked for existence), limited to the ``gitman.yaml`` sources when it exists.
     """
+    listed = _gitman_names(os.path.join(os.path.dirname(os.path.abspath(resources)), "gitman.yaml"))
     repos = ["hcrl_isaaclab", "robot_rl"]
     for pattern in ("*_tasks", "*_robots"):
-        repos += sorted(os.path.basename(p) for p in glob.glob(os.path.join(resources, pattern)))
+        found = sorted(os.path.basename(p) for p in glob.glob(os.path.join(resources, pattern)))
+        repos += [r for r in found if listed is None or r in listed]
     return repos
+
+
+def _gitman_names(path: str) -> set[str] | None:
+    """Repo names in the resolved ``gitman.yaml`` (a retired checkout left in resources/ is unlisted), or None."""
+    try:
+        with open(path) as f:
+            lines = [line.strip().removeprefix("- ") for line in f]
+        return {line.split(":", 1)[1].strip() for line in lines if line.startswith("name:")}
+    except OSError:
+        return None
 
 
 def resolve(name: str) -> tuple[dict[str, str], list[str]]:
