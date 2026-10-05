@@ -115,7 +115,7 @@ cmd_stage() {  # stage NAME REPO=REF|REPO=PATH ... : upload those repos as a new
                 [ -n "$prev" ] && links+=(--link-dest="${prev}/")
             done < <(on_login "for d in \$(ls -1dt '${TREES_DIR}'/*/resources/'${repo}' 2>/dev/null); do \
                 case \"\$d\" in *.partial.*) continue ;; esac; [ -L \"\$d\" ] || echo \"\$d\"; done | head -3")
-            _tree_files "$src" | rsync -rlp --checksum --info=progress2 --from0 --files-from=- "${links[@]}" \
+            _tree_files "$src" | rsync -rlp --chmod=Fa-w --checksum --info=progress2 --from0 --files-from=- "${links[@]}" \
                 -e "ssh ${SSH_OPTS[*]}" "${src}/" "${CLUSTER_LOGIN}:${STAGE_PART}/resources/${repo}/" || exit 1
             for d in "${TREE_RW_DIRS[@]}"; do on_login "mkdir -p '${STAGE_PART}/resources/${repo}/${d}'" || exit 1; done
             [ "$repo" = hcrl_isaaclab ] && { on_login "mkdir -p '${STAGE_PART}/resources/${repo}/.artifacts'" || exit 1; }
@@ -186,7 +186,7 @@ cmd_trees() {  # trees [rm <name>-<fp> [--force] | rm --partials] : list, or rem
         shift; _trees_rm "$@"; return
     fi
     on_login "for t in \$(ls -1td '${TREES_DIR}'/*/ 2>/dev/null); do case \"\$t\" in *.partial.*) continue ;; esac; \
-        [ -f \"\$t/.complete\" ] || continue; echo \"\$(basename \"\$t\")  (\$(date -r \"\$t/.complete\" +%F' '%H:%M))\"; sed 's/^/  /' \"\$t/MANIFEST\"; done"
+        [ -f \"\$t/.complete\" ] || continue; echo \"\$(basename \"\$t\")  (\$(date -r \"\$t/.complete\" +%F' '%H:%M))\"; sed '/^#/d; s/^/  /' \"\$t/MANIFEST\"; done"
 }
 
 _trees_rm() {

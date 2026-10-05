@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `develop stage` / `trees` through an ssh stub: named repos at named refs land in a new immutable tree, everything
+# `develop stage` / `trees` through an ssh stub: named repos at named refs land in a new tree, everything
 # else links to the shared checkout, bad input touches nothing, and trees resolve and are removed safely.
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -60,6 +60,8 @@ check "manifest records the commit" "grep -q \"hcrl_isaaclab feat \$(git -C '$G'
 check "manifest lists shared repos as live" "grep -q '^hcrl_robots shared-live ' '$tree/MANIFEST'"
 check "unstaged repos link to the shared checkout" "[ -L '$tree/resources/hcrl_robots' ] && [ -f '$tree/resources/hcrl_robots/t1.urdf' ]"
 check "staged repo has writable mount points" "[ -d '$tree/resources/hcrl_isaaclab/logs' ] && [ -d '$tree/resources/hcrl_isaaclab/outputs' ] && [ -d '$tree/resources/hcrl_isaaclab/wandb' ]"
+check "staged files are read-only" "[ ! -w '$tree/resources/hcrl_isaaclab/code.py' ] && ! (echo x >> '$tree/resources/hcrl_isaaclab/code.py') 2>/dev/null"
+check "its directories stay writable" "touch '$tree/resources/hcrl_isaaclab/new_file' && rm '$tree/resources/hcrl_isaaclab/new_file'"
 check "artifact links from the shared checkout are carried" \
     "[ \"\$(readlink '$tree/resources/hcrl_isaaclab/pol/bfmzero_x')\" = /workspace/ext/hcrl_isaaclab/.artifacts/abc ]"
 ARTIFACTS_PY="${HCRL_ISAACLAB_DIR:-$(cd "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/resources/hcrl_isaaclab}/hcrl_isaaclab/utils/artifacts.py"
@@ -156,7 +158,7 @@ wait
 check "concurrent stages give one tree" "[ \$(ntrees conc) -eq 1 ] && [ -f \"\$(ls -d '$R'/trees/conc-*)/.complete\" ] && ! ls -d '$R'/trees/conc-*.partial.* 2>/dev/null"
 
 dev trees > "$T/out5" 2>&1
-check "trees lists them" "[ \"\$(grep -c '^t1-' '$T/out5')\" -eq 1 ]"
+check "trees lists them" "[ \"\$(grep -c '^t1-' '$T/out5')\" -eq 1 ] && ! grep -q '^ *#' '$T/out5'"
 
 # trees rm: refused while a job that used the tree is running
 id="$(basename "$tree")"
