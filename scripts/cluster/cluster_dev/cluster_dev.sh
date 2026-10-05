@@ -114,6 +114,9 @@ state_set() {  # state_set KEY VALUE  (idempotent upsert)
 
 master_alive() { ssh "${SSH_OPTS[@]}" -O check "$CLUSTER_LOGIN" >/dev/null 2>&1; }
 
+# This user's RUNNING sentinels on the cluster, newest first: "<jobid> <node> <time left>" per line.
+live_sentinels() { on_login "squeue -u \$USER -h -t RUNNING -n cluster-dev-box -o '%i %N %L' 2>/dev/null" | sort -rn || true; }
+
 ensure_master() {
     if master_alive; then log "SSH master already open to $CLUSTER_LOGIN."; return 0; fi
     log "Opening SSH master to $CLUSTER_LOGIN -- APPROVE THE 2FA PROMPT NOW (one time, if your site uses it)."
@@ -321,6 +324,10 @@ cmd_status() {
     if [ -n "$jobid" ] && master_alive; then
         echo "  live squeue:"; on_login "squeue -j $jobid 2>/dev/null" | sed 's/^/    /' || true
     fi
+    if [ "$(state_get JOB_STATE)" != RUNNING ] && master_alive; then
+        echo "  RUNNING sentinels (exec uses the only one, or pass DEV_JOBID=<id>):"
+        live_sentinels | sed 's/^/    /'
+    fi
     [ -f "$WATCH_LOG" ] && { echo "  recent watch log:"; tail -3 "$WATCH_LOG" | sed 's/^/    /'; }
 }
 
@@ -341,8 +348,18 @@ require_running() {
     fi
     refresh_job_state
     DD_JOBID="$(state_get JOBID)"; DD_NODE="$(state_get NODE)"
-    [ "$(state_get JOB_STATE)" = "RUNNING" ] && [ -n "$DD_JOBID" ] || {
-        err "No running job yet (state=$(state_get JOB_STATE)). Run './cluster_dev.sh status'."; exit 1; }
+    if [ "$(state_get JOB_STATE)" != "RUNNING" ] || [ -z "$DD_JOBID" ]; then
+        # the tracked job is gone: fall back to this user's only RUNNING sentinel (any session's)
+        local live=""; master_alive && live="$(live_sentinels)"
+        if [ -n "$live" ] && [ "$(printf '%s\n' "$live" | wc -l)" -eq 1 ]; then
+            log "Tracked job ${DD_JOBID:-<none>} is $(state_get JOB_STATE); using the only RUNNING sentinel ${live%% *}"
+            DEV_JOBID="${live%% *}"; require_running; return
+        elif [ -n "$live" ]; then
+            err "Tracked job ${DD_JOBID:-<none>} is $(state_get JOB_STATE). Pick a RUNNING sentinel with DEV_JOBID=<id>:"
+            printf '%s\n' "$live" | sed 's/^/    /' >&2; exit 1
+        fi
+        err "No running job yet (state=$(state_get JOB_STATE)). Run './cluster_dev.sh status'."; exit 1
+    fi
     master_alive || { err "SSH master is down -- re-run './cluster_dev.sh start' (needs 2FA)."; exit 1; }
     DD_MODE="$CLUSTER_ATTACH_MODE"
     if [ "$DD_MODE" = "auto" ]; then
