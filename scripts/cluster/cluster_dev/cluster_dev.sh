@@ -417,7 +417,7 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
         nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
     fi
     if [ -z "$detach" ]; then
-        log "[${DD_MODE}] container exec on job ${DD_JOBID}: $*"
+        log "[${DD_MODE}] container exec on job ${DD_JOBID}: ${args}"
         if [ "$DD_MODE" = "ssh" ]; then
             ssh "${SSH_OPTS[@]}" -J "$CLUSTER_LOGIN" "${DEV_USER}@${DD_NODE}" "$nodecmd"
         else
@@ -442,7 +442,7 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     else
         inner="srun --jobid=${DD_JOBID} --overlap ${DEV_SRUN_OPTS} bash -lc $(printf %q "$nodecmd")"
     fi
-    log "[${DD_MODE} detached] container exec on job ${DD_JOBID}: $*"
+    log "[${DD_MODE} detached] container exec on job ${DD_JOBID}: ${args}"
     log "Log on login node: ${logfile}   (follow with: $(basename "${BASH_SOURCE[0]}") tail)"
     ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
         "nohup setsid bash -c $(printf %q "$inner") > ${logfile} 2>&1 < /dev/null & disown; sleep 0.3; echo \"[cluster_dev] login-side wrapper pid=\$(pgrep -nf 'nohup setsid bash' || echo ?)\""

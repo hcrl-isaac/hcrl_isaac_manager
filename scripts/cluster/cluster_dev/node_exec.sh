@@ -67,8 +67,8 @@ mkdir -p \
     "${STAGE}/docker-isaac-sim/logs" \
     "${STAGE}/docker-isaac-sim/data" \
     "${STAGE}/docker-isaac-sim/documents"
-# one argument is a shell command string, several are an argv passed through verbatim
-if [ $# -eq 1 ]; then cmd="$1"; elif [ $# -gt 1 ]; then cmd="$(printf '%q ' "$@")"; else cmd=""; fi
+# one argument is a shell command string (run whole by bash -c), several are an argv passed through verbatim
+if [ $# -eq 1 ]; then cmd="bash -c $(printf %q "$1")"; elif [ $# -gt 1 ]; then cmd="$(printf '%q ' "$@")"; else cmd=""; fi
 [ -n "$cmd" ] || cmd="/isaac-sim/python.sh --version"
 # Bind all workspace repos into /workspace/ext -- packages AND asset repos (e.g. hcrl_robots), since the
 # in-repo resource symlinks need the asset repos mounted. The entrypoint PYTHONPATHs only the packages.

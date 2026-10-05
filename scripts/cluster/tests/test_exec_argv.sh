@@ -62,8 +62,11 @@ node bash -lc "ls; echo 'q'" 'a b' > "$T/n/out" 2>&1
 check "node_exec passes several arguments as an argv" \
     "[ \"\$(reparse '$T/n/cmd')\" = \"\$(printf 'ARG<%s>\n' bash -lc \"ls; echo 'q'\" 'a b')\" ]"
 node "python scripts/train.py --task T1-CubeLift-v0" > /dev/null 2>&1
-check "node_exec treats one argument as a command string" \
-    "[ \"\$(reparse '$T/n/cmd')\" = \"\$(printf 'ARG<%s>\n' python scripts/train.py --task T1-CubeLift-v0)\" ]"
+check "node_exec runs one argument as a command string under bash -c" \
+    "[ \"\$(reparse '$T/n/cmd')\" = \"\$(printf 'ARG<%s>\n' bash -c 'python scripts/train.py --task T1-CubeLift-v0')\" ]"
+node "cd x && python a.py; python b.py | tee l" > /dev/null 2>&1
+check "a compound command string stays whole inside the entrypoint" \
+    "[ \"\$(reparse '$T/n/cmd')\" = \"\$(printf 'ARG<%s>\n' bash -c 'cd x && python a.py; python b.py | tee l')\" ]"
 
 if [ "$fails" -ne 0 ]; then
     for f in "$T"/out* "$T/run.log" "$T/n/out"; do echo "--- $f"; cat "$f" 2>/dev/null | tail -12; done
