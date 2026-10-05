@@ -622,12 +622,18 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     ev.add_argument("--holder", required=True, help="your session name")
     ev.add_argument("--note", default="", help="lease note")
     ev.add_argument(
-        "--checkpoint", action="append", help="[NAME=]<W&B run URL | entity/project/run[@iter] | path>, exported as NAME"
+        "--checkpoint",
+        action="append",
+        help="[NAME=]<W&B run URL | entity/project/run[@iter] | path>, exported as NAME",
     )
     ev.add_argument("--env", action="append", help="KEY=VALUE for the script (repeatable)")
     ev.add_argument("--wt", default="", help="run this machine's worktree set (resources/<repo>/worktrees/<name>)")
-    ev.add_argument("--timeout", type=_duration, default=0.0, help="kill the run after this long, e.g. 2h (default: none)")
-    ev.add_argument("--stall", type=_duration, default=900.0, help="kill the run after this long with no output (15m; 0 = off)")
+    ev.add_argument(
+        "--timeout", type=_duration, default=0.0, help="kill the run after this long, e.g. 2h (default: none)"
+    )
+    ev.add_argument(
+        "--stall", type=_duration, default=900.0, help="kill the run after this long with no output (15m; 0 = off)"
+    )
 
 
 def split_script_args(argv: list[str]) -> tuple[list[str], list[str]]:

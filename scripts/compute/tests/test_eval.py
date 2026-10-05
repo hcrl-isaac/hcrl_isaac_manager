@@ -321,7 +321,9 @@ class EvalRunTest(Isolated):
         return int(next(line.split()[1] for line in out.splitlines() if line.startswith("PID ")))
 
     def test_success_passes_args_env_and_checkpoint_then_cleans_up(self) -> None:
-        rc, out = self._eval("--any", "--checkpoint", f"CKPT_A={self.ckpt}", "--env", "MODE=ok", "--", "--n", "a b", "*")
+        rc, out = self._eval(
+            "--any", "--checkpoint", f"CKPT_A={self.ckpt}", "--env", "MODE=ok", "--", "--n", "a b", "*"
+        )
         self.assertEqual(rc, 0, out)
         self.assertIn("ARGV ['--n', 'a b', '*']", out)
         self.assertIn("CKPT_A_CONTENT weights", out)
