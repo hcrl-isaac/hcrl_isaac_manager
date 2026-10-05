@@ -119,7 +119,14 @@ shift
 
 # Every job-submitting subcommand belongs in this list: it re-renders the job configs and syncs resources.
 case "$command" in
-    job|job_distributed|bench) prepare_submit; sync_resources ;;
+    job|job_distributed|bench)
+        prepare_submit; sync_resources
+        # every dir the job leaves to W&B artifacts must have one, or the job would only fail on the cluster
+        venv_py="$( cd "$SCRIPT_DIR/../.." && pwd )/ilab/bin/python"
+        [ -x "$venv_py" ] || venv_py="python3"
+        ( mgr="$( cd "$SCRIPT_DIR/../.." && pwd )"; set -a; [ -f "$mgr/scripts/.env.wandb" ] && . "$mgr/scripts/.env.wandb"
+          set +a; "$venv_py" "$SCRIPT_DIR/preflight.py" ) || exit 1
+        ;;
 esac
 
 case $command in
@@ -148,9 +155,9 @@ case $command in
         docker push esturman/isaac-ray:latest
         ;;
     job)
-        job_args="$@"
+        job_args=("$@")
         echo "[INFO] Executing job command"
-        [ -n "$job_args" ] && echo -e "\tJob arguments: $job_args"
+        [ ${#job_args[@]} -gt 0 ] && echo -e "\tJob arguments: ${job_args[*]}"
         job_config=$SCRIPT_DIR/job_config.yaml
         echo "[INFO] Executing job script..."
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
@@ -158,13 +165,13 @@ case $command in
             --job_config $job_config \
             --aggregate_jobs ray/wrap_resources.py \
                 --gpu_per_worker 1 \
-                $job_args
+                "${job_args[@]}"
         ;;
     job_distributed)
         # One Ray submission spawning a sub-job per GPU node (torchrun_wrapper.py -> train.py --distributed).
-        job_args="$@"
+        job_args=("$@")
         echo "[INFO] Executing distributed job command"
-        [ -n "$job_args" ] && echo -e "\tJob arguments: $job_args"
+        [ ${#job_args[@]} -gt 0 ] && echo -e "\tJob arguments: ${job_args[*]}"
         job_config=$SCRIPT_DIR/job_config_distributed.yaml
         echo "[INFO] Executing distributed job script..."
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
@@ -172,12 +179,12 @@ case $command in
             --job_config $job_config \
             --aggregate_jobs ray/wrap_resources.py \
                 --gpu_per_worker 1 \
-                $job_args
+                "${job_args[@]}"
         ;;
     bench)
-        job_args="$@"
+        job_args=("$@")
         echo "[INFO] Executing bench command"
-        [ -n "$job_args" ] && echo -e "\tBench arguments: $job_args"
+        [ ${#job_args[@]} -gt 0 ] && echo -e "\tBench arguments: ${job_args[*]}"
         job_config=$SCRIPT_DIR/bench_job_config.yaml
         echo "[INFO] Executing bench script..."
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
@@ -185,7 +192,7 @@ case $command in
             --job_config $job_config \
             --aggregate_jobs ray/wrap_resources.py \
                 --gpu_per_worker 1 \
-                $job_args
+                "${job_args[@]}"
         ;;
     stop)
         job_id=$1
