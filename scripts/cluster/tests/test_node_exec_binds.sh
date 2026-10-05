@@ -8,7 +8,7 @@ trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/scripts/cluster/cluster_dev" "$T/shared/resources/hcrl_isaaclab" "$T/shared/resources/hcrl_robots" \
     "$T/sif" "$T/cache/docker-isaac-sim" "$T/tmp"
 cp "$REPO/scripts/cluster/cluster_dev/node_exec.sh" "$T/scripts/cluster/cluster_dev/"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@"\nls "%s/shared/trees/t-0123456789/.in-use" 2>/dev/null | sed "s/^/marker /"\necho "envkey $APPTAINERENV_WANDB_API_KEY"\n' "$T" > "$T/bin/apptainer"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@"\nls "%s/shared/trees/t-0123456789/.in-use" 2>/dev/null | sed "s/^/marker /"\necho "envkey $APPTAINERENV_WANDB_API_KEY"\necho "xdg ${APPTAINERENV_XDG_CONFIG_DIRS:-none}"\n' "$T" > "$T/bin/apptainer"
 chmod +x "$T/bin/apptainer"
 touch "$T/sif/hcrl-isaac.sif"
 cat > "$T/env" <<EOF
@@ -32,6 +32,13 @@ check "its logs go to the shared logs dir" "$T/shared/resources/hcrl_isaaclab/lo
 check "its outputs are writable node-locally" "$T/tmp/cluster_dev_7/tree-rw/t-0123456789/hcrl_isaaclab/outputs:/workspace/ext/hcrl_isaaclab/outputs:rw"
 check "its wandb dir is writable node-locally" "$T/tmp/cluster_dev_7/tree-rw/t-0123456789/hcrl_isaaclab/wandb:/workspace/ext/hcrl_isaaclab/wandb:rw"
 check "the W&B key reaches the container through its environment" "envkey sekret-key"
+check "without an installed clamp layer nothing changes" "xdg none"
+mkdir -p "$T/sif/vkclamp" && touch "$T/sif/vkclamp/libvkclamp.so"
+NODE_EXEC_RESOURCES="$TREE/resources" run > "$T/out" 2>&1
+check "an installed clamp layer is bound read-only" "$T/sif/vkclamp:/opt/vkclamp:ro"
+check "and its conf dir leads XDG_CONFIG_DIRS" "xdg /opt/vkclamp/conf:/etc/xdg"
+rm -rf "$T/sif/vkclamp"
+NODE_EXEC_RESOURCES="$TREE/resources" run > "$T/out" 2>&1
 if grep -v '^envkey ' "$T/out" | grep -q sekret-key; then
     echo "FAIL the W&B key is not on apptainer's command line"; fails=$((fails + 1))
 else
