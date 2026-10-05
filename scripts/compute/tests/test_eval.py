@@ -7,6 +7,7 @@ import contextlib
 import io
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,10 @@ if mode == "traceback":
     print("Traceback (most recent call last):")
 if mode == "hang":
     time.sleep(120)
+if mode == "chatty":
+    while True:
+        print("tick", flush=True)
+        time.sleep(0.1)
 """
 
 SSH_STUB = """#!/usr/bin/env bash
@@ -90,6 +95,7 @@ class Isolated(unittest.TestCase):
     def tearDown(self) -> None:
         for p in self.patches:
             p.stop()
+        subprocess.run(["chmod", "-R", "u+w", str(self.tmp)], check=False)  # snapshots are read-only
         shutil.rmtree(self.tmp)
 
 
@@ -257,6 +263,51 @@ class SshStageTest(Isolated):
         self.assertEqual(list((self.tmp / "scratch" / "res-eval" / "code").glob("*.partial.*")), [])
         self.assertEqual(len({s.dir for s in stages}), 3)
 
+    def test_a_mode_change_on_a_changed_file_is_a_new_fingerprint(self) -> None:
+        (self.src / "new.py").write_text("z = 1\n")
+        before = ev.code_fingerprint(str(self.src))[0]
+        (self.src / "new.py").chmod(0o755)
+        self.assertNotEqual(ev.code_fingerprint(str(self.src))[0], before)
+
+    def test_a_staged_rename_counts_once(self) -> None:
+        subprocess.run(["git", "-C", str(self.src), "mv", "mod.py", "renamed.py"], check=True)
+        self.assertTrue(ev.code_fingerprint(str(self.src))[1].endswith("dirty=1"))
+
+    def test_snapshots_are_read_only(self) -> None:
+        stage = self._stage()
+        snap = Path(os.path.realpath(f"{stage.dir}/resources/robot_rl"))
+        self.assertFalse(os.access(snap / "mod.py", os.W_OK))
+        self.assertFalse(os.access(snap, os.W_OK))
+
+    def test_an_interrupted_upload_leaves_no_partial(self) -> None:
+        stage = ev.Stage(self.t)
+        stage.make()
+        real = subprocess.run
+
+        def interrupt_rsync(cmd: list, **kw: object) -> subprocess.CompletedProcess:
+            if cmd[:1] == ["rsync"]:
+                raise KeyboardInterrupt
+            return real(cmd, **kw)
+
+        with mock.patch.object(ev.subprocess, "run", side_effect=interrupt_rsync), self.assertRaises(KeyboardInterrupt):
+            with contextlib.redirect_stderr(io.StringIO()):
+                stage.sync_code({"robot_rl": str(self.src)})
+        self.assertEqual(list((self.tmp / "scratch" / "res-eval" / "code").glob("*.partial.*")), [])
+
+    def test_the_env_file_is_never_readable_by_others(self) -> None:
+        stage = self._stage()
+        modes = []
+        real_put = ev.Stage.put
+
+        def spy(self_: ev.Stage, src: str, rel: str, mode: int = 0o600) -> str:
+            modes.append(os.stat(src).st_mode & 0o777)
+            return real_put(self_, src, rel, mode)
+
+        with mock.patch.object(ev.Stage, "put", spy):
+            dest = stage.write("WANDB_API_KEY=x\n", "env")
+        self.assertEqual(modes, [0o600])
+        self.assertEqual(os.stat(dest).st_mode & 0o777, 0o600)
+
     def test_staging_never_deletes(self) -> None:
         with mock.patch.object(ev.subprocess, "run", wraps=subprocess.run) as run:
             stage = self._stage()
@@ -355,6 +406,58 @@ class EvalRunTest(Isolated):
         self.assertFalse(_alive(self._pid(out)))
         self.assertEqual(self._leases(), [])
 
+    def test_a_timeout_fires_on_a_script_that_prints_often(self) -> None:
+        start = time.monotonic()
+        rc, out = self._eval("--any", "--env", "MODE=chatty", "--timeout", "3s", "--stall", "0")
+        self.assertEqual(rc, ev.TIMED_OUT, out[-300:])
+        self.assertLess(time.monotonic() - start, 20)
+        self.assertFalse(_alive(self._pid(out)))
+
+    def test_sigterm_to_res_eval_kills_the_run_and_releases(self) -> None:
+        timer = threading.Timer(3, os.kill, (os.getpid(), signal.SIGTERM))
+        timer.start()
+        try:
+            rc, out = self._eval("--any", "--env", "MODE=hang")
+        finally:
+            timer.cancel()
+        self.assertEqual(rc, 130, out)
+        self.assertIn("interrupted (SIGTERM)", out)
+        self.assertFalse(_alive(self._pid(out)))
+        self.assertEqual(self._leases(), [])
+        self.assertIs(signal.getsignal(signal.SIGTERM), signal.SIG_DFL)
+
+    def test_any_exception_after_the_start_kills_the_run(self) -> None:
+        pids = []
+
+        def broken(stage: ev.Stage, argv: list, timeout: float, stall: float) -> int:
+            proc = stage.start(argv)
+            pids.append(int(next(x for x in proc.stdout if x.startswith("PID ")).split()[1]))
+            raise BrokenPipeError
+
+        with mock.patch.object(ev, "run", side_effect=broken), self.assertRaises(BrokenPipeError):
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                parser = argparse.ArgumentParser()
+                ev.add_parser(parser.add_subparsers(dest="cmd"))
+                args = parser.parse_args(["eval", str(self.script), "--holder", "me", "--any"])
+                args.script_args = []
+                with mock.patch.dict(os.environ, {"MODE": "hang"}):
+                    ev.cmd_eval(args, [self.pool], self._claim)
+        self.assertFalse(_alive(pids[0]))
+        self.assertEqual(self._leases(), [])
+
+    def test_a_run_that_survives_the_kill_keeps_its_lease(self) -> None:
+        def stuck(stage: ev.Stage, argv: list, timeout: float, stall: float) -> int:
+            stage.start(argv)
+            raise KeyboardInterrupt
+
+        with mock.patch.object(ev, "run", side_effect=stuck), mock.patch.object(ev.Stage, "kill", return_value=False):
+            rc, out = self._eval("--any", "--env", "MODE=hang")
+        self.assertIn("KEPT lease", out)
+        self.assertEqual(len(self._leases()), 1)
+        [stage] = self._stages()
+        with contextlib.suppress(ProcessLookupError):  # the kill this test stubbed out
+            os.killpg(int((stage / "pid").read_text()), signal.SIGKILL)
+
     def test_a_stall_kills_the_run(self) -> None:
         rc, out = self._eval("--any", "--env", "MODE=hang", "--stall", "2s")
         self.assertEqual(rc, ev.TIMED_OUT, out)
@@ -373,7 +476,8 @@ class EvalRunTest(Isolated):
             rc, out = self._eval("--any", "--env", "MODE=hang")
         self.assertIs(ev.run, real_run)
         self.assertEqual(rc, 130, out)
-        self.assertIn("interrupted; killed the run (gone)", out)
+        self.assertIn("interrupted", out)
+        self.assertIn("stopped the run (gone)", out)
         self.assertEqual(self._leases(), [])
 
     def test_an_error_while_staging_still_releases(self) -> None:

@@ -80,10 +80,16 @@ def _cli_args(core: str) -> types.ModuleType:
 
 
 def download(core: str, cache: str, run_path: str, model: str) -> str:
-    """Download one W&B checkpoint to ``<cache>/<entity>/<project>/<run_id>/<model>`` and return its path.
+    """Download one W&B checkpoint into the cache, or reuse the cached copy.
 
-    The file is downloaded into a private directory and renamed into place, so a path in the cache is always
-    complete and concurrent callers never read a partial file.
+    Args:
+        core: The hcrl_isaaclab checkout whose scripts/cli_args.py does the download.
+        cache: Cache root.
+        run_path: ``entity/project/run_id``.
+        model: ``model_<it>.pt``, or "" for the run's latest.
+
+    Returns:
+        ``<cache>/<entity>/<project>/<run_id>/<model>``, which is only ever a complete file.
     """
     import shutil
     import uuid

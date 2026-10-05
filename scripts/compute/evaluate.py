@@ -200,18 +200,39 @@ def code_files(src: str) -> list[bytes]:
     return [f for f in files if f and os.path.lexists(os.path.join(src, f.decode()))]
 
 
+def _changed_paths(status: bytes) -> list[bytes]:
+    """Paths in ``git status --porcelain=v1 -z`` output; a rename or copy counts once (its source entry is skipped)."""
+    entries, paths, skip = status.split(b"\0"), [], False
+    for entry in entries:
+        if skip:
+            skip = False
+            continue
+        if len(entry) > 3:
+            paths.append(entry[3:])
+            skip = entry[:1] in (b"R", b"C")
+    return paths
+
+
 def code_fingerprint(src: str) -> tuple[str, str]:
-    """Content fingerprint of a checkout, and its commit and dirty count for the stage MANIFEST."""
+    """Content fingerprint of a checkout, and its commit and dirty count for the stage MANIFEST.
+
+    Args:
+        src: A git checkout or worktree.
+
+    Returns:
+        The fingerprint (HEAD tree, status, and the content, mode or link target of every changed path) and a
+        ``<commit> dirty=<n>`` description.
+    """
     tree = _git(src, "rev-parse", "HEAD^{tree}").strip()
     status = _git(src, "status", "--porcelain=v1", "-z", "--untracked-files=all")
     h = hashlib.sha256(tree + b"\0" + status)
-    changed = [e[3:] for e in status.split(b"\0") if len(e) > 3]
+    changed = _changed_paths(status)
     for rel in sorted(changed):
         path = os.path.join(src, rel.decode())
         if os.path.islink(path):
             h.update(os.readlink(path).encode())
         elif os.path.isfile(path):
-            h.update(Path(path).read_bytes())
+            h.update(oct(os.stat(path).st_mode).encode() + Path(path).read_bytes())
     commit = _git(src, "rev-parse", "--short", "HEAD").decode().strip()
     return h.hexdigest()[:12], f"{commit} dirty={len(changed)}"
 
@@ -225,7 +246,18 @@ def _describe(src: str) -> str:
 
 
 def runner_script(t: Target, stage: str, script: str, env_names: list[str], pythonpath: list[str]) -> str:
-    """The bash that runs on the target: a stage log, isolated caches, the given PYTHONPATH, the script's status."""
+    """The bash that runs on the target: a stage log, isolated caches, the given PYTHONPATH, the script's status.
+
+    Args:
+        t: The target.
+        stage: The stage dir on the target.
+        script: The local script (run under its basename in the stage).
+        env_names: Names of the exported variables, for the log.
+        pythonpath: PYTHONPATH entries on the target.
+
+    Returns:
+        The run.sh text.
+    """
     q = shlex.quote
     cache = f"{t.scratch}/res-eval/cache/{t.host}-gpu{t.gpu}"  # one lease per card, so per-card caches never race
     pin = (
@@ -241,7 +273,7 @@ set -a; source {q(stage + "/env")}; set +a
 {pin}
 export TMPDIR={q(stage + "/tmp")} XDG_CACHE_HOME={q(cache + "/xdg")} OMNI_CACHE_DIR={q(cache + "/omni")}
 export HCRL_ARTIFACT_ROOT={q(t.scratch + "/res-eval/artifacts")}
-export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y PYTHONUNBUFFERED=1
+export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y PYTHONUNBUFFERED=1 PYTHONPYCACHEPREFIX="$TMPDIR/pycache"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR" "$HCRL_ARTIFACT_ROOT"
 gomp="$(ls ilab/lib/python3.11/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)"
 [ -n "$gomp" ] && export LD_PRELOAD="$gomp${{LD_PRELOAD:+:$LD_PRELOAD}}"
@@ -259,6 +291,7 @@ class Stage:
         self.t = t
         self.dir = f"{t.scratch}/res-eval/{uuid.uuid4().hex[:8]}"
         self.proc: subprocess.Popen | None = None
+        self.dead = False
 
     def _ssh(self, cmd: str, **kw: object) -> subprocess.CompletedProcess:
         return subprocess.run(["ssh", *SSH_OPTS, self.t.ssh, cmd], **kw)
@@ -276,7 +309,16 @@ class Stage:
             sys.exit(f"[res] cannot create {self.dir} on {self.t.host}")
 
     def put(self, src: str, rel: str, mode: int = 0o600) -> str:
-        """Copy a local file (symlinks resolved) to ``<stage>/<rel>`` and check that it landed whole."""
+        """Copy a local file (symlinks resolved) to ``<stage>/<rel>`` and check that it landed whole.
+
+        Args:
+            src: Local file.
+            rel: Destination relative to the stage dir.
+            mode: File mode on the target.
+
+        Returns:
+            The destination path on the target.
+        """
         dest = f"{self.dir}/{rel}"
         real = os.path.realpath(src)
         if self.t.kind == "local":
@@ -294,10 +336,20 @@ class Stage:
         return dest
 
     def write(self, text: str, rel: str, mode: int = 0o600) -> str:
-        """Write ``text`` to ``<stage>/<rel>``."""
+        """Write ``text`` to ``<stage>/<rel>`` through a local file that is 0600 from creation.
+
+        Args:
+            text: File content.
+            rel: Destination relative to the stage dir.
+            mode: File mode on the target.
+
+        Returns:
+            The destination path on the target.
+        """
         tmp = CKPT_CACHE.parent / f"stage-{uuid.uuid4().hex}"
         tmp.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(text)
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+            f.write(text)
         try:
             return self.put(str(tmp), rel, mode=mode)
         finally:
@@ -315,10 +367,7 @@ class Stage:
         return self.put(src, f"ckpt/{name}/{os.path.basename(src)}")
 
     def snapshot(self, repo: str, src: str) -> tuple[str, str]:
-        """Bring one package repo to an ssh target as ``<scratch>/res-eval/code/<repo>-<fingerprint>``.
-
-        A snapshot is written under a ``.partial`` name, renamed into place and not written again, so a changed or
-        deleted file makes a new snapshot and concurrent runs share only complete ones.
+        """Bring one package repo to an ssh target as a read-only ``<scratch>/res-eval/code/<repo>-<fingerprint>``.
 
         Args:
             repo: Repo name.
@@ -340,13 +389,19 @@ class Stage:
         ).stdout.strip()
         links = [f"--link-dest={os.path.dirname(prev)}/"] if prev else []
         print(f"[res] uploading {repo} ({desc}) -> {self.t.host}:{snap}", file=sys.stderr)
-        self._ssh(f"mkdir -p {q(part)}")
-        ssh = "ssh " + " ".join(q(o) for o in SSH_OPTS)
-        cmd = ["rsync", "-rlp", "--checksum", "-s", "--from0", "--files-from=-", *links, "-e", ssh, f"{src}/"]
-        if subprocess.run([*cmd, f"{self.t.ssh}:{part}/"], input=b"\0".join(code_files(src))).returncode != 0:
-            self._ssh(f"rm -rf {q(part)}")
-            sys.exit(f"[res] could not upload {repo} to {self.t.host}")
-        self._ssh(f"touch {q(part)}/.complete && {{ mv -T {q(part)} {q(snap)} 2>/dev/null || rm -rf {q(part)}; }}")
+        drop = f"chmod -R u+w {q(part)} 2>/dev/null; rm -rf {q(part)}"
+        try:
+            self._ssh(f"mkdir -p {q(part)}")
+            ssh = "ssh " + " ".join(q(o) for o in SSH_OPTS)
+            cmd = ["rsync", "-rlp", "--checksum", "-s", "--from0", "--files-from=-", *links, "-e", ssh, f"{src}/"]
+            if subprocess.run([*cmd, f"{self.t.ssh}:{part}/"], input=b"\0".join(code_files(src))).returncode != 0:
+                sys.exit(f"[res] could not upload {repo} to {self.t.host}")
+            finish = f"touch {q(part)}/.complete && chmod -R a-w {q(part)} && mv -T {q(part)} {q(snap)} 2>/dev/null"
+            if self._ssh(finish).returncode == 0:
+                part = ""
+        finally:
+            if part:  # failed, interrupted, or another stage finished the same snapshot first
+                self._ssh(drop)
         if self._ssh(f"[ -f {q(snap)}/.complete ]").returncode != 0:
             sys.exit(f"[res] could not finish the {repo} snapshot on {self.t.host}")
         return snap, line
@@ -380,7 +435,14 @@ class Stage:
         return [f"{res}/{repo}" for repo in code], lines
 
     def start(self, argv: list[str]) -> subprocess.Popen:
-        """Start the runner in its own process group (pid in ``<stage>/pid``), stdout and stderr merged."""
+        """Start the runner in its own process group (pid in ``<stage>/pid``), stdout and stderr merged.
+
+        Args:
+            argv: The script's arguments.
+
+        Returns:
+            The local process streaming the run (the runner itself, or its ssh).
+        """
         q = shlex.quote
         if self.t.kind == "local":
             self.proc = subprocess.Popen(
@@ -407,17 +469,18 @@ class Stage:
     def kill(self) -> bool:
         """Kill the runner's process group on the target (TERM, then KILL) and report whether it is gone."""
         if self.t.kind == "local" and self.proc is not None:
-            return _kill_local_group(self.proc)
+            self.dead = _kill_local_group(self.proc)
+            return self.dead
         q = shlex.quote
         script = (
             f"p=$(cat {q(self.dir)}/pid 2>/dev/null) || exit 0; kill -TERM -- -$p 2>/dev/null; "
             "for _ in $(seq 20); do kill -0 -- -$p 2>/dev/null || exit 0; sleep 0.5; done; "
             "kill -KILL -- -$p 2>/dev/null; sleep 1; ! kill -0 -- -$p 2>/dev/null"
         )
-        gone = self.sh(script) == 0
+        self.dead = self.sh(script) == 0
         if self.proc is not None and self.proc.poll() is None:
             self.proc.kill()
-        return gone
+        return self.dead
 
     def remove(self, keep_log: bool) -> None:
         """Delete the stage dir; a failed run keeps only its log, MANIFEST and run.sh."""
@@ -472,22 +535,24 @@ def run(stage: Stage, argv: list[str], timeout: float, stall: float) -> int:
         try:
             line = lines.get(timeout=0.5)
         except queue.Empty:
-            now = time.monotonic()
-            why = "timed out" if timeout and now - start > timeout else ""
-            why = why or ("stalled (no output)" if stall and now - last > stall else "")
-            if why:
-                gone = stage.kill()
-                state = "gone" if gone else "STILL RUNNING, check the card"
-                print(f"[res] {why}; killed the run ({state})", file=sys.stderr)
-                return TIMED_OUT
-            continue
+            line = ""
         if line is None:
             break
-        last = time.monotonic()
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        saw_traceback |= TRACEBACK in line
+        now = time.monotonic()
+        if line:
+            last = now
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            saw_traceback |= TRACEBACK in line
+        why = "timed out" if timeout and now - start > timeout else ""
+        why = why or ("stalled (no output)" if stall and now - last > stall else "")
+        if why:
+            gone = stage.kill()
+            state = "gone" if gone else "STILL RUNNING, check the card"
+            print(f"[res] {why}; killed the run ({state})", file=sys.stderr)
+            return TIMED_OUT
     rc = proc.wait()
+    stage.dead = stage.t.kind == "local" or rc != 255  # ssh exits 255 when the connection, not the run, ended
     if rc == 0 and saw_traceback:
         print("[res] the script exited 0 but printed a Python traceback; reporting failure", file=sys.stderr)
         return 1
@@ -495,7 +560,16 @@ def run(stage: Stage, argv: list[str], timeout: float, stall: float) -> int:
 
 
 def _lease_card(lease_id: str, holder: str, pools: list[Pool]) -> tuple[Pool, str, int]:
-    """Pool, host and gpu of a lease the caller already holds."""
+    """Pool, host and gpu of a lease the caller already holds.
+
+    Args:
+        lease_id: The lease id.
+        holder: The caller, who must hold it.
+        pools: Configured pools.
+
+    Returns:
+        The lease's pool, host and GPU index; exits when the lease is missing, foreign or on a SLURM job.
+    """
     try:
         with ls.locked_store() as leases:
             found = [x for x in leases if x.id == lease_id]
@@ -532,8 +606,18 @@ def _check_on(spec: str, pools: list[Pool]) -> None:
         sys.exit(f"[res] --on {spec}: not a host of a local or ssh pool; eval does not run on {other} pools yet")
 
 
+def _interrupt(signum: int, _frame: object) -> None:
+    raise KeyboardInterrupt(signal.Signals(signum).name)
+
+
 def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> None:
-    """Run a script on one leased card; release the lease eval took and clean up, whatever happens."""
+    """Run a script on one leased card, then kill what is left of it, clean up and release the lease it took.
+
+    Args:
+        args: The parsed `just res eval` arguments (with ``script_args``).
+        pools: Configured pools.
+        claim: ``res.claim``, which leases the card.
+    """
     script = os.path.abspath(args.script)
     if not os.path.isfile(script):
         sys.exit(f"[res] no script {args.script}")
@@ -566,6 +650,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         host, gpu = card.host, card.index
         print(f"[res] leased {taken.id}: {taken.card} for {args.holder}", file=sys.stderr)
     rc, stage = 1, None
+    handlers = {sig: signal.signal(sig, _interrupt) for sig in (signal.SIGTERM, signal.SIGHUP)}
     try:
         t = make_target(pool, host, gpu)
         stage = Stage(t)
@@ -583,20 +668,29 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             _touch_lease(taken.id)
         print(f"[res] running {os.path.basename(script)} on {t.host}:gpu{t.gpu} (stage {stage.dir})", file=sys.stderr)
         rc = run(stage, args.script_args, args.timeout, args.stall)
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as exc:
         rc = 130
-        if stage is not None and stage.proc is not None:
-            gone = stage.kill()
-            print(f"[res] interrupted; killed the run ({'gone' if gone else 'STILL RUNNING'})", file=sys.stderr)
+        print(f"[res] interrupted ({exc or 'SIGINT'})", file=sys.stderr)
     finally:
+        for sig, old in handlers.items():
+            signal.signal(sig, old)
+        gone = True
+        if stage is not None and stage.proc is not None and not stage.dead:
+            gone = stage.kill()
+            print(f"[res] stopped the run ({'gone' if gone else 'STILL RUNNING, check the card'})", file=sys.stderr)
         if stage is not None:
             stage.remove(keep_log=rc != 0)
             if rc != 0:
                 print(f"[res] FAILED with status {rc}; log at {stage.t.host}:{stage.dir}/log", file=sys.stderr)
-        if taken is not None:
+        if taken is not None and gone:
             with ls.locked_store() as leases:
                 leases[:] = [x for x in leases if x.id != taken.id]
             print(f"[res] released {taken.id}", file=sys.stderr)
+        elif taken is not None:
+            print(
+                f"[res] KEPT lease {taken.id}: the run may still hold the card; release it once it is gone",
+                file=sys.stderr,
+            )
     sys.exit(rc)
 
 

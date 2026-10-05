@@ -102,7 +102,8 @@ just res eval probe.py --lease <id> --holder "<session>" --wt my-feature        
   removed). A lease `eval` took is released whatever happens. Old snapshots are not pruned yet.
 - Pool settings: `workspace` (the manager checkout on the target, providing the venv and the asset repos; default
   `/var/local/<user>/hcrl_isaac_manager` on ssh pools, this machine's checkout locally), `scratch` (default
-  `/var/local/<user>`, `~/tmp` locally) and `pin`.
+  `/var/local/<user>`, `~/tmp` locally) and `pin`. Keep `scratch` on local disk, never a quota'd NFS home: snapshots,
+  checkpoints and Kit caches live there.
 
 ## Pools
 
