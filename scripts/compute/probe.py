@@ -285,6 +285,7 @@ def probe_ray(pool: Pool) -> list[Report]:
     if not isinstance(nodes, list) or not isinstance(jobs, list):
         return [Report(pool.name, pool.kind, error="dashboard returned an unexpected format")]
     report = Report(pool.name, pool.kind)
+    by_ip: dict[str, list[Card]] = {}
     for node in nodes:
         if not isinstance(node, dict) or not isinstance(node.get("gpus") or [], list):
             return [Report(pool.name, pool.kind, error="dashboard returned an unexpected node entry")]
@@ -295,13 +296,22 @@ def probe_ray(pool: Pool) -> list[Report]:
             report.partial = True
             continue
         try:
-            report.cards.extend(ray_card(g, pool.name, host) for g in node.get("gpus") or [])
+            cards = [ray_card(g, pool.name, host) for g in node.get("gpus") or []]
         except ProbeError as exc:
             return [Report(pool.name, pool.kind, error=f"node {host}: {exc}")]
+        report.cards.extend(cards)
+        by_ip.setdefault(str(node.get("ip", "")), []).extend(cards)
     for job in jobs:
         if job.get("status") in ("RUNNING", "PENDING"):
+            job_id = job.get("submission_id") or job.get("job_id")
             ep = short_cmd(job.get("entrypoint", "")) or job.get("entrypoint", "")[:60]
-            report.notes.append(f"job {job.get('submission_id') or job.get('job_id')} {job['status']}: {ep}")
+            report.notes.append(f"job {job_id} {job['status']}: {ep}")
+        if job.get("status") == "RUNNING":
+            # the dashboard's GPU readings lag a starting job, so a card can read idle under a running one
+            ip = str((job.get("driver_info") or {}).get("node_ip_address", ""))
+            for card in by_ip.get(ip, []):
+                if card.state == "free":
+                    card.state, card.note = "busy", f"Ray job {job_id} runs on this node"
     return [report]
 
 
