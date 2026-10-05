@@ -15,6 +15,8 @@ import sys
 MANAGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 RESOURCES = os.path.join(MANAGER_DIR, "resources")
 SKIP_DIRS = {".git", "worktrees", "logs", "outputs", "wandb", "__pycache__", ".claude"}
+# the excludes every job template must carry for artifact_only_dirs() to describe what the job leaves out
+ARTIFACT_EXCLUDES = ("**/policies/*/*/*", "**/style_data/**")
 
 sys.path.insert(0, os.path.join(MANAGER_DIR, "scripts"))
 

@@ -54,6 +54,18 @@ class WorkspaceReposTest(unittest.TestCase):
         self.assertIn("umrl_tasks", workspace_repos(str(self.resources)))
 
 
+class TemplateExcludesTest(unittest.TestCase):
+    def test_every_job_template_excludes_what_preflight_checks(self) -> None:
+        tools = Path(__file__).resolve().parents[1] / "tools"
+        templates = sorted(tools.glob("*job_config*.template.yaml"))
+        self.assertGreaterEqual(len(templates), 3)
+        for path in templates:
+            excludes = {line.strip()[3:-1] for line in path.read_text().splitlines() if line.startswith('  - "')}
+            with self.subTest(template=path.name):
+                self.assertTrue(set(preflight.ARTIFACT_EXCLUDES) <= excludes, sorted(excludes))
+                self.assertFalse(any("bfmzero" in e for e in excludes))
+
+
 class PreflightTest(unittest.TestCase):
     def setUp(self) -> None:
         self.dir = tempfile.TemporaryDirectory()

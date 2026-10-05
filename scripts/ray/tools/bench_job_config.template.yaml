@@ -22,5 +22,5 @@ init_commands: []
   - "**/.venv/**"
   - "nohup.out"
   - "**/style_data/**"
-  # exported BFM-Zero policies
-  - "**/policies/**/bfmzero_*/**"
+  # exported policies (policies/<task>/<robot>/<name>), fetched as W&B artifacts by rel_path
+  - "**/policies/*/*/*"
