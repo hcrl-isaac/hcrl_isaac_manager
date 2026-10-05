@@ -91,7 +91,9 @@ just res eval probe.py --lease <id> --holder "<session>" --wt my-feature        
 - The interpreter is the target workspace's `ilab` python, with a per-run `TMPDIR`, per-card `XDG_CACHE_HOME` /
   `OMNI_CACHE_DIR` and `HCRL_ARTIFACT_ROOT` under `<scratch>/res-eval/`. The card: pools with `pin = "cvd"`
   (default) mask `CUDA_VISIBLE_DEVICES` to it; `pin = "device"` (the A40 pool, where Kit has refused masked GPUs)
-  leaves it unmasked. Either way `RES_EVAL_DEVICE` names the card the script should use (`cuda:0` when masked).
+  leaves it unmasked. Either way `RES_EVAL_DEVICE` names the card the script should use (`cuda:0` when masked). A script that
+  hardcodes `cuda:0` on a `device` pool silently runs on a card it does not hold, so read `RES_EVAL_DEVICE` (or pick
+  a `cvd` pool).
 - `--env KEY=VALUE` (repeatable) and the W&B credentials from `scripts/.env.wandb` reach the script through a 0600 env
   file, never the command line.
 - The run starts in its own process group. `--timeout` (default none) and `--stall` (no output for 15 min; `0` turns

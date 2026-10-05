@@ -26,7 +26,7 @@ printf '#!/usr/bin/env bash\necho 4242\n' > "$T/bin/sbatch"
 printf '#!/usr/bin/env bash\necho PENDING\n' > "$T/bin/squeue"
 chmod +x "$T/bin/"*
 echo code > "$T/local/resources/hcrl_isaaclab/a.py"
-printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\n' "$T/remote" > "$T/scripts/cluster/config/zz/.env.cluster"
+printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nCLUSTER_MIN_FREE_GB=0\n' "$T/remote" > "$T/scripts/cluster/config/zz/.env.cluster"
 printf '#!/usr/bin/env bash\n#SBATCH -p test\n' > "$T/scripts/cluster/config/zz/submit_job_slurm.sh"
 dev() { PATH="$T/bin:$PATH" HOME="$T" CLUSTER=zz LOCAL_ISAACLAB_DIR="$T/local" POLL_SECONDS=3600 \
     bash "$T/scripts/cluster/cluster_dev/cluster_dev.sh" "$@"; }

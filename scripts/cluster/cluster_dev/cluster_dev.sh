@@ -344,6 +344,32 @@ cmd_status() {
     [ -f "$WATCH_LOG" ] && { echo "  recent watch log:"; tail -3 "$WATCH_LOG" | sed 's/^/    /'; }
 }
 
+# Free GB on the filesystem holding a remote dir: the smaller of df and, where `quota -s` prints a table row
+# (Delta's format: | path | used | soft quota | ...) for a prefix of the dir, the quota headroom.
+remote_free_gb() {  # remote_free_gb DIR -> integer GB, or nothing if it cannot be read
+    on_login "d=$(printf %q "$1"); mkdir -p \"\$d\" 2>/dev/null; r=\$(readlink -f \"\$d\");
+        df_gb=\$(df -Pk \"\$r\" 2>/dev/null | awk 'NR==2 {printf \"%d\", \$4 / 1048576}');
+        q_gb=\$(quota -s 2>/dev/null | awk -F'|' -v d=\"\$r\" '
+            function gb(x,  n, u) { gsub(/ /, \"\", x); n = x + 0; u = substr(x, length(x));
+                return u == \"T\" ? n * 1024 : u == \"G\" ? n : u == \"M\" ? n / 1024 : n / 1048576 }
+            NF > 4 { p = \$2; gsub(/ /, \"\", p); if (p != \"\" && index(d \"/\", p \"/\") == 1)
+                printf \"%d\\n\", gb(\$4) - gb(\$3) }' | sort -n | head -1);
+        echo \$(printf '%s\\n' \$df_gb \$q_gb | sort -n | head -1)" 2>/dev/null
+}
+
+# Refuse to start when a remote dir has less than CLUSTER_MIN_FREE_GB free: a full quota fails every checkpoint
+# write while the run keeps going (python.sh still exits 0).
+check_space() {  # check_space DIR WHAT
+    local free min="${CLUSTER_MIN_FREE_GB:-10}"
+    free="$(remote_free_gb "$1")"
+    if [ -z "$free" ]; then
+        log "WARNING: could not read the free space of $1; not checking"
+    elif [ "$free" -lt "$min" ]; then
+        err "only ${free} GB free for $2 at $1 (CLUSTER_MIN_FREE_GB=${min}); free space or pass --no-space-check"
+        exit 1
+    fi
+}
+
 # Ensures job RUNNING + master up; sets DD_JOBID, DD_NODE, DD_MODE (ssh|srun).
 require_running() {
     # DEV_JOBID overrides the tracked state file: target any RUNNING job of this user (e.g. a
@@ -406,10 +432,11 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     # redirected to a log file on the login node (default: $HOME/cluster_dev_run_<ts>.log).
     # Follow it with `cluster_dev.sh tail`. The latest --detach log path is recorded in
     # ~/.cluster_dev/state (LAST_RUN_LOG) so `tail` finds it without args.
-    local detach="" logfile="" tree=""
+    local detach="" logfile="" tree="" space_check=1
     while [ $# -gt 0 ]; do
         case "${1:-}" in
             --detach) detach="1"; shift;;
+            --no-space-check) space_check=""; shift;;
             --log) logfile="$2"; shift 2;;
             --tree) [ -n "${2:-}" ] || { err "--tree needs a tree name or <name>-<fingerprint>"; exit 1; }
                     tree="$2"; shift 2;;
@@ -418,6 +445,7 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
         esac
     done
     require_running
+    [ -n "$space_check" ] && check_space "${CLUSTER_LOGS_DIR:-${REMOTE_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs}" "run logs"
     # exec always runs with the current local config, even on a destination that hasn't been synced
     push_env_cluster || { err "could not push ${ENV_FILE} to ${REMOTE_ENV_FILE}"; exit 1; }
     # every hop re-parses the command, so each one gets its own %q layer and the argv arrives intact
@@ -545,6 +573,7 @@ case "${1:-}" in
     stage)    shift; cmd_stage "$@" ;;
     trees)    shift; cmd_trees "$@" ;;
     __resolve_tree) shift; ensure_master; resolve_tree "$@" ;;   # internal (tests)
+    __free_gb) shift; ensure_master >/dev/null; remote_free_gb "$1" ;;   # internal (tests)
     start)    shift; cmd_start "$@" ;;
     open)     shift; cmd_open "$@" ;;
     status)   shift; cmd_status "$@" ;;

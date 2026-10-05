@@ -53,7 +53,7 @@ echo REMOTE_SLOT > "$R/scripts/cluster/.env.cluster"
 # zz-sib shares the destination (written through a variable) and is the only one protecting protected_dir.
 CFG="$T/scripts/cluster/config"
 mkdir -p "$CFG/zz" "$CFG/zz-sib"
-printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\n' "$R" > "$CFG/zz/.env.cluster"
+printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nCLUSTER_MIN_FREE_GB=0\n' "$R" > "$CFG/zz/.env.cluster"
 printf 'BASE=%s\nCLUSTER_ISAACLAB_DIR="${BASE}"\nCLUSTER_LOGIN=fake@host\n' "$R" > "$CFG/zz-sib/.env.cluster"
 echo "resources/hcrl_isaaclab/protected_dir/" > "$CFG/zz-sib/.rsync-exclude"
 printf '#!/usr/bin/env bash\n#SBATCH -p test\n#SBATCH --time=01:00:00\n' > "$CFG/zz/submit_job_slurm.sh"

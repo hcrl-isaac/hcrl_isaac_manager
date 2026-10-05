@@ -74,6 +74,8 @@ if [ $# -eq 1 ]; then cmd="bash -c $(printf %q "$1")"; elif [ $# -gt 1 ]; then c
 # in-repo resource symlinks need the asset repos mounted. The entrypoint PYTHONPATHs only the packages.
 # NODE_EXEC_RESOURCES (set by `exec --tree`) points at a staged tree's resources/ instead of the shared one.
 RESOURCES="${NODE_EXEC_RESOURCES:-${CLUSTER_ISAACLAB_DIR}/resources}"
+# run logs and checkpoints; a profile points CLUSTER_LOGS_DIR off a quota'd home
+LOGS_DIR="${CLUSTER_LOGS_DIR:-${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs}"
 if [ -n "${NODE_EXEC_RESOURCES:-}" ]; then
     # `trees rm` refuses while this marker's step (or job, outside a step) is still in squeue
     if [ -n "${SLURM_JOB_ID:-}" ]; then
@@ -98,7 +100,7 @@ for d in "${RESOURCES}"/*/; do
         EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:rw"
         for rw in logs outputs wandb; do
             if [ "$name/$rw" = hcrl_isaaclab/logs ]; then
-                out="${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs"
+                out="$LOGS_DIR"
             else
                 out="${STAGE}/tree-rw/$(basename "$(dirname "$RESOURCES")")/${name}/${rw}"
             fi
@@ -107,6 +109,10 @@ for d in "${RESOURCES}"/*/; do
         done
     else
         EXT_BINDS="$EXT_BINDS -B $(readlink -f "${d%/}"):/workspace/ext/${name}:rw"
+        if [ "$name" = hcrl_isaaclab ] && [ -n "${CLUSTER_LOGS_DIR:-}" ]; then
+            mkdir -p "$LOGS_DIR"
+            EXT_BINDS="$EXT_BINDS -B ${LOGS_DIR}:/workspace/ext/hcrl_isaaclab/logs:rw"
+        fi
     fi
 done
 [ -d "${RESOURCES}/IsaacLab/source" ] && \

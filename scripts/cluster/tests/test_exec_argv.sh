@@ -28,7 +28,7 @@ EOF
 # the remote node_exec.sh records the argv it was handed
 printf '#!/usr/bin/env bash\nprintf "ARG<%%s>\\n" "$@"\n' > "$T/remote/scripts/cluster/cluster_dev/node_exec.sh"
 chmod +x "$T/bin/"*
-printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\n' "$T/remote" > "$T/scripts/cluster/config/zz/.env.cluster"
+printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nCLUSTER_MIN_FREE_GB=0\n' "$T/remote" > "$T/scripts/cluster/config/zz/.env.cluster"
 printf '#!/usr/bin/env bash\n#SBATCH -p test\n' > "$T/scripts/cluster/config/zz/submit_job_slurm.sh"
 dev() { PATH="$T/bin:$PATH" HOME="$T" USER=me CLUSTER=zz DEV_JOBID=900 bash "$T/scripts/cluster/cluster_dev/cluster_dev.sh" "$@"; }
 
