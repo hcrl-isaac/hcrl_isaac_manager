@@ -208,9 +208,7 @@ def parse_gpu_query(out: str, pool: str, host: str) -> list[Card]:
 def _drop_stray_contexts(cards: list[Card]) -> None:
     """Move a process off a card where it only holds a CUDA context and into that card's note.
 
-    A process that sees several cards (CUDA_VISIBLE_DEVICES unmasked, as on the LARG A40s) opens a ~300-500 MiB
-    context on each, so a run pinned to card 0 also lists on cards 1-3. A process under HELD_MIB on a card while it
-    holds at least HELD_MIB on another card of the host runs on that other card; a process small everywhere stays.
+    A process under HELD_MIB on a card is dropped only when it holds at least HELD_MIB on another card of the host.
     """
     main: dict[int, tuple[int, Card]] = {}  # pid -> (its largest memory on one card, that card)
     for card in cards:
