@@ -66,6 +66,42 @@ class ParseGpuQueryTest(unittest.TestCase):
         self.assertEqual(cards[0].state, "unknown")
 
 
+class StrayContextTest(unittest.TestCase):
+    """An unmasked process opens a small CUDA context on every card it sees; it runs only where its memory is."""
+
+    A40 = """\
+0, GPU-0, NVIDIA A40, 30500, 46068, 98
+1, GPU-1, NVIDIA A40, 380, 46068, 0
+2, GPU-2, NVIDIA A40, 366, 46068, 0
+3, GPU-3, NVIDIA A40, 21000, 46068, 90
+"""
+    PS = """\
+    100 sturman  02:00:00 python scripts/train.py --task T1-CubeLift-v0 --headless
+    200 sturman  00:10:00 python scripts/train.py --task T1-Kick-v0 --headless
+    300 sturman  00:00:05 python probe.py
+"""
+
+    def parse(self, apps: str) -> list[Card]:
+        return parse_gpu_query(output(cards=self.A40, apps=apps, ps=self.PS), "larg", "pepi")
+
+    def test_context_on_other_cards_is_not_busy(self) -> None:
+        cards = self.parse("GPU-0, 100, 30100\nGPU-2, 100, 366\nGPU-3, 200, 20600\nGPU-1, 200, 380\n")
+        self.assertEqual([c.state for c in cards], ["busy", "free", "free", "busy"])
+        self.assertEqual(([p.pid for p in cards[0].procs], [p.pid for p in cards[3].procs]), ([100], [200]))
+        self.assertEqual(cards[2].note, "CUDA context only: train.py T1-CubeLift-v0 (card 0)")
+        self.assertEqual(cards[1].note, "CUDA context only: train.py T1-Kick-v0 (card 3)")
+
+    def test_a_real_run_beside_a_stray_context_stays_busy(self) -> None:
+        cards = self.parse("GPU-0, 100, 30100\nGPU-3, 100, 366\nGPU-3, 200, 20600\n")
+        self.assertEqual(cards[3].state, "busy")
+        self.assertEqual([p.pid for p in cards[3].procs], [200])
+
+    def test_a_process_small_everywhere_stays_on_every_card(self) -> None:
+        cards = self.parse("GPU-1, 300, 300\nGPU-2, 300, 300\n")
+        self.assertEqual([c.state for c in cards[1:3]], ["busy", "busy"])
+        self.assertEqual(cards[1].note, "")
+
+
 class ParseFailureTest(unittest.TestCase):
     def assert_fails(self, text: str) -> None:
         with self.assertRaises(ProbeError):

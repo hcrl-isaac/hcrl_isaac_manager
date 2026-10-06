@@ -189,16 +189,39 @@ def parse_gpu_query(out: str, pool: str, host: str) -> list[Card]:
         )
         if used is None or util is None:
             card.state, card.note = "unknown", "memory/utilization not reported"
-        elif procs:
-            card.state, card.mem_used = "busy", max(used, sum(p.mem_mib for p in procs))
-        elif used >= HELD_MIB or util >= HELD_UTIL:
-            card.state = "held"
         cards.append(card)
     if not cards:
         raise ProbeError("nvidia-smi listed no cards")
     if procs_by_uuid:
         raise ProbeError(f"processes on cards missing from the card table: {', '.join(procs_by_uuid)}")
+    _drop_stray_contexts(cards)
+    for card in cards:
+        if card.state == "unknown":
+            continue
+        if card.procs:
+            card.state, card.mem_used = "busy", max(card.mem_used, sum(p.mem_mib for p in card.procs))
+        elif card.mem_used >= HELD_MIB or card.util >= HELD_UTIL:
+            card.state = "held"
     return cards
+
+
+def _drop_stray_contexts(cards: list[Card]) -> None:
+    """Move a process off a card where it only holds a CUDA context and into that card's note.
+
+    A process under HELD_MIB on a card is dropped only when it holds at least HELD_MIB on another card of the host.
+    """
+    main: dict[int, tuple[int, Card]] = {}  # pid -> (its largest memory on one card, that card)
+    for card in cards:
+        for p in card.procs:
+            if p.mem_mib >= HELD_MIB and p.mem_mib > main.get(p.pid, (0, None))[0]:
+                main[p.pid] = (p.mem_mib, card)
+    for card in cards:
+        stray = [p for p in card.procs if p.mem_mib < HELD_MIB and p.pid in main and main[p.pid][1] is not card]
+        if not stray:
+            continue
+        card.procs = [p for p in card.procs if p not in stray]
+        what = ", ".join(f"{p.cmd or p.pid} (card {main[p.pid][1].index})" for p in stray)
+        card.note = "; ".join(n for n in (card.note, f"CUDA context only: {what}") if n)
 
 
 def probe_local(pool: Pool) -> list[Report]:
