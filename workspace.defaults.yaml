@@ -8,7 +8,8 @@ isaaclab:
   ref: v3.0.0-EA       # IsaacLab git ref cloned into resources/IsaacLab
   extras: [rsl-rl, ovphysx, importers]   # IsaacLab uv extras synced into the ilab venv
 always: [hcrl_isaaclab, robot_rl, hcrl_sim2real]   # repos always present (core extension, RL package, sim2real infra)
-refs: {}                            # per-repo ref overrides (default is main)
+# this branch composes every repo's Isaac Lab 3.0 port
+refs: {hcrl_isaaclab: feature/isaac-3.0, robot_rl: feature/isaac-3.0, hcrl_sim2real: feature/isaac-3.0, hhlm_tasks: feature/isaac-3.0, ssti_tasks: feature/isaac-3.0, holosoma: feature/isaac-3.0}
 
 # Selectable project task repos (each -> <name>_tasks + its transitive robot/data deps). `default`
 # marks the ones pre-checked in the selector and used when no per-user workspace.yaml exists.

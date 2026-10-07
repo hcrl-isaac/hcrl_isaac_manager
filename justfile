@@ -66,8 +66,7 @@ install:
     uv sync --project resources/IsaacLab --frozen --inexact $({{venv_py}} scripts/resolve_workspace.py --isaaclab-extras); \
     {{venv_py}} scripts/tools/ui.py section "Workspace packages"; \
     retired=$({{venv_py}} scripts/resolve_workspace.py --retire-renamed); \
-    [ -d resources/holosoma ] && echo "[install] skipping holosoma_retargeting: it pins numpy<2, Isaac Lab 3.0 needs numpy>=2"; \
-    for d in resources/hcrl_isaaclab resources/robot_rl resources/hcrl_sim2real resources/*_tasks resources/*_robots; do \
+    for d in resources/hcrl_isaaclab resources/robot_rl resources/hcrl_sim2real resources/*_tasks resources/*_robots resources/holosoma/src/holosoma_retargeting; do \
         case " $(echo $retired) " in *" $d "*) echo "[install] skipping pre-rename checkout: $d"; continue;; esac; \
         if [ -d "$d" ] && { [ -f "$d/setup.py" ] || [ -f "$d/pyproject.toml" ]; }; then \
             uv pip install --python {{venv_py}} --torch-backend cu128 -e "$d"; \
