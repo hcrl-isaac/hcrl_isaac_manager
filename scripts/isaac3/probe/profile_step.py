@@ -11,16 +11,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument("task")
 parser.add_argument("--steps", type=int, default=50)
 parser.add_argument("--fuse_actuators", action="store_true", help="drive the robot with one fused delayed-PD group")
-from isaaclab.app import add_launcher_args, launch_simulation  # noqa: E402
+from isaaclab.app import add_launcher_args, launch_simulation
 
 add_launcher_args(parser)
 args, overrides = parser.parse_known_args()
 
-import gymnasium as gym  # noqa: E402
-import torch  # noqa: E402
+import torch
 
-import hcrl_isaaclab  # noqa: E402,F401
-from isaaclab_tasks.utils.hydra import register_task  # noqa: E402
+import gymnasium as gym
+import hcrl_isaaclab  # noqa: F401
+from isaaclab_tasks.utils.hydra import register_task
 
 TIMES: dict[str, float] = collections.defaultdict(float)
 
