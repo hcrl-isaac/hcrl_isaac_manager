@@ -99,16 +99,18 @@ just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --d
   `--wt` repos are staged over the cluster's shared checkout as a code tree (`develop stage`), and the rest run from
   that shared checkout as `develop sync` left it (the MANIFEST gives each one's commit). The card is pinned by its GPU
   UUID, and a step that cannot see it fails with status 98 (on Delta a step holding the job's GPUs can starve
-  another). The run gets its own `TMPDIR` and per-card Kit caches, since `/tmp` and the caches are per-job binds
-  every step of the sentinel shares. A script runs from the per-run work dir `artifacts/res-eval/work/<id>`.
+  another). The container's `/tmp` is the job's node-local dir, which every step of the sentinel shares, so the run
+  gets its own `TMPDIR` there (removed when it ends) and per-card Kit caches beside it (gone with the job). A script
+  runs from the per-run work dir `artifacts/res-eval/work/<id>`.
 - The container hides a SLURM run's processes from the node, so it reports through files in its stage dir:
   `heartbeat` (touched every 2 s while it runs), `stop` (create it to end the run: TERM, then KILL after 10 s) and
   `status` (its exit status, written once the card's processes are gone or after 60 s; a Python traceback with exit
   0 counts as 1). `--detach` waits for the first heartbeat, prints the follow and stop commands over the SSH
-  master, and logs the step's wrapper to `<stage>/wrapper.log`. A detached run that does not start within 5 min is
-  stopped and its credentials removed. Each new SLURM stage prunes earlier ones: credentials of runs that never
-  started after 30 min, and stages and work dirs older than 7 days whose run is not alive; `res-eval` code trees
-  older than 14 days that no running step uses are removed when a newer one is staged.
+  master, and logs the step's wrapper to `<stage>/wrapper.log`. A detached run that does not start within 20 min
+  (a job's first step copies the .sif to the node) is stopped and its credentials removed; a run whose `stop`
+  exists before it starts exits 130 without launching. Each new SLURM stage prunes earlier ones: credentials of
+  runs that never started after 30 min, and stages and work dirs older than 7 days whose run is not alive;
+  `res-eval` code trees unused for 14 days (reuse counts) that no running step marks are removed when one is staged.
 - From a manager worktree, `res` and `develop stage|exec|status|tail` use the main checkout's cluster profiles (a
   worktree has none of its own); `develop start|sync|stop|kill` refuse there, since they change the shared sentinel
   state.

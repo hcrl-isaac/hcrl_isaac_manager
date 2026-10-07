@@ -234,6 +234,7 @@ class SlurmTest(unittest.TestCase):
         prune = run.call_args_list[-1].args[0][-1]
         self.assertIn("/w/trees/res-eval-*", prune)
         self.assertIn("res-eval-0123456789", prune, "the tree just staged is never pruned")
+        self.assertTrue(prune.startswith("touch /w/trees/res-eval-0123456789;"), "a reused tree counts as just used")
         self.assertIn(".in-use", prune, "a tree a running step uses is never pruned")
 
 
@@ -460,6 +461,7 @@ class SlurmEvalTest(Isolated):
             mock.patch.object(ev, "CLUSTER_DEV", stub),
             mock.patch.object(ev, "CONTAINER_ARTIFACTS", str(self.remote / "artifacts")),
             mock.patch.object(ev, "CONTAINER_PYTHON", sys.executable),
+            mock.patch.object(ev, "CONTAINER_TMP", str(self.tmp / "node_tmp")),
             mock.patch.object(ev, "START_S", 20),
             mock.patch.object(ev, "profile_value", return_value=str(self.remote)),
             mock.patch.object(ev, "stage_tree", return_value="res-eval-0123456789"),
@@ -516,7 +518,9 @@ class SlurmEvalTest(Isolated):
         log = (stage / "log").read_text()
         self.assertIn("CUDA_VISIBLE_DEVICES GPU-ab", log)
         self.assertIn("CKPT_A_CONTENT weights", log)
-        self.assertIn(f"TMPDIR {stage}/tmp", log, "a per-run TMPDIR, not the job's shared /tmp")
+        node_tmp = self.tmp / "node_tmp" / stage.name
+        self.assertIn(f"TMPDIR {node_tmp}", log, "a per-run TMPDIR inside the node-local /tmp")
+        self.assertFalse(node_tmp.exists(), "the run's TMPDIR goes with it")
         self.assertIn(f"CWD {stage}", log)
         self.assertFalse((stage / "env").exists(), "the runner removes the credentials file")
         self.assertTrue((stage / "heartbeat").exists())
@@ -557,6 +561,22 @@ class SlurmEvalTest(Isolated):
         rc, out = self._eval("--detach", "--env", "MODE=traceback")
         self.assertEqual(rc, 0, out)
         self.assertEqual(self._status(self._stage()), "1")
+
+    def test_a_run_stopped_before_its_step_starts_never_launches(self) -> None:
+        t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", str(self.remote), str(self.remote / "artifacts"),
+                      job="3557743", uuid=self.uuid)  # fmt: skip
+        stage = ev.Stage(t)
+        stage.make()
+        Path(stage.dir, "env").write_text("SECRET=x\n")
+        Path(stage.dir, "MANIFEST").write_text("")
+        Path(stage.dir, "stop").touch()
+        runner = ev.slurm_runner_script(t, stage.dir, str(self.script), [], stage.dir)
+        Path(stage.dir, "run.sh").write_text(runner)
+        rc = subprocess.run(["bash", f"{stage.dir}/run.sh"], capture_output=True, text=True)
+        self.assertEqual(rc.returncode, 130)
+        self.assertEqual(Path(stage.dir, "status").read_text().strip(), "130")
+        self.assertNotIn("PID", Path(stage.dir, "log").read_text(), "the script never ran")
+        self.assertFalse(Path(stage.dir, "env").exists(), "and its credentials are gone")
 
     def test_a_card_the_step_cannot_see_fails_fast(self) -> None:
         self.uuid = "GPU-elsewhere"

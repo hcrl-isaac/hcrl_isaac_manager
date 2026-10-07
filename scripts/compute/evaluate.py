@@ -36,6 +36,7 @@ SUPPORTED = ("local", "ssh", "slurm")
 # where node_exec binds the cluster checkout's artifacts/ inside the container, and the container's interpreter
 CONTAINER_ARTIFACTS = "/workspace/artifacts"
 CONTAINER_PYTHON = "/isaac-sim/python.sh"
+CONTAINER_TMP = "/tmp/res-eval"  # in the container's /tmp, the job's node-local dir
 CKPT_CACHE = Path.home() / ".cache" / "hcrl_res" / "checkpoints"
 TRACEBACK = "Traceback (most recent call last)"
 TIMED_OUT = 124
@@ -360,7 +361,9 @@ def stage_tree(t: Target, code: dict[str, str]) -> str:
     tree = found.group(1)
     q = shlex.quote
     trees = q(profile_value(t.pool, "CLUSTER_TREES_DIR") or f"{t.workspace}/trees")
+    # the tree's mtime is its last use: a reused (deduplicated) tree is touched, so a concurrent prune keeps it
     prune = (
+        f"touch {trees}/{q(tree)}; "
         f'for d in {trees}/res-eval-*; do [ "$(basename "$d")" = {q(tree)} ] && continue; '
         f'[ -n "$(find "$d" -maxdepth 0 -mtime +{TREE_KEEP_DAYS})" ] || continue; '
         '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; chmod -R u+w "$d" && rm -rf "$d"; done'
@@ -378,7 +381,7 @@ def container_path(t: Target, path: str) -> str:
 
 HEARTBEAT_S = 2  # a SLURM runner touches <stage>/heartbeat this often while its script runs
 DRAIN_S = 60  # how long a SLURM runner waits for the card's processes to go after its script ends
-START_S = 300  # how long a detached SLURM run may take to reach its runner (step start, container boot)
+START_S = 1200  # how long a detached SLURM run may take to reach its runner (a first .sif copy to the node, boot)
 STOP_WAIT_S = 90  # how long a stop waits for the runner's status: its TERM/KILL (~10 s) plus the drain
 
 
@@ -399,12 +402,18 @@ def slurm_runner_script(t: Target, stage: str, script: str, env_names: list[str]
     """
     q = shlex.quote
     python = python or CONTAINER_PYTHON
-    s = {k: q(f"{stage}/{k}") for k in ("log", "env", "status", "stop", "heartbeat", "MANIFEST", "tmp")}
-    cache = q(f"{os.path.dirname(stage)}/cache/{t.host}-gpu{t.gpu}")  # one lease per card, so per-card caches
+    s = {k: q(f"{stage}/{k}") for k in ("log", "env", "status", "stop", "heartbeat", "MANIFEST")}
+    # node-local: the container's /tmp is the job's per-node dir, shared by every step of the sentinel, so the run
+    # takes its own TMPDIR and per-card Kit caches inside it (one lease per card)
+    run_id, local = os.path.basename(stage), CONTAINER_TMP
+    tmp, cache = q(f"{local}/{run_id}"), q(f"{local}/cache/{t.host}-gpu{t.gpu}")
     apps = f"nvidia-smi -i {q(t.uuid)} --query-compute-apps=pid --format=csv,noheader 2>/dev/null"
     return f"""#!/usr/bin/env bash
 set -u
 exec > >(tee -a {s["log"]}) 2>&1
+if [ -e {s["stop"]} ]; then  # stopped before the step started (a slow start, or Ctrl-C during boot)
+    rm -f {s["env"]}; echo "[res] stopped before it started"; echo 130 > {s["status"]}; exit 130
+fi
 set -a; source {s["env"]}; set +a
 rm -f {s["env"]}  # credentials stay in this process's environment only
 touch {s["heartbeat"]}
@@ -413,12 +422,13 @@ if ! nvidia-smi -i {q(t.uuid)} > /dev/null 2>&1; then
     echo 98 > {s["status"]}; exit 98
 fi
 export CUDA_VISIBLE_DEVICES={q(t.uuid)} RES_EVAL_DEVICE=cuda:0 PYTHONUNBUFFERED=1
-# /tmp and the Kit caches are per-job binds every step of the sentinel shares
-export TMPDIR={s["tmp"]} XDG_CACHE_HOME={cache}/xdg OMNI_CACHE_DIR={cache}/omni
+export TMPDIR={tmp} XDG_CACHE_HOME={cache}/xdg OMNI_CACHE_DIR={cache}/omni
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR"
+trap 'rm -rf "$TMPDIR"' EXIT
 cat {s["MANIFEST"]}
 echo "[res] {t.host}:gpu{t.gpu} job {t.job} (uuid) env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd)} && cd {q(cwd)} || {{ echo 97 > {s["status"]}; exit 97; }}
+script_from=$(( $(stat -c %s {s["log"]}) + 1 ))  # the traceback check reads only the script's own output
 setsid {q(python)} {q(script)} "$@" &
 child=$!
 stop_child() {{
@@ -433,7 +443,7 @@ while kill -0 "$child" 2>/dev/null; do
     sleep {HEARTBEAT_S}
 done
 wait "$child"; rc=$?
-if [ "$rc" = 0 ] && grep -q "{TRACEBACK}" {s["log"]}; then
+if [ "$rc" = 0 ] && tail -c +"$script_from" {s["log"]} | grep -q "{TRACEBACK}"; then
     echo "[res] the script exited 0 but printed a Python traceback; reporting failure"; rc=1
 fi
 for _ in $(seq {DRAIN_S}); do [ -z "$({apps})" ] && break; touch {s["heartbeat"]}; sleep 1; done
@@ -447,8 +457,11 @@ STAGE_KEEP_DAYS = 7  # a finished or dead SLURM stage (log, status) is kept this
 
 
 def _prune_stages(root: str) -> str:
-    """Shell that drops a stage's credentials once it is 30 min old without ever starting, and removes stages and
-    work dirs older than ``STAGE_KEEP_DAYS`` whose run is not alive (no heartbeat in the last hour)."""
+    """Shell pruning old SLURM stages: credentials of never-started runs, and dead stages and work dirs.
+
+    Credentials go once a stage is 30 min old without a heartbeat; a stage or work dir goes once it is older than
+    ``STAGE_KEEP_DAYS`` and its run has had no heartbeat in the last hour.
+    """
     q = shlex.quote
     return (
         f'for d in {q(root)}/*/ {q(root)}/work/*/; do [ -d "$d" ] || continue; d="${{d%/}}"; '
