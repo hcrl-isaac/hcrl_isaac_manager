@@ -183,7 +183,8 @@ def to_gitman(resolved: dict[str, dict], manifest: dict) -> dict:
     """Render the resolved map as a flat gitman config (everything a sibling under ``resources/``)."""
     sources = []
     if manifest.get("isaaclab", {}).get("mode") == "source":
-        sources.append({"repo": "https://github.com/isaac-sim/IsaacLab.git", "name": "IsaacLab", "rev": "main"})
+        rev = manifest["isaaclab"].get("ref", "main")
+        sources.append({"repo": "https://github.com/isaac-sim/IsaacLab.git", "name": "IsaacLab", "rev": rev})
     for name, info in sorted(resolved.items()):
         sources.append({"repo": info["git"], "name": name, "rev": info["ref"]})
     return {"location": "resources", "sources": sources, "default_group": "", "groups": []}
@@ -219,7 +220,21 @@ def main() -> None:
         help="Uninstall renamed projects' old packages from this interpreter, print their leftover "
         "checkouts (one per line) and exit. Used by `just setup` to skip them.",
     )
+    ap.add_argument(
+        "--isaaclab-extras",
+        action="store_true",
+        help="Print the IsaacLab uv extras as `--extra NAME` flags and exit. Used by `just install`.",
+    )
+    ap.add_argument(
+        "--isaaclab-mode", action="store_true", help="Print the merged IsaacLab mode and exit. Used by `just install`."
+    )
     args = ap.parse_args()
+    if args.isaaclab_mode:
+        print(load_manifest(Path(args.manifest))["isaaclab"]["mode"])
+        return
+    if args.isaaclab_extras:
+        print(" ".join(f"--extra {e}" for e in load_manifest(Path(args.manifest))["isaaclab"].get("extras", [])))
+        return
     if args.retire_renamed:
         retire_renamed(load_manifest(Path(args.manifest))["projects"])
         return
@@ -339,11 +354,11 @@ def main() -> None:
 
     mode = manifest.get("isaaclab", {}).get("mode", "pip")
     if mode == "source":
-        print("[resolve] IsaacLab: source mode (cloned into resources/IsaacLab)")
+        print(f"[resolve] IsaacLab: source mode ({manifest['isaaclab'].get('ref', 'main')} in resources/IsaacLab)")
     elif mode == "none":
         print("[resolve] IsaacLab: none (repos fetched; IsaacLab will not be installed by setup)")
     else:
-        print(f"[resolve] IsaacLab: pip mode (pin {manifest.get('isaaclab', {}).get('version', '?')})")
+        print("[resolve][WARN] IsaacLab: pip mode is unsupported on Isaac Lab 3.0; set isaaclab.mode: source")
 
 
 if __name__ == "__main__":

@@ -4,8 +4,9 @@
 # `resolve_workspace.py` merges this file with that selection into a flat gitman.yaml.
 org: hcrl-isaac
 isaaclab:
-  mode: pip            # default IsaacLab mode, overridable per-user: pip | source | none (don't install)
-  version: "5.1.0"
+  mode: source         # Isaac Lab 3.0 has no pip release: source (uv-locked clone) | none (don't install)
+  ref: v3.0.0-EA       # IsaacLab git ref cloned into resources/IsaacLab
+  extras: [rsl-rl, ovphysx, importers]   # IsaacLab uv extras synced into the ilab venv
 always: [hcrl_isaaclab, robot_rl, hcrl_sim2real]   # repos always present (core extension, RL package, sim2real infra)
 refs: {}                            # per-repo ref overrides (default is main)
 

@@ -526,15 +526,8 @@ def ensure_deps(peer: Machine, *, dry: bool) -> None:
             exit 0
         fi
         echo "[deps] manager deps (uv sync)"; uv sync -q
-        echo "[deps] workspace packages (editable re-install, fast when unchanged)"
-        PY=ilab/bin/python
-        uv pip install -q --python $PY --torch-backend cu128 --extra-index-url https://pypi.nvidia.com \
-            --index-strategy unsafe-best-match -e "resources/hcrl_isaaclab[isaacsim]"
-        for d in resources/robot_rl resources/*_tasks resources/*_robots resources/holosoma/src/holosoma_retargeting; do
-            if [ -d "$d" ] && {{ [ -f "$d/setup.py" ] || [ -f "$d/pyproject.toml" ]; }}; then
-                uv pip install -q --python $PY --torch-backend cu128 --extra-index-url https://pypi.nvidia.com -e "$d"
-            fi
-        done
+        # the exact manager sync prunes Isaac Lab, so re-layer it + the workspace packages (fast when unchanged)
+        echo "[deps] Isaac Lab + workspace packages (just install)"; just install
         if [ -f $HOME/booster-deploy/pyproject.toml ]; then
             echo "[deps] booster-deploy venv"
             cd $HOME/booster-deploy

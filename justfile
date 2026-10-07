@@ -15,7 +15,7 @@ export VIRTUAL_ENV := ""
 deps:
     if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi
     @# --relocatable: console scripts derive the interpreter from their own path (survives a dir rename).
-    uv venv --relocatable --python 3.11 {{venv_name}}
+    uv venv --relocatable --python 3.12 {{venv_name}}
     uv sync
     @# git-lfs must materialize LFS assets as real files -- the Ray mount ships pointers as-is otherwise.
     @if ! command -v git-lfs >/dev/null 2>&1; then \
@@ -46,34 +46,33 @@ setup:
     @# Re-open the project/IsaacLab picker pre-filled (plain `just setup` reconfigures); no TTY keeps it.
     {{venv_py}} scripts/configure_workspace.py --interactive
     just resolve            # merge selection + defaults -> gitman.yaml + fetch repos under resources/
-    @# Install torch + IsaacLab/Sim + workspace packages -- one gated block so `mode: none` skips it all.
-    @mode=$(grep -E '^[[:space:]]*mode:' workspace.yaml | head -1 | sed -E 's/.*mode:[[:space:]]*//; s/[[:space:]#].*//'); \
+    just install
+    just vscode
+
+# Layer Isaac Lab 3.0 (uv-locked source clone, which owns torch) + every workspace package onto the ilab venv.
+install:
+    @mode=$({{venv_py}} scripts/resolve_workspace.py --isaaclab-mode); \
     if [ "$mode" = "none" ]; then \
-        echo "[setup] IsaacLab mode 'none': repos fetched under resources/; skipping IsaacLab + package installs."; \
+        echo "[install] IsaacLab mode 'none': repos fetched under resources/; skipping IsaacLab + package installs."; \
         exit 0; \
     fi; \
-    {{venv_py}} scripts/tools/ui.py section "PyTorch (CUDA 12.8)"; \
-    uv pip install --python {{venv_py}} --torch-backend cu128 torch==2.7.0 torchvision==0.22.0; \
-    {{venv_py}} scripts/tools/ui.py section "Isaac Lab / Isaac Sim"; \
-    if [ "$mode" = "source" ]; then \
-        echo "[setup] IsaacLab source mode -> editable install (+ explicit isaacsim; source isaaclab has no isaacsim extra)"; \
-        uv pip install --python {{venv_py}} "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com; \
-        for d in resources/IsaacLab/source/isaaclab*/; do [ -d "$d" ] && uv pip install --python {{venv_py}} --torch-backend cu128 -e "$d"; done; \
-        uv pip install --python {{venv_py}} --torch-backend cu128 -e resources/hcrl_isaaclab; \
-    else \
-        echo "[setup] IsaacLab via pip -> hcrl_isaaclab[isaacsim] pulls isaaclab[isaacsim]==2.3.2.post1 (isaacsim 5.1 + torch)"; \
-        uv pip install --python {{venv_py}} --torch-backend cu128 --extra-index-url https://pypi.nvidia.com --index-strategy unsafe-best-match -e "resources/hcrl_isaaclab[isaacsim]"; \
+    if [ "$mode" != "source" ]; then \
+        echo "[install][ERROR] Isaac Lab 3.0 has no pip release; set isaaclab.mode: source (just setup)."; exit 1; \
     fi; \
-    uv pip install --python {{venv_py}} rsl_rl-lib; \
+    if ! {{venv_py}} -c 'import sys; sys.exit(sys.version_info[:2] != (3, 12))'; then \
+        echo "[install][ERROR] Isaac Lab 3.0 needs a Python 3.12 venv; rebuild it with: just clean && just setup"; exit 1; \
+    fi; \
+    {{venv_py}} scripts/tools/ui.py section "Isaac Lab (source, uv-locked)"; \
+    uv sync --project resources/IsaacLab --frozen --inexact $({{venv_py}} scripts/resolve_workspace.py --isaaclab-extras); \
     {{venv_py}} scripts/tools/ui.py section "Workspace packages"; \
     retired=$({{venv_py}} scripts/resolve_workspace.py --retire-renamed); \
-    for d in resources/robot_rl resources/hcrl_sim2real resources/*_tasks resources/*_robots resources/holosoma/src/holosoma_retargeting; do \
-        case " $(echo $retired) " in *" $d "*) echo "[setup] skipping pre-rename checkout: $d"; continue;; esac; \
+    [ -d resources/holosoma ] && echo "[install] skipping holosoma_retargeting: it pins numpy<2, Isaac Lab 3.0 needs numpy>=2"; \
+    for d in resources/hcrl_isaaclab resources/robot_rl resources/hcrl_sim2real resources/*_tasks resources/*_robots; do \
+        case " $(echo $retired) " in *" $d "*) echo "[install] skipping pre-rename checkout: $d"; continue;; esac; \
         if [ -d "$d" ] && { [ -f "$d/setup.py" ] || [ -f "$d/pyproject.toml" ]; }; then \
-            uv pip install --python {{venv_py}} --torch-backend cu128 --extra-index-url https://pypi.nvidia.com -e "$d"; \
-        elif [ -d "$d" ]; then echo "[setup] skipping non-package data repo: $d"; fi; \
-    done; \
-    just vscode
+            uv pip install --python {{venv_py}} --torch-backend cu128 -e "$d"; \
+        elif [ -d "$d" ]; then echo "[install] skipping non-package data repo: $d"; fi; \
+    done
 
 # Generate .vscode/settings.json. Boots headless Isaac Sim for the Kit paths; `just vscode no-kit`
 # reuses the cached ones and refreshes only the workspace package paths (instant, after a `just setup`).
