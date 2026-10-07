@@ -9,7 +9,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 COMPUTE_DIR = Path(__file__).resolve().parent
-CLUSTER_CONFIG_DIR = COMPUTE_DIR.parent / "cluster" / "config"
+
+
+def _cluster_config_dir() -> Path:
+    """This checkout's cluster profiles, or the main checkout's when this is a worktree without any (they are
+    gitignored and per user, so a worktree starts with none)."""
+    own = COMPUTE_DIR.parent / "cluster" / "config"
+    if any(own.glob("*/.env.cluster")):
+        return own
+    common = subprocess.run(
+        ["git", "-C", str(COMPUTE_DIR), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    main = Path(common).parent / "scripts" / "cluster" / "config" if common else own
+    return main if any(main.glob("*/.env.cluster")) else own
+
+
+CLUSTER_CONFIG_DIR = _cluster_config_dir()
 
 
 @dataclass

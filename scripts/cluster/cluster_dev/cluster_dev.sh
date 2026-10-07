@@ -47,6 +47,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # cluster_interface.sh, which sets CLUSTER when invoked as `cluster_interface.sh develop`.
 CLUSTER="${CLUSTER:-default}"
 ENV_FILE="${SCRIPT_DIR}/../config/${CLUSTER}/.env.cluster"
+# profiles are gitignored and per user, so a manager worktree has none: use the main checkout's
+if [ ! -f "$ENV_FILE" ]; then
+    _common="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    _main_env="$(dirname "${_common:-/nonexistent}")/scripts/cluster/config/${CLUSTER}/.env.cluster"
+    [ -n "$_common" ] && [ -f "$_main_env" ] && ENV_FILE="$_main_env"
+fi
 # shellcheck disable=SC1090
 [ -f "$ENV_FILE" ] && source "$ENV_FILE"
 

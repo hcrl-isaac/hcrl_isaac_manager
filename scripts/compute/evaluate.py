@@ -1010,7 +1010,9 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         "script", help="script on this machine, or <repo>:<path> inside a shipped repo; its arguments follow --"
     )
     ev.add_argument("--detach", action="store_true", help="start the run and return; the lease stays held")
-    ev.add_argument("--on", help="card as host:gpu (local:<gpu> for this machine), or host:job:gpu on a SLURM node")
+    ev.add_argument(
+        "--on", help="card as host:gpu (local:<gpu> for this machine; host:job:gpu when a SLURM node runs several jobs)"
+    )
     ev.add_argument("--any", action="store_true", help="take any free card")
     ev.add_argument("--lease", help="run on a card you already lease (left leased afterwards)")
     ev.add_argument("--pool", action="append", help="with --any/--on: only these pools (prefix match)")

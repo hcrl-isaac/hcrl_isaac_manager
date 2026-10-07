@@ -77,6 +77,7 @@ just res eval hcrl_isaaclab:scripts/train.py --wt legacy --on pepi:1 --holder "<
     -- --task hhlm/T1-Kick-v0 --headless --video on                                     # train a branch on LARG
 just res eval probe.py --on local:0 --holder "<session>"                               # this machine's card 0
 just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --detach   # a sentinel's free card
+                                                     # (c571-003:3557743:3 when the node runs several of your jobs)
 ```
 
 - A script is a file on this machine (copied to the target) or `<repo>:<path>` inside a shipped repo, which runs
