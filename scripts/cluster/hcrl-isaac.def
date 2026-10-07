@@ -51,6 +51,10 @@ From: isaac-sim-base.sif
     # the path, and setup_python_env.sh (which python.sh sources) adds its libraries for Python alone
     if [ "$(uname -m)" != x86_64 ]; then
         sed -i '/^usd-core\b/d' /opt/hcrl-build/requirements.workspace.txt
+        # torch.compile needs Triton, which the x86 image gets with pip's torch (3.3.0). Isaac Sim's aarch64 torch
+        # comes without it and PyPI has no aarch64 3.3.0, so it comes from PyTorch's index
+        printf -- '--find-links https://download.pytorch.org/whl/triton/\ntriton==3.3.0\n' \
+            >> /opt/hcrl-build/requirements.workspace.txt
         set -- /isaac-sim/extscache/omni.usd.libs-*  # %post runs in sh, which has no arrays
         if [ "$#" -ne 1 ] || [ ! -d "$1/bin" ]; then
             echo "expected one omni.usd.libs with a bin/, found: $*"
@@ -114,9 +118,11 @@ arches = torch._C._cuda_getArchFlags()  # compiled targets, as get_arch_list() i
 assert "sm_100" in arches, f"torch lacks sm_100: {arches}"
 boxes = torch.tensor([[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0]])
 torchvision.ops.nms(boxes, torch.tensor([1.0, 0.5]), 0.5)  # a torchvision built against another torch fails here
+import triton
+assert triton.__version__ == "3.3.0", f"triton {triton.__version__} is not torch 2.7's"  # torch.compile's GPU code
 from pxr import Usd  # Kit's USD, as usd-core is not installed on aarch64
 Usd.Stage.CreateInMemory()
-print("torch", torch.__version__, "torchvision", torchvision.__version__, "pxr ok")
+print("torch", torch.__version__, "torchvision", torchvision.__version__, "triton", triton.__version__, "pxr ok")
 EOF
 
 %runscript
