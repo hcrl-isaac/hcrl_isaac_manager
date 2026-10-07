@@ -1,0 +1,129 @@
+# scripts/docker/Dockerfile as an Apptainer recipe, built on clusters with CLUSTER_ARCH=arm64 (tests/test_sif_recipe.py
+# keeps the two in step). The base is the Dockerfile's, which `setup` pulls to isaac-sim-base.sif.
+Bootstrap: localimage
+From: isaac-sim-base.sif
+
+%files
+    requirements.workspace.txt /opt/hcrl-build/requirements.workspace.txt
+    constraints.workspace.txt /opt/hcrl-build/constraints.workspace.txt
+    install-git-lfs.sh /opt/hcrl-build/install-git-lfs.sh
+    entrypoint.sh /usr/local/bin/hcrl-entrypoint
+
+%environment
+    export LANG=C.UTF-8
+    export ISAACSIM_ROOT_PATH=/isaac-sim
+    export ISAAC_PY=/isaac-sim/python.sh
+    export OMNI_KIT_ACCEPT_EULA=YES
+    export PATH="/usr/local/nvidia/bin:${PATH}"
+    export LD_LIBRARY_PATH="/usr/local/nvidia/lib64"
+
+%post
+    set -e
+    export DEBIAN_FRONTEND=noninteractive ISAAC_PY=/isaac-sim/python.sh ISAACSIM_ROOT_PATH=/isaac-sim
+    # a --fakeroot build is root only inside a user namespace, where apt cannot switch to its _apt sandbox user
+    echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-build-sandbox
+    # and only id 0 is mapped, so package scripts' chown/chgrp to other ids fail: the files stay root's instead
+    for c in chown chgrp; do
+        mv /usr/bin/$c /usr/bin/$c.build-real
+        printf '#!/bin/sh\n/usr/bin/%s.build-real "$@" 2>/dev/null || true\n' "$c" > /usr/bin/$c
+        chmod 755 /usr/bin/$c
+    done
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential cmake git wget curl openssh-client rsync graphviz libglib2.0-0 ncurses-term
+    apt -y autoremove && apt clean autoclean && rm -rf /var/lib/apt/lists/*
+
+    # Isaac Sim's packages (its CUDA torch among them) sit in extension prebundles that link into one another, and pip
+    # "replaces" them there half-way, so every prebundle is saved here and restored after the pip steps
+    site=/isaac-sim/kit/python/lib/python3.11/site-packages
+    find /isaac-sim/exts /isaac-sim/extscache -mindepth 2 -maxdepth 2 -name pip_prebundle -type d \
+        > /opt/hcrl-build/prebundles.txt
+    while read -r pb; do
+        mkdir -p "/opt/hcrl-build/saved$pb" && cp -a "$pb/." "/opt/hcrl-build/saved$pb/"
+    done < /opt/hcrl-build/prebundles.txt
+    ls "$site" > /opt/hcrl-build/site-before.txt
+
+    ${ISAAC_PY} -m pip install --upgrade pip
+    ${ISAAC_PY} -m pip install flatdict==4.0.0
+    ${ISAAC_PY} -m pip install "isaaclab==2.3.2.post1" "rsl-rl-lib==5.4.1"
+    ${ISAAC_PY} -m pip install "ray[default,tune]==2.50.1" optuna bayesian-optimization gitman
+    # usd-core publishes no linux aarch64 wheel, so Kit's own USD (pxr) serves outside Kit too. kit-usd.pth puts it on
+    # the path, and setup_python_env.sh (which python.sh sources) adds its libraries for Python alone
+    if [ "$(uname -m)" != x86_64 ]; then
+        sed -i '/^usd-core\b/d' /opt/hcrl-build/requirements.workspace.txt
+        # torch.compile needs Triton, which the x86 image gets with pip's torch (3.3.0). Isaac Sim's aarch64 torch
+        # comes without it and PyPI has no aarch64 3.3.0, so it comes from PyTorch's index
+        printf -- '--find-links https://download.pytorch.org/whl/triton/\ntriton==3.3.0\n' \
+            >> /opt/hcrl-build/requirements.workspace.txt
+        set -- /isaac-sim/extscache/omni.usd.libs-*  # %post runs in sh, which has no arrays
+        if [ "$#" -ne 1 ] || [ ! -d "$1/bin" ]; then
+            echo "expected one omni.usd.libs with a bin/, found: $*"
+            exit 1
+        fi
+        echo "$1" > "$site/kit-usd.pth"
+        echo "export LD_LIBRARY_PATH=\"\${LD_LIBRARY_PATH}:$1/bin\"" >> /isaac-sim/setup_python_env.sh
+    fi
+    ${ISAAC_PY} -m pip install -r /opt/hcrl-build/requirements.workspace.txt -c /opt/hcrl-build/constraints.workspace.txt
+    while read -r pb; do
+        find "$pb/" -mindepth 1 -delete && cp -a "/opt/hcrl-build/saved$pb/." "$pb/"
+    done < /opt/hcrl-build/prebundles.txt
+    # site-packages precedes the prebundles on the path, so pip's copies win as in the docker image, except a torch
+    # family copy pip added (PyPI's aarch64 torch is CPU-only): it is dropped so Isaac Sim's CUDA build serves
+    ${ISAAC_PY} - <<'EOF'
+import csv, pathlib, shutil
+prebundles = [pathlib.Path(p) for p in pathlib.Path("/opt/hcrl-build/prebundles.txt").read_text().split()]
+site = pathlib.Path("/isaac-sim/kit/python/lib/python3.11/site-packages")
+before = set(pathlib.Path("/opt/hcrl-build/site-before.txt").read_text().split())
+key = lambda d: d.name.split("-")[0].lower().replace("_", "-")
+bundled = {key(d) for pre in prebundles for d in pre.glob("*.dist-info")} & {"torch", "torchvision", "torchaudio"}
+for info in site.glob("*.dist-info"):
+    if info.name in before or key(info) not in bundled:
+        continue
+    for row in csv.reader(open(info / "RECORD")):
+        path = site / row[0]
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+    shutil.rmtree(info, ignore_errors=True)
+    print("dropped", info.name, "(prebundled by Isaac Sim)")
+EOF
+
+    bash /opt/hcrl-build/install-git-lfs.sh && git lfs version
+
+    if [ -f /isaac-sim/kit/python/bin/ray ]; then
+        sed -i "1i #!${ISAAC_PY}" /isaac-sim/kit/python/bin/ray
+        ln -sf /isaac-sim/kit/python/bin/ray /usr/local/bin/ray
+    fi
+    ln -sf /usr/local/nvidia/bin/nvidia* /usr/bin 2>/dev/null || true
+
+    mkdir -p ${ISAACSIM_ROOT_PATH}/kit/cache /root/.cache/ov /root/.cache/pip \
+        /root/.cache/nvidia/GLCache /root/.nv/ComputeCache /root/.nvidia-omniverse/logs \
+        /root/.local/share/ov/data /root/Documents /tmp /workspace/ext
+    touch /bin/nvidia-smi /bin/nvidia-debugdump /bin/nvidia-persistenced \
+        /bin/nvidia-cuda-mps-control /bin/nvidia-cuda-mps-server /etc/localtime
+    mkdir -p /var/run/nvidia-persistenced && touch /var/run/nvidia-persistenced/socket
+    chmod +x /usr/local/bin/hcrl-entrypoint
+    rm -rf /opt/hcrl-build  # the build's inputs (%files go here: the build mounts its own /tmp over %post)
+    rm -f /etc/apt/apt.conf.d/99-build-sandbox
+    for c in chown chgrp; do mv -f /usr/bin/$c.build-real /usr/bin/$c; done
+
+%test
+    # tools outside Python run without Kit's libraries
+    git --version
+    git lfs version
+    dot -V
+    /isaac-sim/python.sh - <<'EOF'
+import torch, torchvision
+assert torch.version.cuda and "+cu" in torch.__version__, f"torch {torch.__version__} has no CUDA build"
+arches = torch._C._cuda_getArchFlags()  # compiled targets, as get_arch_list() is empty without a GPU
+assert "sm_100" in arches, f"torch lacks sm_100: {arches}"
+boxes = torch.tensor([[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0]])
+torchvision.ops.nms(boxes, torch.tensor([1.0, 0.5]), 0.5)  # a torchvision built against another torch fails here
+import triton
+assert triton.__version__ == "3.3.0", f"triton {triton.__version__} is not torch 2.7's"  # torch.compile's GPU code
+from pxr import Usd  # Kit's USD, as usd-core is not installed on aarch64
+Usd.Stage.CreateInMemory()
+print("torch", torch.__version__, "torchvision", torchvision.__version__, "triton", triton.__version__, "pxr ok")
+EOF
+
+%runscript
+    exec /usr/local/bin/hcrl-entrypoint "$@"

@@ -34,7 +34,7 @@ Apptainer image, following the workflow of the [Isaac Lab docs](https://isaac-si
 | command | what it does |
 |---|---|
 | `add [--update] [name]` | create or regenerate your profile |
-| `setup` | build the `.sif` and rsync it to `CLUSTER_SIF_PATH` |
+| `setup` | build the `.sif` and rsync it to `CLUSTER_SIF_PATH`; with `CLUSTER_ARCH=arm64`, build it on the cluster instead |
 | `build` | build the `.sif` only (into `scripts/cluster/exports/`) |
 | `push` / `repush` | rsync an already built `.sif` (reuses the SSH master) |
 | `job [args]` | copy the workspace to a timestamped dir under `CLUSTER_ISAACLAB_DIR`, then `sbatch` `scripts/train.py [args]` |
@@ -57,13 +57,32 @@ when the job ends (`REMOVE_CODE_COPY_AFTER_JOB`); training logs and the job's `s
 | `CLUSTER_LOGS_DIR` | run logs and checkpoints (default: inside `CLUSTER_ISAACLAB_DIR`); put it on project/scratch storage, not a quota'd home |
 | `CLUSTER_TREES_DIR` | staged code trees (default `CLUSTER_ISAACLAB_DIR/trees`); same advice |
 | `CLUSTER_MIN_FREE_GB` | `develop stage` / `exec` refuse below this much free space (default 10; quota-aware where `quota -s` prints a table) |
+| `CLUSTER_ARCH` | `amd64` (default) or `arm64` for aarch64 nodes (TACC Horizon's Grace GB200s); see below |
+| `CLUSTER_BUILD_TIME` | wall time of the `arm64` build job (default `02:00:00`) |
+| `CLUSTER_BUILD_MIN_FREE_GB` | the `arm64` build refuses below this much free space at `CLUSTER_SIF_PATH` (default 40) |
 | `CLUSTER_VKCLAMP_DIR` | where the Vulkan clamp layer is installed; default `${CLUSTER_SIF_PATH}/vkclamp` |
 
 **Rendering on newer drivers.** Drivers 595.71 (Delta) and 615.71 (Stampede3 RTX nodes) make Isaac Sim's RTX
 renderer segfault at startup, so every `enable_cameras` run (video, cameras) dies; headless training is fine.
 `scripts/cluster/tools/install_vkclamp.sh <cluster>` builds the clamp layer from `scripts/vulkan/` into
 `CLUSTER_VKCLAMP_DIR`. `node_exec.sh` and `run_singularity.sh` bind it at `/opt/vkclamp` when it is present and
-point the container's `XDG_CONFIG_DIRS` at it, with no image rebuild. `VKCLAMP_DISABLE=1` turns it off.
+point the container's `XDG_CONFIG_DIRS` at it, with no image rebuild. `VKCLAMP_DISABLE=1` turns it off. The layer
+is an x86 build: it is never bound on an aarch64 node, and `install_vkclamp.sh` refuses an `arm64` profile.
+
+## arm64 clusters (`CLUSTER_ARCH=arm64`)
+
+The x86 docker image cannot run on aarch64 nodes (TACC Horizon's Grace GB200s), so `setup` builds the `.sif` on the
+cluster. It uploads `scripts/cluster/hcrl-isaac.def`, the Dockerfile's steps as an Apptainer recipe
+(`tests/test_sif_recipe.py` keeps the two in step), checks for `CLUSTER_BUILD_MIN_FREE_GB` free at `CLUSTER_SIF_PATH`,
+and runs `apptainer build --fakeroot` in a batch job with the profile's partition, account, QOS and reservation,
+waiting for it. The job pulls the Dockerfile's Isaac Sim base once (`build-hcrl-isaac/isaac-sim-base.sif`, re-pulled
+when the version changes; a failed pull fails the job), and the new `.sif` replaces the old one only after the
+recipe's `%test` passed: torch is a CUDA build with `sm_100`, torchvision runs against it, and USD (`pxr`) loads.
+Each build logs to `build-hcrl-isaac/build-<job>.log`; if the connection drops while it runs, the job may still
+finish. `build` and `push` refuse for such a profile.
+
+Two things differ from the x86 image: `usd-core` (no aarch64 wheel) is left out, as Kit's own USD serves, and torch
+is Isaac Sim's CUDA build, since PyPI's aarch64 torch is CPU-only.
 
 The job's resources (`-p`, `-A`, `-n`, `--cpus-per-task`, `--time`, mail) are the `#SBATCH` lines of
 `submit_job_slurm.sh`; `develop` reuses them for its sentinel.

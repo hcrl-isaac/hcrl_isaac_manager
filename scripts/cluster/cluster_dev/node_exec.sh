@@ -130,7 +130,7 @@ export APPTAINERENV_WANDB_USERNAME="${WANDB_USERNAME:-}" APPTAINERENV_WANDB_API_
 # segfaults at startup on drivers that report a UINT64_MAX maxMemoryAllocationSize (595.71, 615.71)
 VK_BINDS=""
 VKCLAMP_DIR="${CLUSTER_VKCLAMP_DIR:-${CLUSTER_SIF_PATH}/vkclamp}"
-if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ]; then
+if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ] && [ "$(uname -m)" = x86_64 ]; then  # the layer is an x86 build
     VK_BINDS="-B ${VKCLAMP_DIR}:/opt/vkclamp:ro"
     export APPTAINERENV_XDG_CONFIG_DIRS="/opt/vkclamp/conf:/etc/xdg"
 fi
@@ -148,7 +148,7 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     ${EXT_BINDS} ${VK_BINDS} \
     -B ${STAGE}/tmp:/tmp:rw \
     --nv --writable-tmpfs --containall --no-home "$SIF" \
-    bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
+    bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
 }
 
 # A segfault (exit 139) within KIT_BOOT_S of start is Kit crashing during boot (seen on Delta in libX11's getenv),

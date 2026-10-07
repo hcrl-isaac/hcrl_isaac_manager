@@ -17,6 +17,7 @@ KEY_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=")
 FLAG_GROUPS = {
     "--partition": "-p",
     "--account": "-A",
+    "--qos": "-q",
     "--ntasks": "-n",
     "--nodes": "-N",
     "--cpus-per-task": "-c",
@@ -55,6 +56,9 @@ def flag_value(text: str, flag: str) -> str:
             name, eq, val = tok.partition("=")
             if FLAG_GROUPS.get(name, name) == flag:
                 return val if eq else (parts[i + 1] if i + 1 < len(parts) else "")
+            # a short flag with its value attached (`-pdebug`)
+            if len(flag) == 2 and flag[1] != "-" and tok.startswith(flag) and len(tok) > 2 and not eq:
+                return tok[2:]
     return ""
 
 
