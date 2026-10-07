@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 RES_DIR = Path(__file__).resolve().parent
 MANAGER_DIR = RES_DIR.parents[2]
-# where per-user overrides lived before `just res` moved under scripts/cluster
-OLD_LOCAL_TOML = MANAGER_DIR / "scripts" / "compute" / "compute.local.toml"
 
 
 def _cluster_config_dir() -> Path:
@@ -93,11 +90,7 @@ def slurm_pools() -> list[Pool]:
 
 def load_config() -> dict:
     """compute.toml merged with compute.local.toml."""
-    local = RES_DIR / "compute.local.toml"
-    if not local.exists() and OLD_LOCAL_TOML.exists():
-        print(f"[res] reading {OLD_LOCAL_TOML}: move it to {local}", file=sys.stderr)
-        local = OLD_LOCAL_TOML
-    return _merge(_read_toml(RES_DIR / "compute.toml"), _read_toml(local))
+    return _merge(_read_toml(RES_DIR / "compute.toml"), _read_toml(RES_DIR / "compute.local.toml"))
 
 
 def load_pools() -> list[Pool]:
