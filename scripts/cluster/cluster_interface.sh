@@ -50,6 +50,48 @@ push_sif() {
     rsync -rlptvh --info=progress2 -e "ssh ${SSH_OPTS[*]}" "$SIF_PATH" "${CLUSTER_LOGIN}:${CLUSTER_SIF_PATH}/"
 }
 
+# Build the .sif on the cluster itself, for a profile whose nodes are not x86 (CLUSTER_ARCH=arm64): upload the
+# recipe (hcrl-isaac.def and the files it copies) next to the .sif and run `apptainer build --fakeroot` in a batch
+# job with the profile's partition and account, waiting for it. The new .sif replaces the old one only once built.
+build_remote_sif() {
+    source_cluster_env
+    local build="${CLUSTER_SIF_PATH}/build-${IMAGE_NAME}" submit="${SCRIPT_DIR}/config/${CLUSTER}/submit_job_slurm.sh"
+    local part acct base dockerfile="${SCRIPT_DIR}/../docker/Dockerfile"
+    # the same base image as the docker build, from its ARGs
+    base="$(sed -nE 's/^ARG ISAACSIM_BASE_IMAGE=(.+)/\1/p' "$dockerfile"):$(sed -nE 's/^ARG ISAACSIM_VERSION=(.+)/\1/p' "$dockerfile")"
+    part="$(grep -oE '^#SBATCH +(-p|--partition)[= ]+[^ ]+' "$submit" | head -1 | sed -E 's/.*[= ]//')"
+    acct="$(grep -oE '^#SBATCH +(-A|--account)[= ]+[^ ]+' "$submit" | head -1 | sed -E 's/.*[= ]//')"
+    ensure_ssh_master
+    echo "[cluster] uploading the ${CLUSTER_ARCH} recipe to ${CLUSTER_LOGIN}:${build}"
+    ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "mkdir -p '${build}'"
+    rsync -tv -e "ssh ${SSH_OPTS[*]}" "${SCRIPT_DIR}/hcrl-isaac.def" \
+        "${SCRIPT_DIR}/../docker/requirements.workspace.txt" "${SCRIPT_DIR}/../docker/constraints.workspace.txt" \
+        "${SCRIPT_DIR}/../docker/install-git-lfs.sh" "${SCRIPT_DIR}/../docker/entrypoint.sh" "${CLUSTER_LOGIN}:${build}/"
+    # layers are cached on scratch (a .sif build pulls ~10 GB) and unpacked on the node's own disk
+    local job="#!/bin/bash
+set -e
+${CLUSTER_MODULE_LOAD:+module load ${CLUSTER_MODULE_LOAD}}
+export APPTAINER_CACHEDIR=\"\${SCRATCH:-${build}}/apptainer-cache\" APPTAINER_TMPDIR=\"\${TMPDIR:-/tmp}\"
+# site binds and preloads (TACC's XALT) target paths the image under construction lacks, failing %post
+unset SINGULARITY_BINDPATH APPTAINER_BINDPATH SINGULARITYENV_LD_PRELOAD APPTAINERENV_LD_PRELOAD
+cd '${build}'
+uname -m; apptainer --version
+# the recipe starts from a pulled base (a docker bootstrap loses the image's hard-linked files when unprivileged)
+if [ \"\$(cat isaac-sim-base.ref 2>/dev/null)\" != '${base}' ]; then
+    apptainer pull --force isaac-sim-base.sif 'docker://${base}' && echo '${base}' > isaac-sim-base.ref
+fi
+apptainer build --fakeroot --force ${IMAGE_NAME}.sif.partial hcrl-isaac.def
+mv -f ${IMAGE_NAME}.sif.partial '${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif'
+echo \"[cluster] built ${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif\""
+    local opts="-N 1 -t ${CLUSTER_BUILD_TIME:-02:00:00} -J ${IMAGE_NAME}-build -o '${build}/build-%j.log' --wait"
+    opts+="${part:+ -p ${part}}${acct:+ -A ${acct}}"
+    echo "[cluster] building on a ${part:-default} node (sbatch ${opts}); log: ${build}/build-<job>.log"
+    local rc=0
+    printf '%s\n' "$job" | ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "sbatch ${opts}" || rc=$?  # the job's exit status
+    ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "tail -5 \$(ls -t '${build}'/build-*.log | head -1)"
+    [ "$rc" -eq 0 ] || { echo "[ERROR] the build job failed (exit ${rc}); its log is above" >&2; exit "$rc"; }
+}
+
 # Submit a batch job on the login node: the cluster's submit_job_slurm.sh holds its #SBATCH config and
 # runs scripts/cluster/run_singularity.sh in the shared hcrl-isaac.sif.
 submit_job() {
@@ -94,6 +136,16 @@ cmd_job() {
 cmd="${1:-help}"
 [ $# -gt 0 ] && shift || true
 
+# a profile with CLUSTER_ARCH other than amd64 builds its .sif on the cluster (`setup`), never from this machine
+ARCH=""
+[ -f "$CLUSTER_ENV_FILE" ] && ARCH="$(bash -c 'source "$1" >/dev/null 2>&1; printf %s "${CLUSTER_ARCH:-}"' _ "$CLUSTER_ENV_FILE")"
+case "${cmd}:${ARCH:-amd64}" in
+    *:amd64) ;;
+    setup:*) build_remote_sif; exit ;;
+    build:* | push:* | repush:*)
+        echo "[ERROR] ${CLUSTER} is ${ARCH}: its .sif is built on the cluster by 'setup', not here" >&2; exit 1 ;;
+esac
+
 case "$cmd" in
     add)         "${SCRIPT_DIR}/add_cluster.sh" "$@" ;;
     build)       build_sif ;;
@@ -106,7 +158,7 @@ case "$cmd" in
     develop)     exec env CLUSTER="$CLUSTER" "${SCRIPT_DIR}/cluster_dev/cluster_dev.sh" "$@" ;;
     -h | --help | help)
         echo "usage: CLUSTER=<name> just cluster [<name>] <command> [args]"
-        echo "  setup         build the shared .sif and rsync it to the cluster"
+        echo "  setup         build the shared .sif and rsync it to the cluster (CLUSTER_ARCH=arm64: build it there)"
         echo "  build         build the .sif from the shared docker image (no push)"
         echo "  push/repush   rsync the built .sif to the cluster (reuses the SSH master; no 2FA)"
         echo "  add [--update] [name]  create or regenerate your profile (scripts/cluster/config/<name>, gitignored)"
