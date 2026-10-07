@@ -178,6 +178,13 @@ rsync_code() {
         [ "$dest" = "$REMOTE_ISAACLAB_DIR" ] || [ "$(basename "$cfg")" = "$CLUSTER" ] || continue
         [ -f "${cfg}.rsync-exclude" ] && extra_excludes+=(--exclude-from="${cfg}.rsync-exclude")
     done
+    # A fresh profile's workspace may not exist yet, nor its parent (rsync creates only the last level). A dry run
+    # leaves the remote alone, and a created directory is named, so a mistyped path shows.
+    if [[ " $* " != *" -n "* ]]; then
+        on_login "[ -d '${REMOTE_ISAACLAB_DIR}' ] || { mkdir -p '${REMOTE_ISAACLAB_DIR}' && \
+            echo '[cluster_dev] created ${REMOTE_ISAACLAB_DIR}'; }" || {
+            err "cannot create ${REMOTE_ISAACLAB_DIR} on the remote"; return 1; }
+    fi
     # resources/* repos that exist only on the remote (cluster-only forks, or retired here with only
     # worktrees/ left) are never deleted.
     remote_only="$(on_login "[ ! -d '${REMOTE_ISAACLAB_DIR}/resources' ] || ls -1 '${REMOTE_ISAACLAB_DIR}/resources'")" || {
