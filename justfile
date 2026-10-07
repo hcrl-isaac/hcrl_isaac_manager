@@ -149,6 +149,12 @@ cluster *args:
 res *args:
     @python3 scripts/compute/res.py "$@"
 
+# Isaac Lab 3.0 training on a cluster's GPUs (scripts/isaac3/horizon/train.sh; default horizon, 4 GPUs, torchrun):
+# options, then `--` and the train.py args, e.g. `just isaac3-train --gpus 4 -- --task hcrl/T1-Velocity-v0 physics=newton_mjwarp`.
+[positional-arguments]
+isaac3-train *args:
+    @bash scripts/isaac3/horizon/train.sh "$@"
+
 # Ray interface (scripts/ray/): `setup`, `job`, `bench`, `push`, `list`, `logs`, `stop`; bare shows a picker.
 [positional-arguments]
 ray *args:
