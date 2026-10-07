@@ -24,7 +24,7 @@ printf 'Learning iteration 5/4000\nOSError: [Errno 122] Disk quota exceeded\n' >
 out="$(watch "$T/quota.log")"; rc=$?
 check "disk quota is FAILED" '[ "$rc" = 1 ] && case $out in *FAILED*) true ;; *) false ;; esac'
 
-# srun answering an internet scanner on its port while the step trains on (Stampede3 amd-rtx, 2026-10-06)
+# srun answering an internet scanner on its port while the step trains on (Stampede3 amd-rtx)
 scanner='srun: error: unpack_header: protocol_version 65363 not supported
 srun: error: destroy_forward: no init
 srun: error: slurm_unpack_received_msg: [63.146.94.167.censys-scanner.com:13610] Incompatible versions of client and server code
