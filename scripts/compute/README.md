@@ -94,14 +94,24 @@ just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --d
   `--any` stays on the local and ssh pools unless `--pool` names a cluster. `ray` pools are refused (use
   `just ray job`).
 - On a SLURM card (a running job of yours, normally a held dev sentinel) the script runs in the container through a
-  `develop exec` step on that job, with the job's partition and account. The stage dir is
+  `develop exec` step on that job, with the job's own partition, account and GPU request. The stage dir is
   `<cluster checkout>/artifacts/res-eval/<id>`, which the container sees as `/workspace/artifacts/res-eval/<id>`; the
   `--wt` repos are staged over the cluster's shared checkout as a code tree (`develop stage`), and the rest run from
-  that shared checkout as `develop sync` left it (the MANIFEST says which). The card is pinned by its GPU UUID, and a
-  step that cannot see it fails with status 98 (on Delta another step of the job may hold the job's GPUs). A `<repo>:`
-  script runs from its staged repo, a copied script from its stage dir. The container hides its processes from the
-  node, so a run stops when `<stage>/stop` appears and writes its exit status to `<stage>/status`; `--detach` prints
-  both commands and logs the step's wrapper to `<stage>/wrapper.log`.
+  that shared checkout as `develop sync` left it (the MANIFEST gives each one's commit). The card is pinned by its GPU
+  UUID, and a step that cannot see it fails with status 98 (on Delta a step holding the job's GPUs can starve
+  another). The run gets its own `TMPDIR` and per-card Kit caches, since `/tmp` and the caches are per-job binds
+  every step of the sentinel shares. A script runs from the per-run work dir `artifacts/res-eval/work/<id>`.
+- The container hides a SLURM run's processes from the node, so it reports through files in its stage dir:
+  `heartbeat` (touched every 2 s while it runs), `stop` (create it to end the run: TERM, then KILL after 10 s) and
+  `status` (its exit status, written once the card's processes are gone or after 60 s; a Python traceback with exit
+  0 counts as 1). `--detach` waits for the first heartbeat, prints the follow and stop commands over the SSH
+  master, and logs the step's wrapper to `<stage>/wrapper.log`. A detached run that does not start within 5 min is
+  stopped and its credentials removed. Each new SLURM stage prunes earlier ones: credentials of runs that never
+  started after 30 min, and stages and work dirs older than 7 days whose run is not alive; `res-eval` code trees
+  older than 14 days that no running step uses are removed when a newer one is staged.
+- From a manager worktree, `res` and `develop stage|exec|status|tail` use the main checkout's cluster profiles (a
+  worktree has none of its own); `develop start|sync|stop|kill` refuse there, since they change the shared sentinel
+  state.
 - `--checkpoint [NAME=]<ref>` (repeatable) exports the checkpoint's path on the target as `NAME` (default
   `CHECKPOINT`). A ref is a local path, a W&B run URL or `entity/project/run_id`, with `@<iter>` for
   `model_<iter>.pt` (default: the run's latest). W&B checkpoints download on this machine through the same code as

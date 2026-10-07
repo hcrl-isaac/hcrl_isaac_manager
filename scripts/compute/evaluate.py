@@ -33,8 +33,9 @@ from probe import MASTER_OPTS, SSH_OPTS
 MANAGER_DIR = COMPUTE_DIR.parents[1]
 CLUSTER_DEV = MANAGER_DIR / "scripts" / "cluster" / "cluster_dev" / "cluster_dev.sh"
 SUPPORTED = ("local", "ssh", "slurm")
-# where node_exec binds the cluster checkout's artifacts/ inside the container
+# where node_exec binds the cluster checkout's artifacts/ inside the container, and the container's interpreter
 CONTAINER_ARTIFACTS = "/workspace/artifacts"
+CONTAINER_PYTHON = "/isaac-sim/python.sh"
 CKPT_CACHE = Path.home() / ".cache" / "hcrl_res" / "checkpoints"
 TRACEBACK = "Traceback (most recent call last)"
 TIMED_OUT = 124
@@ -334,24 +335,38 @@ def cluster_dev_cmd(profile: str, job: str, *args: str) -> tuple[list[str], dict
     return ["bash", str(CLUSTER_DEV), *args], env
 
 
-def stage_tree(profile: str, code: dict[str, str]) -> str:
+TREE_KEEP_DAYS = 14  # an unused res-eval tree older than this is removed when a newer one is staged
+
+
+def stage_tree(t: Target, code: dict[str, str]) -> str:
     """Stage ``code`` on the cluster as a code tree (deduplicated against earlier trees) and return its id.
 
+    Earlier ``res-eval`` trees older than ``TREE_KEEP_DAYS`` that no running step marks in use are removed.
+
     Args:
-        profile: Cluster profile name.
+        t: The SLURM target.
         code: Repo name -> local checkout or worktree path.
 
     Returns:
         The tree id (``res-eval-<fingerprint>``) for ``develop exec --tree``.
     """
     specs = [f"{repo}={src}" for repo, src in code.items() if repo != "IsaacLab" and not repo.endswith("_robots")]
-    cmd, env = cluster_dev_cmd(profile, "", "stage", "res-eval", *specs)
-    print(f"[res] staging {', '.join(code)} on {profile} as a code tree", file=sys.stderr)
+    cmd, env = cluster_dev_cmd(t.pool, "", "stage", "res-eval", *specs)
+    print(f"[res] staging {', '.join(code)} on {t.pool} as a code tree", file=sys.stderr)
     res = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, text=True)
     found = re.search(r"--tree (\S+) --", res.stdout)
     if res.returncode != 0 or not found:
-        sys.exit(f"[res] could not stage the code on {profile} (develop stage exited {res.returncode})")
-    return found.group(1)
+        sys.exit(f"[res] could not stage the code on {t.pool} (develop stage exited {res.returncode})")
+    tree = found.group(1)
+    q = shlex.quote
+    trees = q(profile_value(t.pool, "CLUSTER_TREES_DIR") or f"{t.workspace}/trees")
+    prune = (
+        f'for d in {trees}/res-eval-*; do [ "$(basename "$d")" = {q(tree)} ] && continue; '
+        f'[ -n "$(find "$d" -maxdepth 0 -mtime +{TREE_KEEP_DAYS})" ] || continue; '
+        '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; chmod -R u+w "$d" && rm -rf "$d"; done'
+    )
+    subprocess.run(["ssh", *t.ssh_opts, t.ssh, prune], capture_output=True)
+    return tree
 
 
 def container_path(t: Target, path: str) -> str:
@@ -361,7 +376,13 @@ def container_path(t: Target, path: str) -> str:
     return path
 
 
-def slurm_runner_script(t: Target, stage: str, script: str, env_names: list[str], cwd: str) -> str:
+HEARTBEAT_S = 2  # a SLURM runner touches <stage>/heartbeat this often while its script runs
+DRAIN_S = 60  # how long a SLURM runner waits for the card's processes to go after its script ends
+START_S = 300  # how long a detached SLURM run may take to reach its runner (step start, container boot)
+STOP_WAIT_S = 90  # how long a stop waits for the runner's status: its TERM/KILL (~10 s) plus the drain
+
+
+def slurm_runner_script(t: Target, stage: str, script: str, env_names: list[str], cwd: str, python: str = "") -> str:
     """The bash that runs inside the container on a SLURM node: pin by UUID, run, stop on request, record status.
 
     Args:
@@ -370,42 +391,71 @@ def slurm_runner_script(t: Target, stage: str, script: str, env_names: list[str]
         script: The script's path in the container.
         env_names: Names of the exported variables, for the log.
         cwd: Directory to run the script from, in the container.
+        python: The interpreter (default: ``CONTAINER_PYTHON``).
 
     Returns:
-        The run.sh text. The container hides its processes from the node, so ``<stage>/stop`` asks the run to
-        end and ``<stage>/status`` records how it did.
+        The run.sh text. The container hides its processes from the node, so ``<stage>/heartbeat`` shows the run
+        alive, ``<stage>/stop`` asks it to end, and ``<stage>/status`` holds its exit status once the card drained.
     """
     q = shlex.quote
+    python = python or CONTAINER_PYTHON
+    s = {k: q(f"{stage}/{k}") for k in ("log", "env", "status", "stop", "heartbeat", "MANIFEST", "tmp")}
+    cache = q(f"{os.path.dirname(stage)}/cache/{t.host}-gpu{t.gpu}")  # one lease per card, so per-card caches
+    apps = f"nvidia-smi -i {q(t.uuid)} --query-compute-apps=pid --format=csv,noheader 2>/dev/null"
     return f"""#!/usr/bin/env bash
 set -u
-exec > >(tee -a {q(stage + "/log")}) 2>&1
-set -a; source {q(stage + "/env")}; set +a
-rm -f {q(stage + "/env")}  # credentials stay in this process's environment only
+exec > >(tee -a {s["log"]}) 2>&1
+set -a; source {s["env"]}; set +a
+rm -f {s["env"]}  # credentials stay in this process's environment only
+touch {s["heartbeat"]}
 if ! nvidia-smi -i {q(t.uuid)} > /dev/null 2>&1; then
     echo "[res] card {t.uuid} ({t.host}:gpu{t.gpu}) is not visible in this step; another step of job {t.job} may hold it"
-    echo 98 > {q(stage + "/status")}; exit 98
+    echo 98 > {s["status"]}; exit 98
 fi
 export CUDA_VISIBLE_DEVICES={q(t.uuid)} RES_EVAL_DEVICE=cuda:0 PYTHONUNBUFFERED=1
-cat {q(stage + "/MANIFEST")}
+# /tmp and the Kit caches are per-job binds every step of the sentinel shares
+export TMPDIR={s["tmp"]} XDG_CACHE_HOME={cache}/xdg OMNI_CACHE_DIR={cache}/omni
+mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR"
+cat {s["MANIFEST"]}
 echo "[res] {t.host}:gpu{t.gpu} job {t.job} (uuid) env: {" ".join(env_names) or "-"}"
-cd {q(cwd)} || {{ echo 97 > {q(stage + "/status")}; exit 97; }}
-setsid /isaac-sim/python.sh {q(script)} "$@" &
+mkdir -p {q(cwd)} && cd {q(cwd)} || {{ echo 97 > {s["status"]}; exit 97; }}
+setsid {q(python)} {q(script)} "$@" &
 child=$!
-trap 'kill -TERM -- -$child 2>/dev/null' TERM INT HUP
+stop_child() {{
+    kill -TERM -- -"$child" 2>/dev/null
+    for _ in $(seq 20); do kill -0 "$child" 2>/dev/null || return 0; sleep 0.5; done
+    kill -KILL -- -"$child" 2>/dev/null
+}}
+trap stop_child TERM INT HUP
 while kill -0 "$child" 2>/dev/null; do
-    if [ -e {q(stage + "/stop")} ]; then
-        echo "[res] stop requested"
-        kill -TERM -- -"$child" 2>/dev/null
-        for _ in $(seq 20); do kill -0 "$child" 2>/dev/null || break; sleep 0.5; done
-        kill -KILL -- -"$child" 2>/dev/null
-        break
-    fi
-    sleep 2
+    touch {s["heartbeat"]}
+    if [ -e {s["stop"]} ]; then echo "[res] stop requested"; stop_child; break; fi
+    sleep {HEARTBEAT_S}
 done
 wait "$child"; rc=$?
-echo "$rc" > {q(stage + "/status")}
+if [ "$rc" = 0 ] && grep -q "{TRACEBACK}" {s["log"]}; then
+    echo "[res] the script exited 0 but printed a Python traceback; reporting failure"; rc=1
+fi
+for _ in $(seq {DRAIN_S}); do [ -z "$({apps})" ] && break; touch {s["heartbeat"]}; sleep 1; done
+[ -z "$({apps})" ] || echo "[res] the card still has processes {DRAIN_S} s after the run ended"
+echo "$rc" > {s["status"]}
 exit "$rc"
 """
+
+
+STAGE_KEEP_DAYS = 7  # a finished or dead SLURM stage (log, status) is kept this long
+
+
+def _prune_stages(root: str) -> str:
+    """Shell that drops a stage's credentials once it is 30 min old without ever starting, and removes stages and
+    work dirs older than ``STAGE_KEEP_DAYS`` whose run is not alive (no heartbeat in the last hour)."""
+    q = shlex.quote
+    return (
+        f'for d in {q(root)}/*/ {q(root)}/work/*/; do d="${{d%/}}"; case "$(basename "$d")" in cache|work) continue;; '
+        'esac; [ -n "$(find "$d" -maxdepth 0 -mmin +30)" ] || continue; [ -e "$d/heartbeat" ] || rm -f "$d/env"; '
+        '[ -n "$(find "$d" -maxdepth 1 -name heartbeat -mmin -60)" ] && continue; '
+        f'[ -n "$(find "$d" -maxdepth 0 -mtime +{STAGE_KEEP_DAYS})" ] && rm -rf "$d"; done; true'
+    )
 
 
 class Stage:
@@ -431,8 +481,10 @@ class Stage:
         return self._ssh(cmd).returncode
 
     def make(self) -> None:
-        """Create the stage dir (0700)."""
+        """Create the stage dir (0700); on SLURM, first prune earlier detached stages."""
         q = shlex.quote
+        if self.t.kind == "slurm":
+            self.sh(_prune_stages(f"{self.t.scratch}/res-eval"))
         if self.sh(f"mkdir -p -m 700 {q(self.dir)} && mkdir -p {q(self.dir)}/ckpt {q(self.dir)}/resources") != 0:
             sys.exit(f"[res] cannot create {self.dir} on {self.t.host}")
 
@@ -550,11 +602,27 @@ class Stage:
             return list(code.values()), [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
         if self.t.kind == "slurm":
             # only worktree-set repos are staged; the rest run from the cluster's shared checkout (`develop sync`)
-            worktrees = {repo: src for repo, src in code.items() if f"{os.sep}worktrees{os.sep}" in src}
-            self.tree = stage_tree(self.t.pool, worktrees) if worktrees else ""
+            main = os.path.join(local_workspace(), "resources")
+            staged = {
+                repo: src
+                for repo, src in code.items()
+                if os.path.realpath(src) != os.path.realpath(os.path.join(main, repo))
+            }
+            self.tree = stage_tree(self.t, staged) if staged else ""
             shared = f"{self.t.workspace}/resources"
+            q = shlex.quote
+            heads = self._ssh(
+                " ".join(
+                    f"echo {q(r)} $(git -C {q(f'{shared}/{r}')} rev-parse --short HEAD 2>/dev/null);" for r in code
+                ),
+                capture_output=True,
+                text=True,
+            ).stdout
+            commit = dict(line.split()[:2] for line in heads.splitlines() if len(line.split()) >= 2)
             lines = [
-                f"{repo} {src} {_describe(src)} -> tree {self.tree}" if repo in worktrees else f"{repo} {shared}/{repo}"
+                f"{repo} {src} {_describe(src)} -> tree {self.tree}"
+                if repo in staged
+                else f"{repo} {shared}/{repo} {commit.get(repo, '(commit unknown)')} (shared checkout)"
                 for repo, src in code.items()
             ]
             return [f"/workspace/ext/{repo}" for repo in code], lines
@@ -624,8 +692,13 @@ class Stage:
         q = shlex.quote
         if self.t.kind == "slurm":
             cmd, env = self._exec_cmd(argv, "--detach", "--log", f"{self.dir}/wrapper.log")
-            if subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL).returncode != 0:
-                sys.exit(f"[res] could not start the run on job {self.t.job}")
+            started = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL).returncode == 0
+            beat = f"for _ in $(seq {START_S}); do [ -e {q(self.dir)}/heartbeat ] && exit 0; sleep 1; done; exit 1"
+            if not started or self.sh(beat) != 0:
+                self.sh(f"touch {q(self.dir)}/stop")  # a step that starts after all ends at once
+                sys.exit(
+                    f"[res] the run did not start on job {self.t.job} within {START_S} s; see {self.dir}/wrapper.log"
+                )
             return
         if self.t.kind == "local":
             proc = subprocess.Popen(
@@ -651,10 +724,12 @@ class Stage:
     def kill(self) -> bool:
         """Kill the runner's process group on the target (TERM, then KILL) and report whether it is gone."""
         if self.t.kind == "slurm":
-            # the container hides the run from the node: ask its runner to stop and wait for its status
+            # the container hides the run from the node: ask its runner to stop and wait for its status, which it
+            # writes once the card drained; a runner that never started has nothing to stop
             q = shlex.quote
-            wait = f"for _ in $(seq 40); do [ -f {q(self.dir)}/status ] && exit 0; sleep 1; done; exit 1"
-            self.dead = self.sh(f"touch {q(self.dir)}/stop && {{ {wait}; }}") == 0
+            d = q(self.dir)
+            wait = f"[ -e {d}/heartbeat ] || exit 0; for _ in $(seq {STOP_WAIT_S}); do [ -f {d}/status ] && exit 0; sleep 1; done; exit 1"
+            self.dead = self.sh(f"touch {d}/stop && {{ {wait}; }}") == 0
             if self.proc is not None and self.proc.poll() is None:
                 _kill_local_group(self.proc)
             return self.dead
@@ -770,7 +845,9 @@ def slurm_profile(report_pool: str, job: str, pools: list[Pool]) -> Pool:
         capture_output=True,
         text=True,
     )
-    partition = res.stdout.strip().splitlines()[-1].strip() if res.stdout.strip() else ""
+    if res.returncode != 0 or not res.stdout.strip():
+        sys.exit(f"[res] cannot read job {job}'s partition on {login}: {(res.stderr.strip() or 'no such job')[:160]}")
+    partition = res.stdout.strip().splitlines()[-1].strip()
     return next((p for p in profiles if p.name == partition), profiles[0])
 
 
@@ -864,12 +941,21 @@ def _repo_script(spec: str, wt: str) -> tuple[str, str]:
 def _print_detached(stage: Stage, taken: ls.Lease | None) -> None:
     """How to follow, stop and release a detached run."""
     q = shlex.quote
-    on = (lambda c: f"ssh {stage.t.ssh} {q(c)}") if stage.t.kind != "local" else (lambda c: c)
+    opts = " ".join(q(o) for o in stage.t.ssh_opts) if stage.t.kind == "slurm" else ""
+    on = (
+        (lambda c: f"ssh {opts + ' ' if opts else ''}{stage.t.ssh} {q(c)}")
+        if stage.t.kind != "local"
+        else (lambda c: c)
+    )
     where = f"{stage.t.host}:gpu{stage.t.gpu}" + (f" of job {stage.t.job}" if stage.t.job else "")
     print(f"[res] started detached on {where} (stage {stage.dir})", file=sys.stderr)
     print(f"[res] follow: {on('tail -f ' + q(stage.dir + '/log'))}", file=sys.stderr)
     if stage.t.kind == "slurm":
-        print(f"[res] stop:   {on('touch ' + q(stage.dir + '/stop'))}  (exit status lands in status)", file=sys.stderr)
+        print(f"[res] stop:   {on('touch ' + q(stage.dir + '/stop'))}", file=sys.stderr)
+        print(
+            f"[res] alive while {stage.dir}/heartbeat is fresh (every {HEARTBEAT_S} s); the exit status lands in status",
+            file=sys.stderr,
+        )
     else:
         print(f"[res] stop:   {on('kill -TERM -- -$(cat ' + q(stage.dir + '/pid') + ')')}", file=sys.stderr)
     if taken is not None:
@@ -939,8 +1025,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             root = dict(zip(code, pythonpath, strict=True))[repo]
             target_script = f"{root}/{rel}"
             # snapshots are read-only and runs may be concurrent, so relative outputs (train.py's logs/) go to a
-            # writable working dir of this run's own, kept afterwards; a staged tree's repo redirects its own
-            cwd = root if t.kind == "slurm" else f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}"
+            # writable working dir of this run's own, kept afterwards
+            cwd = container_path(t, f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}")
         else:
             put = stage.put(script, os.path.basename(script), mode=0o644)
             cwd, target_script = container_path(t, stage.dir) if t.kind == "slurm" else "", container_path(t, put)

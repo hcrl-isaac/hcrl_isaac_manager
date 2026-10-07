@@ -12,8 +12,7 @@ COMPUTE_DIR = Path(__file__).resolve().parent
 
 
 def _cluster_config_dir() -> Path:
-    """This checkout's cluster profiles, or the main checkout's when this is a worktree without any (they are
-    gitignored and per user, so a worktree starts with none)."""
+    """This checkout's cluster profiles, or the main checkout's when this worktree has none (they are gitignored)."""
     own = COMPUTE_DIR.parent / "cluster" / "config"
     if any(own.glob("*/.env.cluster")):
         return own

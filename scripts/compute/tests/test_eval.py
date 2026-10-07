@@ -196,12 +196,17 @@ class SlurmTest(unittest.TestCase):
 
     def test_the_profile_named_after_the_partition_wins(self) -> None:
         pools = [Pool(n, "slurm", {"login": "u@login"}) for n in ("amd-rtx", "rtx-small", "stampede")]
-        for partition, want in (("rtx-small\n", "rtx-small"), ("skx\n", "amd-rtx"), ("", "amd-rtx")):
+        label = "stampede3 (amd-rtx, rtx-small, stampede)"
+        for partition, want in (("rtx-small\n", "rtx-small"), ("skx\n", "amd-rtx")):
             with self.subTest(partition=partition):
-                done = mock.Mock(returncode=0, stdout=partition)
+                done = mock.Mock(returncode=0, stdout=partition, stderr="")
                 with mock.patch.object(ev.subprocess, "run", return_value=done):
-                    got = ev.slurm_profile("stampede3 (amd-rtx, rtx-small, stampede)", "3566414", pools)
-                self.assertEqual(got.name, want)
+                    self.assertEqual(ev.slurm_profile(label, "3566414", pools).name, want)
+        # a job squeue cannot read is refused rather than guessed
+        gone = mock.Mock(returncode=1, stdout="", stderr="slurm_load_jobs error: Invalid job id")
+        with mock.patch.object(ev.subprocess, "run", return_value=gone), self.assertRaises(SystemExit) as cm:
+            ev.slurm_profile(label, "3566414", pools)
+        self.assertIn("Invalid job id", str(cm.exception.code))
 
     def test_runner_pins_by_uuid_and_stops_on_request(self) -> None:
         t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
@@ -215,15 +220,21 @@ class SlurmTest(unittest.TestCase):
     def test_a_staged_tree_id_is_read_from_develop_stage(self) -> None:
         out = "  robot_rl /p abc worktree 123\nRun with: just cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
         done = mock.Mock(returncode=0, stdout=out)
+        t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
         with (
             mock.patch.object(ev.subprocess, "run", return_value=done) as run,
+            mock.patch.object(ev, "profile_value", return_value=""),
             contextlib.redirect_stderr(io.StringIO()),
         ):
-            tree = ev.stage_tree("amd-rtx", {"robot_rl": "/p", "hcrl_robots": "/q", "IsaacLab": "/i"})
+            tree = ev.stage_tree(t, {"robot_rl": "/p", "hcrl_robots": "/q", "IsaacLab": "/i"})
         self.assertEqual(tree, "res-eval-0123456789")
-        cmd = run.call_args.args[0]
-        self.assertEqual(cmd[2:], ["stage", "res-eval", "robot_rl=/p"], "asset repos and IsaacLab stay shared")
-        self.assertEqual(run.call_args.kwargs["env"]["CLUSTER"], "amd-rtx")
+        [stage_call] = [c for c in run.call_args_list if c.args[0][2:3] == ["stage"]]
+        self.assertEqual(stage_call.args[0][2:], ["stage", "res-eval", "robot_rl=/p"], "asset repos stay shared")
+        self.assertEqual(stage_call.kwargs["env"]["CLUSTER"], "amd-rtx")
+        prune = run.call_args_list[-1].args[0][-1]
+        self.assertIn("/w/trees/res-eval-*", prune)
+        self.assertIn("res-eval-0123456789", prune, "the tree just staged is never pruned")
+        self.assertIn(".in-use", prune, "a tree a running step uses is never pruned")
 
 
 class LocalCodeTest(unittest.TestCase):
@@ -386,88 +397,208 @@ class SshStageTest(Isolated):
 
 
 CLUSTER_DEV_STUB = """#!/usr/bin/env bash
+# records its call, then runs the command after -- here: in the background with --detach, else in the foreground
 { echo "JOB=${DEV_JOBID:-} CLUSTER=${CLUSTER:-}"; printf '%s\\n' "$@"; } > "$CALLS"
+[ -n "${FAIL_START:-}" ] && exit 1
+detach=""; log=/dev/null
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+    case "$1" in --detach) detach=1 ;; --log) log="$2"; shift ;; esac
+    shift
+done
+shift
+[ -n "$detach" ] && { setsid nohup "$@" > "$log" 2>&1 < /dev/null & exit 0; }
+exec "$@"
+"""
+
+# the card a step can see is GPU-ab; no process is left on it after a run
+NVIDIA_SMI_STUB = """#!/usr/bin/env bash
+case " $* " in *" --query-compute-apps"*) exit 0 ;; esac
+[ "$2" = GPU-ab ]
+"""
+
+SLURM_SCRIPT = """import os, sys, time
+for k in ("CUDA_VISIBLE_DEVICES", "RES_EVAL_DEVICE", "TMPDIR", "N"):
+    print(k, os.environ.get(k, "-"))
+print("CWD", os.getcwd())
+print("PID", os.getpid(), flush=True)
+if os.environ.get("CKPT_A"):
+    print("CKPT_A_CONTENT", open(os.environ["CKPT_A"]).read())
+mode = os.environ.get("MODE", "")
+if mode == "traceback":
+    print("Traceback (most recent call last):")
+if mode == "hang":
+    time.sleep(120)
 """
 
 
 class SlurmEvalTest(Isolated):
-    """A detached run on a held sentinel's card, against a stub ssh (the login is this machine) and cluster_dev.sh."""
+    """A run on a held sentinel's card, executed here: stub ssh (the login is this machine), stub cluster_dev.sh,
+    stub nvidia-smi, and container paths equal to the stage's own."""
 
     def setUp(self) -> None:
         super().setUp()
         bin_dir = self.tmp / "bin"
         bin_dir.mkdir()
-        (bin_dir / "ssh").write_text(SSH_STUB)
-        (bin_dir / "ssh").chmod(0o755)
+        for name, text in (("ssh", SSH_STUB), ("nvidia-smi", NVIDIA_SMI_STUB), ("squeue", "#!/bin/sh\necho amd-rtx\n")):
+            (bin_dir / name).write_text(text)
+            (bin_dir / name).chmod(0o755)
         stub = self.tmp / "cluster_dev.sh"
         stub.write_text(CLUSTER_DEV_STUB)
         self.calls = self.tmp / "calls"
         self.remote = self.tmp / "cluster"
+        ws = self.tmp / "ws"
+        self.main_repo = ws / "resources" / "hcrl_isaaclab"
+        self.main_repo.mkdir(parents=True)
         self.src = self.tmp / "local" / "robot_rl" / "worktrees" / "wt"
         _git_repo(self.src)
+        self.code = {"robot_rl": str(self.src), "hcrl_isaaclab": str(self.main_repo)}
+        self.env_patch = mock.patch.dict(
+            os.environ, {"PATH": f"{bin_dir}:{os.environ['PATH']}", "CALLS": str(self.calls)}
+        )
         for p in (
-            mock.patch.dict(os.environ, {"PATH": f"{bin_dir}:{os.environ['PATH']}", "CALLS": str(self.calls)}),
+            self.env_patch,
             mock.patch.object(ev, "CLUSTER_DEV", stub),
+            mock.patch.object(ev, "CONTAINER_ARTIFACTS", str(self.remote / "artifacts")),
+            mock.patch.object(ev, "CONTAINER_PYTHON", sys.executable),
+            mock.patch.object(ev, "START_S", 20),
             mock.patch.object(ev, "profile_value", return_value=str(self.remote)),
             mock.patch.object(ev, "stage_tree", return_value="res-eval-0123456789"),
-            mock.patch.object(ev, "local_code", return_value={"robot_rl": str(self.src), "hcrl_isaaclab": "/ws/x"}),
+            mock.patch.object(ev, "local_workspace", return_value=str(ws)),
+            mock.patch.object(ev, "local_code", side_effect=lambda *_: dict(self.code)),
         ):
             p.start()
             self.patches.append(p)
         self.pool = Pool("amd-rtx", "slurm", {"login": "u@login"})
-        card = Card("stampede3 (amd-rtx)", "c571-003", 3, "RTX", 0, 97000, 0, "free", job="3557743", uuid="GPU-ab")
-        self.report = Report("stampede3 (amd-rtx)", "slurm", [card], owner="u")
         self.script = self.tmp / "census.py"
-        self.script.write_text("print('hi')\n")
+        self.script.write_text(SLURM_SCRIPT)
         self.ckpt = self.tmp / "model_5.pt"
         self.ckpt.write_text("weights")
+        self.uuid = "GPU-ab"
 
     def _claim(self, args: argparse.Namespace, pools: list) -> tuple:
-        with mock.patch.object(res, "probe_all", return_value=[self.report]):
+        card = Card("stampede3 (amd-rtx)", "c571-003", 3, "RTX", 0, 97000, 0, "free", job="3557743", uuid=self.uuid)
+        with mock.patch.object(res, "probe_all", return_value=[Report("stampede3 (amd-rtx)", "slurm", [card])]):
             return res.claim(args, pools)
 
-    def _detached(self) -> None:
+    def _eval(self, *argv: str) -> tuple[int, str]:
         parser = argparse.ArgumentParser()
         ev.add_parser(parser.add_subparsers(dest="cmd"))
-        argv = ["eval", str(self.script), "--holder", "me", "--on", "c571-003:3", "--detach"]
-        head, tail = ev.split_script_args([*argv, "--checkpoint", f"CKPT_A={self.ckpt}", "--env", "N=2", "--", "-x"])
+        base = ["eval", str(self.script), "--holder", "me", "--on", "c571-003:3"]
+        head, tail = ev.split_script_args([*base, "--checkpoint", f"CKPT_A={self.ckpt}", *argv])
         args = parser.parse_args(head)
         args.script_args = tail
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as cm:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as cm:
             ev.cmd_eval(args, [self.pool], self._claim)
-        self.assertEqual(cm.exception.code, 0)
+        return cm.exception.code, out.getvalue() + err.getvalue()
 
-    def test_without_worktrees_the_run_uses_the_shared_checkout(self) -> None:
-        with mock.patch.object(ev, "local_code", return_value={"hcrl_isaaclab": "/ws/resources/hcrl_isaaclab"}):
-            self._detached()
-        ev.stage_tree.assert_not_called()
-        self.assertNotIn("--tree", self.calls.read_text().splitlines())
-
-    def test_detached_run_goes_through_develop_exec_on_the_sentinel(self) -> None:
-        self._detached()
-        ev.stage_tree.assert_called_once_with("amd-rtx", {"robot_rl": str(self.src)})
+    def _leases(self) -> list:
         with ls.locked_store() as leases:
-            self.assertEqual([x.card for x in leases], ["c571-003:3 (job 3557743)"], "the lease stays held")
-        [stage] = list((self.remote / "artifacts" / "res-eval").iterdir())
-        inside = f"/workspace/artifacts/res-eval/{stage.name}"
-        self.assertEqual((stage / "ckpt" / "CKPT_A" / "model_5.pt").read_text(), "weights")
-        self.assertIn(f"CKPT_A={inside}/ckpt/CKPT_A/model_5.pt", (stage / "env").read_text())
-        self.assertIn("CUDA_VISIBLE_DEVICES=GPU-ab", (stage / "run.sh").read_text())
-        self.assertIn(f"/isaac-sim/python.sh {inside}/census.py", (stage / "run.sh").read_text())
+            return list(leases)
+
+    def _stage(self) -> Path:
+        root = self.remote / "artifacts" / "res-eval"
+        [stage] = [p for p in root.iterdir() if p.name not in ("cache", "work")]
+        return stage
+
+    def _status(self, stage: Path) -> str:
+        for _ in range(200):
+            if (stage / "status").exists():
+                return (stage / "status").read_text().strip()
+            time.sleep(0.1)
+        self.fail(f"no status in {stage}: {(stage / 'log').read_text() if (stage / 'log').exists() else '-'}")
+
+    def test_detached_run_executes_on_the_card_and_keeps_its_lease(self) -> None:
+        rc, out = self._eval("--detach", "--env", "N=2", "--", "-x")
+        self.assertEqual(rc, 0, out)
+        stage = self._stage()
+        self.assertEqual(self._status(stage), "0")
+        log = (stage / "log").read_text()
+        self.assertIn("CUDA_VISIBLE_DEVICES GPU-ab", log)
+        self.assertIn("CKPT_A_CONTENT weights", log)
+        self.assertIn(f"TMPDIR {stage}/tmp", log, "a per-run TMPDIR, not the job's shared /tmp")
+        self.assertIn(f"CWD {stage}", log)
+        self.assertFalse((stage / "env").exists(), "the runner removes the credentials file")
+        self.assertTrue((stage / "heartbeat").exists())
+        self.assertEqual([x.card for x in self._leases()], ["c571-003:3 (job 3557743)"], "a detached run keeps it")
         calls = self.calls.read_text().splitlines()
         self.assertEqual(calls[0], "JOB=3557743 CLUSTER=amd-rtx")
-        self.assertEqual(calls[1:], [
-            "exec", "--tree", "res-eval-0123456789", "--detach", "--log", f"{stage}/wrapper.log",
-            "--", "bash", f"{inside}/run.sh", "-x",
-        ])  # fmt: skip
+        self.assertEqual(calls[1:6], ["exec", "--tree", "res-eval-0123456789", "--detach", "--log"])
+        self.assertIn("ControlPath", out, "the printed stop command goes over the master")
+        ev.stage_tree.assert_called_once()
+        self.assertEqual(ev.stage_tree.call_args.args[1], {"robot_rl": str(self.src)}, "only the --wt repo is staged")
 
-    def test_stop_waits_for_the_runner_status(self) -> None:
-        t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", str(self.remote), str(self.remote / "artifacts"))
-        stage = ev.Stage(t)
-        stage.make()
-        Path(stage.dir, "status").write_text("143\n")  # the runner answers the stop request
-        self.assertTrue(stage.kill())
-        self.assertTrue(Path(stage.dir, "stop").exists())
+    def test_without_worktrees_the_run_uses_the_shared_checkout(self) -> None:
+        self.code = {"hcrl_isaaclab": str(self.main_repo)}
+        rc, out = self._eval("--detach")
+        self.assertEqual(rc, 0, out)
+        self._status(self._stage())
+        ev.stage_tree.assert_not_called()
+        self.assertNotIn("--tree", self.calls.read_text().splitlines())
+        self.assertIn("(shared checkout)", (self._stage() / "MANIFEST").read_text())
+
+    def test_foreground_run_streams_releases_and_cleans_up(self) -> None:
+        rc, out = self._eval("--env", "N=7")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("CUDA_VISIBLE_DEVICES GPU-ab", out)
+        self.assertIn("N 7", out)
+        self.assertEqual(self._leases(), [])
+        self.assertEqual([p for p in (self.remote / "artifacts" / "res-eval").iterdir() if p.name != "cache"], [])
+
+    def test_a_timeout_stops_the_run_through_its_stop_file(self) -> None:
+        rc, out = self._eval("--env", "MODE=hang", "--timeout", "3s", "--stall", "0s")
+        self.assertEqual(rc, ev.TIMED_OUT, out)
+        self.assertIn("killed the run (gone)", out)
+        pid = int(next(line.split()[1] for line in out.splitlines() if line.startswith("PID ")))
+        self.assertFalse(_alive(pid), "the script's process group is gone")
+        self.assertEqual(self._leases(), [])
+
+    def test_a_traceback_with_exit_zero_is_a_failed_status(self) -> None:
+        rc, out = self._eval("--detach", "--env", "MODE=traceback")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self._status(self._stage()), "1")
+
+    def test_a_card_the_step_cannot_see_fails_fast(self) -> None:
+        self.uuid = "GPU-elsewhere"
+        rc, out = self._eval()
+        self.assertEqual(rc, 98, out)
+        self.assertIn("is not visible in this step", out)
+        self.assertEqual(self._leases(), [])
+
+    def test_a_run_that_never_starts_releases_and_drops_the_credentials(self) -> None:
+        with mock.patch.dict(os.environ, {"FAIL_START": "1"}), mock.patch.object(ev, "START_S", 1):
+            rc, _ = self._eval("--detach")
+        self.assertIn("did not start", str(rc))
+        self.assertEqual(self._leases(), [])
+        stage = self._stage()
+        self.assertFalse((stage / "env").exists(), "credentials removed when the step never ran")
+        self.assertTrue((stage / "stop").exists(), "a late start ends at once")
+
+
+class PruneStagesTest(unittest.TestCase):
+    def test_old_credentials_and_dead_stages_go_live_ones_stay(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        hour, week = time.time() - 3600, time.time() - 10 * 86400
+
+        def stage(name: str, files: dict[str, float], age: float) -> Path:
+            d = root / name
+            d.mkdir(parents=True)
+            for f, when in files.items():
+                (d / f).write_text("x")
+                os.utime(d / f, (when, when))
+            os.utime(d, (age, age))
+            return d
+
+        unstarted = stage("unstarted", {"env": hour}, hour)
+        finished = stage("finished", {"status": week, "heartbeat": week}, week)
+        live = stage("live", {"heartbeat": time.time()}, week)
+        old_work = stage("work/abc", {}, week)
+        subprocess.run(["bash", "-c", ev._prune_stages(str(root))], check=True)
+        self.assertTrue(unstarted.is_dir() and not (unstarted / "env").exists(), "credentials of a run that never ran")
+        self.assertFalse(finished.exists())
+        self.assertTrue(live.is_dir(), "a run with a fresh heartbeat is never pruned")
+        self.assertFalse(old_work.exists())
 
 
 class EvalRunTest(Isolated):
