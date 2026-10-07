@@ -68,11 +68,42 @@ if args.rtx_video:
             window_height=720,
             origin_type="asset",
             origin_track_path="robot",
-            eye=(2.3, -3.3, 1.3),
-            lookat=(0.0, 0.0, 0.55),
+            eye=(2.6, -2.6, 0.15),
+            lookat=(0.0, 0.0, -0.1),
             enable_markers=False,
+            background_color=None,
         )
     ]
+    # Isaac Lab 2.x's grey grid floor rather than 3.0's checker ground
+    import isaaclab.sim as sim_utils
+    from isaaclab.utils import configclass
+    from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+
+    @configclass
+    class GridGroundPlaneCfg(sim_utils.GroundPlaneCfg):
+        usd_path: str = f"{ISAAC_NUCLEUS_DIR}/Environments/Grid/default_environment.usd"
+
+    sim_utils.GroundPlaneCfg = GridGroundPlaneCfg
+    # the T1 URDF's visual colours carry alpha 0.2-0.3, which Isaac Lab 3.0's importer honours (2.x ignored it):
+    # render from a copy with opaque colours, meshes still read from the original asset dir
+    import os
+    import re
+    import tempfile
+
+    spawn = env_cfg.scene.robot.spawn
+    if str(spawn.asset_path).endswith(".urdf"):
+        with open(spawn.asset_path) as f:
+            text = f.read()
+        text = re.sub(
+            r'rgba="([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+)"',
+            lambda m: f'rgba="{m[1]} {m[2]} {m[3]} {1 if float(m[4]) > 0 else 0}"',
+            text,
+        )
+        text = text.replace('filename="', f'filename="{os.path.dirname(os.path.abspath(spawn.asset_path))}/')
+        opaque = os.path.join(tempfile.mkdtemp(), os.path.basename(spawn.asset_path))
+        with open(opaque, "w") as f:
+            f.write(text)
+        spawn.asset_path = opaque
     # a clean shot: no command arrows or gait markers drawn into the scene
     for term in vars(env_cfg.commands).values():
         if hasattr(term, "debug_vis"):
@@ -91,9 +122,10 @@ if args.rtx_video:
             window_height=720,
             origin_type="asset",
             origin_track_path="robot",
-            eye=(2.3, -3.3, 1.3),
-            lookat=(0.0, 0.0, 0.55),
+            eye=(2.6, -2.6, 0.15),
+            lookat=(0.0, 0.0, -0.1),
             enable_markers=False,
+            background_color=None,
         )
     ]
     env_cfg.video_recorders = [VideoRecorderCfg(source="visualizer:kit", output_dir=args.rtx_video, video_length=steps)]
