@@ -6,7 +6,8 @@ org: hcrl-isaac
 isaaclab:
   mode: source         # Isaac Lab 3.0 has no pip release: source (uv-locked clone) | none (don't install)
   ref: v3.0.0-EA       # IsaacLab git ref cloned into resources/IsaacLab
-  extras: [rsl-rl, ovphysx, importers, video]   # IsaacLab uv extras synced into the ilab venv
+  # IsaacLab uv extras synced into the ilab venv; add isaacsim (Isaac Sim 6.1, ~20 GB) for Kit RTX renders
+  extras: [rsl-rl, ovphysx, importers, video]
 always: [hcrl_isaaclab, robot_rl, hcrl_sim2real]   # repos always present (core extension, RL package, sim2real infra)
 # this branch composes every repo's Isaac Lab 3.0 port
 refs: {hcrl_isaaclab: feature/isaac-3.0, robot_rl: feature/isaac-3.0, hcrl_sim2real: feature/isaac-3.0, hhlm_tasks: feature/isaac-3.0, ssti_tasks: feature/isaac-3.0, holosoma: feature/isaac-3.0}

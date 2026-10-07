@@ -12,6 +12,9 @@ parser.add_argument("out")
 parser.add_argument("--task", default="hcrl/T1-Velocity-v0")
 parser.add_argument("--num_envs", type=int, default=4)
 parser.add_argument(
+    "--rtx_video", default=None, help="also render with Kit RTX into this dir (needs the isaacsim extra)"
+)
+parser.add_argument(
     "--gl_video", default=None, help="also render the USD scene with the headless Newton GL visualizer into this dir"
 )
 from isaaclab.app import add_launcher_args, launch_simulation
@@ -19,6 +22,13 @@ from isaaclab.app import add_launcher_args, launch_simulation
 add_launcher_args(parser)
 args, overrides = parser.parse_known_args()
 
+# Kit has to load its own USD build before our task packages pull in the kit-less pxr, so start it first
+if args.rtx_video:
+    from isaaclab.app import AppLauncher
+
+    _app = AppLauncher(headless=True, enable_cameras=True).app
+
+import contextlib
 import numpy as np
 import torch
 
@@ -45,6 +55,48 @@ env_cfg.commands.base_velocity.resampling_time_range = (1e6, 1e6)
 env_cfg.episode_length_s = sum(s for s, *_ in SCHEDULE) + 5.0
 env_cfg.seed = 0
 physics = type(env_cfg.sim.physics).__name__
+if args.rtx_video:
+    from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
+    from isaaclab_visualizers.kit import KitVisualizerCfg
+
+    steps = sum(round(s / (env_cfg.sim.dt * env_cfg.decimation)) for s, *_ in SCHEDULE)
+    # camera follows env 0's robot root
+    env_cfg.sim.visualizer_cfgs = [
+        KitVisualizerCfg(
+            headless=True,
+            window_width=1280,
+            window_height=720,
+            origin_type="asset",
+            origin_track_path="robot",
+            eye=(2.3, -3.3, 1.3),
+            lookat=(0.0, 0.0, 0.55),
+            enable_markers=False,
+        )
+    ]
+    # a clean shot: no command arrows or gait markers drawn into the scene
+    for term in vars(env_cfg.commands).values():
+        if hasattr(term, "debug_vis"):
+            term.debug_vis = False
+    env_cfg.video_recorders = [VideoRecorderCfg(source="visualizer:kit", output_dir=args.rtx_video, video_length=steps)]
+if args.rtx_video:
+    from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
+    from isaaclab_visualizers.kit import KitVisualizerCfg
+
+    steps = sum(round(s / (env_cfg.sim.dt * env_cfg.decimation)) for s, *_ in SCHEDULE)
+    # camera follows env 0's robot root
+    env_cfg.sim.visualizer_cfgs = [
+        KitVisualizerCfg(
+            headless=True,
+            window_width=1280,
+            window_height=720,
+            origin_type="asset",
+            origin_track_path="robot",
+            eye=(2.3, -3.3, 1.3),
+            lookat=(0.0, 0.0, 0.55),
+            enable_markers=False,
+        )
+    ]
+    env_cfg.video_recorders = [VideoRecorderCfg(source="visualizer:kit", output_dir=args.rtx_video, video_length=steps)]
 if args.gl_video:
     from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
     from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
@@ -65,7 +117,7 @@ if args.gl_video:
     env_cfg.video_recorders = [
         VideoRecorderCfg(source="visualizer:newton_gl", output_dir=args.gl_video, video_length=steps)
     ]
-with launch_simulation(env_cfg, args):
+with contextlib.nullcontext() if args.rtx_video else launch_simulation(env_cfg, args):
     env = RslRlVecEnvWrapper(gym.make(args.task, cfg=env_cfg), clip_actions=agent_cfg.clip_actions)
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     runner.load(args.checkpoint, load_cfg={"actor": True, "memory": True, "style": False})
