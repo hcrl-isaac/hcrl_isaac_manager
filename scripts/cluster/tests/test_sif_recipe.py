@@ -44,10 +44,16 @@ class RecipeTest(unittest.TestCase):
         self.assertTrue(apt_installs(DOCKERFILE))
         self.assertEqual(apt_installs(RECIPE), apt_installs(DOCKERFILE))
 
-    def test_every_runtime_env_is_set(self) -> None:
+    def test_the_runtime_env_is_the_dockerfiles(self) -> None:
         docker_env = set(re.findall(r"^ENV (\w+)=", DOCKERFILE, re.M)) - BUILD_ONLY_ENV
         environment = RECIPE.split("%environment", 1)[1].split("%post", 1)[0]
-        self.assertEqual(docker_env - set(re.findall(r"export (\w+)=", environment)), set())
+        self.assertEqual(set(re.findall(r"export (\w+)=", environment)), docker_env)
+        self.assertNotIn("omni.usd", environment, "Kit's USD libraries are Python's alone (setup_python_env.sh)")
+
+    def test_kits_usd_is_one_copy_added_for_python(self) -> None:
+        post = RECIPE.split("%post", 1)[1].split("%test", 1)[0]
+        self.assertIn('"${#usd[@]}" -ne 1', post, "more than one omni.usd.libs fails the build")
+        self.assertIn(">> /isaac-sim/setup_python_env.sh", post)
 
     def test_same_bind_point_placeholders(self) -> None:
         self.assertEqual(placeholders(RECIPE) - {"/opt/hcrl-build"}, placeholders(DOCKERFILE))

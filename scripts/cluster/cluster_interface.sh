@@ -74,7 +74,7 @@ build_remote_sif() {
     rsync -tv -e "ssh ${SSH_OPTS[*]}" "${SCRIPT_DIR}/hcrl-isaac.def" \
         "${SCRIPT_DIR}/../docker/requirements.workspace.txt" "${SCRIPT_DIR}/../docker/constraints.workspace.txt" \
         "${SCRIPT_DIR}/../docker/install-git-lfs.sh" "${SCRIPT_DIR}/../docker/entrypoint.sh" "${CLUSTER_LOGIN}:${build}/"
-    # per-job names, so concurrent setups never share a file; layers cache on scratch, the build unpacks on the node
+    # per-job names, so concurrent setups never share a file. Layers cache on scratch, the build unpacks on the node
     local job="#!/bin/bash
 set -e
 ${CLUSTER_MODULE_LOAD:+module load ${CLUSTER_MODULE_LOAD}}

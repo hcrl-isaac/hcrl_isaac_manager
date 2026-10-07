@@ -16,11 +16,6 @@ From: isaac-sim-base.sif
     export OMNI_KIT_ACCEPT_EULA=YES
     export PATH="/usr/local/nvidia/bin:${PATH}"
     export LD_LIBRARY_PATH="/usr/local/nvidia/lib64"
-    # without usd-core (aarch64), Kit's USD serves outside Kit too: kit-usd.pth puts it on the path, this its libraries
-    for usd_libs in /isaac-sim/extscache/omni.usd.libs-*/bin; do
-        [ "$(uname -m)" != x86_64 ] && [ -d "$usd_libs" ] && export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${usd_libs}"
-        break
-    done
 
 %post
     set -e
@@ -52,10 +47,17 @@ From: isaac-sim-base.sif
     ${ISAAC_PY} -m pip install flatdict==4.0.0
     ${ISAAC_PY} -m pip install "isaaclab==2.3.2.post1" "rsl-rl-lib==5.4.1"
     ${ISAAC_PY} -m pip install "ray[default,tune]==2.50.1" optuna bayesian-optimization gitman
-    # usd-core publishes no linux aarch64 wheel; Kit's own USD (pxr) serves instead, outside Kit through kit-usd.pth
+    # usd-core publishes no linux aarch64 wheel, so Kit's own USD (pxr) serves outside Kit too. kit-usd.pth puts it on
+    # the path, and setup_python_env.sh (which python.sh sources) adds its libraries for Python alone
     if [ "$(uname -m)" != x86_64 ]; then
         sed -i '/^usd-core\b/d' /opt/hcrl-build/requirements.workspace.txt
-        ls -d /isaac-sim/extscache/omni.usd.libs-* | head -1 > "$site/kit-usd.pth"
+        usd=(/isaac-sim/extscache/omni.usd.libs-*)
+        if [ "${#usd[@]}" -ne 1 ] || [ ! -d "${usd[0]}/bin" ]; then
+            echo "expected one omni.usd.libs with a bin/, found: ${usd[*]}"
+            exit 1
+        fi
+        echo "${usd[0]}" > "$site/kit-usd.pth"
+        echo "export LD_LIBRARY_PATH=\"\${LD_LIBRARY_PATH}:${usd[0]}/bin\"" >> /isaac-sim/setup_python_env.sh
     fi
     ${ISAAC_PY} -m pip install -r /opt/hcrl-build/requirements.workspace.txt -c /opt/hcrl-build/constraints.workspace.txt
     while read -r pb; do
@@ -101,10 +103,14 @@ EOF
     for c in chown chgrp; do mv -f /usr/bin/$c.build-real /usr/bin/$c; done
 
 %test
+    # tools outside Python run without Kit's libraries
+    git --version
+    git lfs version
+    dot -V
     /isaac-sim/python.sh - <<'EOF'
 import torch, torchvision
 assert torch.version.cuda and "+cu" in torch.__version__, f"torch {torch.__version__} has no CUDA build"
-arches = torch._C._cuda_getArchFlags()  # compiled targets; get_arch_list() is empty without a GPU, as in a build
+arches = torch._C._cuda_getArchFlags()  # compiled targets, as get_arch_list() is empty without a GPU
 assert "sm_100" in arches, f"torch lacks sm_100: {arches}"
 boxes = torch.tensor([[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0]])
 torchvision.ops.nms(boxes, torch.tensor([1.0, 0.5]), 0.5)  # a torchvision built against another torch fails here
