@@ -60,18 +60,19 @@ if args.rtx_video:
     from isaaclab_visualizers.kit import KitVisualizerCfg
 
     steps = sum(round(s / (env_cfg.sim.dt * env_cfg.decimation)) for s, *_ in SCHEDULE)
-    # camera follows env 0's robot root
+    if args.num_envs == 1:  # camera follows the robot
+        camera = dict(origin_type="asset", origin_track_path="robot", eye=(2.6, -2.6, 1.0), lookat=(0.0, 0.0, -0.25))
+    else:  # a crowd: envs packed 2 m apart under a fixed wide shot of the grid and the path it walks (+x)
+        from isaaclab.cloner import grid_transforms
+
+        env_cfg.scene.env_spacing = 2.0
+        origins, _ = grid_transforms(args.num_envs, env_cfg.scene.env_spacing, device="cpu")
+        # each env starts at a random heading, so the crowd spreads from the grid's centre in every direction
+        cx, cy = origins[:, :2].mean(0).tolist()
+        camera = dict(origin_type="world", eye=(cx, cy - 14.0, 7.5), lookat=(cx, cy, 0.0))
     env_cfg.sim.visualizer_cfgs = [
         KitVisualizerCfg(
-            headless=True,
-            window_width=1280,
-            window_height=720,
-            origin_type="asset",
-            origin_track_path="robot",
-            eye=(2.6, -2.6, 1.0),
-            lookat=(0.0, 0.0, -0.25),
-            enable_markers=False,
-            background_color=None,
+            headless=True, window_width=1280, window_height=720, enable_markers=False, background_color=None, **camera
         )
     ]
     # Isaac Lab 2.x's grey grid floor rather than 3.0's checker ground
@@ -91,8 +92,8 @@ if args.rtx_video:
     import tempfile
 
     def _opaque(m: re.Match) -> str:
-        # the URDF's two flat greys, toned for the HDR sky (its light shell blows out to flat white)
-        grey = {0.76: 0.6, 0.4: 0.28}.get(float(m[1]), float(m[1]))
+        # one dark grey for shell and limbs, as the real T1 (the URDF has a light shell and darker limbs)
+        grey = {0.76: 0.3, 0.4: 0.3}.get(float(m[1]), float(m[1]))
         return f'rgba="{grey} {grey} {grey} {1 if float(m[4]) > 0 else 0}"'
 
     spawn = env_cfg.scene.robot.spawn
