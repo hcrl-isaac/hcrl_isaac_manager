@@ -17,8 +17,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-COMPUTE = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(COMPUTE))
+RES = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(RES))
 import checkpoints as ck
 import evaluate as ev
 import leases as ls
@@ -633,7 +633,7 @@ class EvalRunTest(Isolated):
         (ws / "ilab" / "bin").mkdir(parents=True)
         (ws / "ilab" / "bin" / "python").symlink_to(sys.executable)
         (ws / "scripts").mkdir()
-        shutil.copy(COMPUTE.parent / "worktree_env.py", ws / "scripts")
+        shutil.copy(RES.parents[1] / "worktree_env.py", ws / "scripts")
         for repo in ("hcrl_isaaclab", "robot_rl"):
             (ws / "resources" / repo).mkdir(parents=True)
         self.pool = Pool("local", "local", {"workspace": str(ws), "scratch": str(self.tmp / "scratch")})

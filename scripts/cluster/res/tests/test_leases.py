@@ -10,8 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-COMPUTE = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(COMPUTE))
+RES = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(RES))
 import leases as ls
 import res
 from inventory import Pool
@@ -192,9 +192,7 @@ class StoreTest(TempStore):
             "    with ls.locked_store() as leases:\n"
             "        leases.append(ls.Lease(id=f'{sys.argv[3]}{i}', key='k', card='c', report='r', holder='h'))\n"
         )
-        procs = [
-            subprocess.Popen([sys.executable, "-c", code, str(COMPUTE), str(ls.STORE), f"p{n}-"]) for n in range(4)
-        ]
+        procs = [subprocess.Popen([sys.executable, "-c", code, str(RES), str(ls.STORE), f"p{n}-"]) for n in range(4)]
         self.assertEqual([p.wait() for p in procs], [0, 0, 0, 0])
         with ls.locked_store() as leases:
             self.assertEqual(len({x.id for x in leases}), 100)

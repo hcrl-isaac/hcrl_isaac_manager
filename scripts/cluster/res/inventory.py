@@ -4,20 +4,24 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-COMPUTE_DIR = Path(__file__).resolve().parent
+RES_DIR = Path(__file__).resolve().parent
+MANAGER_DIR = RES_DIR.parents[2]
+# where per-user overrides lived before `just res` moved under scripts/cluster
+OLD_LOCAL_TOML = MANAGER_DIR / "scripts" / "compute" / "compute.local.toml"
 
 
 def _cluster_config_dir() -> Path:
     """This checkout's cluster profiles, or the main checkout's when this worktree has none (they are gitignored)."""
-    own = COMPUTE_DIR.parent / "cluster" / "config"
+    own = MANAGER_DIR / "scripts" / "cluster" / "config"
     if any(own.glob("*/.env.cluster")):
         return own
     common = subprocess.run(
-        ["git", "-C", str(COMPUTE_DIR), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        ["git", "-C", str(RES_DIR), "rev-parse", "--path-format=absolute", "--git-common-dir"],
         capture_output=True,
         text=True,
     ).stdout.strip()
@@ -89,7 +93,11 @@ def slurm_pools() -> list[Pool]:
 
 def load_config() -> dict:
     """compute.toml merged with compute.local.toml."""
-    return _merge(_read_toml(COMPUTE_DIR / "compute.toml"), _read_toml(COMPUTE_DIR / "compute.local.toml"))
+    local = RES_DIR / "compute.local.toml"
+    if not local.exists() and OLD_LOCAL_TOML.exists():
+        print(f"[res] reading {OLD_LOCAL_TOML}: move it to {local}", file=sys.stderr)
+        local = OLD_LOCAL_TOML
+    return _merge(_read_toml(RES_DIR / "compute.toml"), _read_toml(local))
 
 
 def load_pools() -> list[Pool]:

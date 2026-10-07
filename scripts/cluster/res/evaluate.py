@@ -27,10 +27,9 @@ from pathlib import Path
 
 import checkpoints as ck
 import leases as ls
-from inventory import COMPUTE_DIR, Pool, profile_value
+from inventory import MANAGER_DIR, RES_DIR, Pool, profile_value
 from probe import MASTER_OPTS, SSH_OPTS
 
-MANAGER_DIR = COMPUTE_DIR.parents[1]
 CLUSTER_DEV = MANAGER_DIR / "scripts" / "cluster" / "cluster_dev" / "cluster_dev.sh"
 SUPPORTED = ("local", "ssh", "slurm")
 # where node_exec binds the cluster checkout's artifacts/ inside the container, and the container's interpreter
@@ -181,7 +180,7 @@ def fetch_checkpoint(ref: ck.CheckpointRef) -> str:
         return ref.local
     ws = local_workspace()
     py = os.path.join(ws, "ilab", "bin", "python")
-    cmd = [py, str(COMPUTE_DIR / "checkpoints.py"), os.path.join(ws, "resources", "hcrl_isaaclab"), str(CKPT_CACHE)]
+    cmd = [py, str(RES_DIR / "checkpoints.py"), os.path.join(ws, "resources", "hcrl_isaaclab"), str(CKPT_CACHE)]
     print(f"[res] fetching {ref.name} from W&B run {ref.run_path} {ref.model or '(latest)'}", file=sys.stderr)
     res = subprocess.run(
         [*cmd, ref.run_path, ref.model], capture_output=True, text=True, env={**os.environ, **wandb_env()}
@@ -202,7 +201,7 @@ def local_code(workspace: str, wt: str) -> dict[str, str]:
     Returns:
         Repo name -> path; asset repos (``*_robots``) are left to the target's own copies.
     """
-    sys.path.insert(0, str(COMPUTE_DIR.parent))
+    sys.path.insert(0, str(MANAGER_DIR / "scripts"))
     from worktree_env import workspace_repos
 
     resources = os.path.join(workspace, "resources")
