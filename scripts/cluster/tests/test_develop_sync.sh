@@ -93,8 +93,25 @@ check "remote shared slot untouched" "grep -q REMOTE_SLOT '$R/scripts/cluster/.e
 check "config env pushed to its config dir" "grep -q CLUSTER_LOGIN=fake@host '$R/scripts/cluster/config/zz/.env.cluster'"
 check "local slot not rewritten" "grep -q LOCAL_SLOT '$L/scripts/cluster/.env.cluster'"
 
+# a fresh profile whose workspace and its parent do not exist on the remote yet
+FRESH="$T/fresh/parent/isaaclab"
+mkdir -p "$CFG/zz-new"
+printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nCLUSTER_MIN_FREE_GB=0\n' "$FRESH" \
+    > "$CFG/zz-new/.env.cluster"
+cp "$CFG/zz/submit_job_slurm.sh" "$CFG/zz-new/"
+sync_new() {
+    PATH="$T/bin:$PATH" HOME="$T" CLUSTER=zz-new LOCAL_ISAACLAB_DIR="$L" \
+        bash "$T/scripts/cluster/cluster_dev/cluster_dev.sh" sync "$@"
+}
+sync_new --dry-run > "$T/fresh_dry.log" 2>&1
+check "a dry run leaves a missing workspace missing" "[ ! -e '$T/fresh' ]"
+sync_new > "$T/fresh.log" 2>&1
+check "a sync creates a missing workspace and its parent" "[ \$? -eq 0 ] && [ -e '$FRESH/resources/hcrl_isaaclab/a.py' ]"
+check "and names the directory it created" "grep -q 'created $FRESH' '$T/fresh.log'"
+
 if [ "$fails" -ne 0 ]; then
     echo "--- sync log"; tail -20 "$T/sync.log"
+    echo "--- fresh log"; tail -10 "$T/fresh.log"
     exit 1
 fi
 echo "all checks passed"
