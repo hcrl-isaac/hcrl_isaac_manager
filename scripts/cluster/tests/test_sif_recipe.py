@@ -52,7 +52,8 @@ class RecipeTest(unittest.TestCase):
 
     def test_kits_usd_is_one_copy_added_for_python(self) -> None:
         post = RECIPE.split("%post", 1)[1].split("%test", 1)[0]
-        self.assertIn('"${#usd[@]}" -ne 1', post, "more than one omni.usd.libs fails the build")
+        self.assertIn('[ "$#" -ne 1 ]', post, "more than one omni.usd.libs fails the build")
+        self.assertNotRegex(post, r"\w+=\(|\$\{#\w+\[", "%post runs in sh, which has no arrays")
         self.assertIn(">> /isaac-sim/setup_python_env.sh", post)
 
     def test_same_bind_point_placeholders(self) -> None:
