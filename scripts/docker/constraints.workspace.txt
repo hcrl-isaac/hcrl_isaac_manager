@@ -13,8 +13,8 @@ osqp==0.6.7.post3
 torch==2.7.0
 torchvision==0.22.0
 
-# robot_rl's W&B writer passes wandb.Settings(start_method=...), which wandb 0.30 rejects at run start; robot_rl
-# leaves `wandb>=0.19.9` open, so the release the x86 image trains with is fixed here.
+# robot_rl's W&B writer passes wandb.Settings(start_method="thread"), which wandb 0.30 rejects at run start, and
+# hcrl_isaaclab requires only wandb>=0.19.9. This is the release the x86 image trains with.
 wandb==0.28.2
 
 # holosoma's retargeting SQP converges differently across mujoco minors; holosoma_retargeting leaves
