@@ -147,4 +147,4 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     ${EXT_BINDS} ${VK_BINDS} \
     -B ${STAGE}/tmp:/tmp:rw \
     --nv --writable-tmpfs --containall --no-home "$SIF" \
-    bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
+    bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"

@@ -125,7 +125,7 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B $JOB_TMPDIR/tmp:/tmp:rw \
     -B $LOGS_DIR:/workspace/ext/hcrl_isaaclab/logs:rw \
     --nv --writable-tmpfs --containall --no-home $JOB_TMPDIR/$2.sif \
-    bash -c "export HOME=${DOCKER_USER_HOME} && export OMP_NUM_THREADS=$OMP_NUM_THREADS && export OMNI_KIT_ACCEPT_EULA=YES && cd /workspace/ext/hcrl_isaaclab && /usr/local/bin/hcrl-entrypoint /isaac-sim/python.sh ${CLUSTER_PYTHON_EXECUTABLE} ${@:3}"
+    bash -c "export HOME=${DOCKER_USER_HOME} && export OMP_NUM_THREADS=$OMP_NUM_THREADS && export OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && /usr/local/bin/hcrl-entrypoint /isaac-sim/python.sh ${CLUSTER_PYTHON_EXECUTABLE} ${@:3}"
 
 EXIT_CODE=$?
 
