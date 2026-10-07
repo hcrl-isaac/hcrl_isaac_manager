@@ -33,7 +33,7 @@ From: isaac-sim-base.sif
         build-essential cmake git wget curl openssh-client rsync graphviz libglib2.0-0 ncurses-term
     apt -y autoremove && apt clean autoclean && rm -rf /var/lib/apt/lists/*
 
-    # Isaac Sim's packages (its CUDA torch among them) sit in extension prebundles that link into one another; pip
+    # Isaac Sim's packages (its CUDA torch among them) sit in extension prebundles that link into one another, and pip
     # "replaces" them there half-way, so every prebundle is saved here and restored after the pip steps
     site=/isaac-sim/kit/python/lib/python3.11/site-packages
     find /isaac-sim/exts /isaac-sim/extscache -mindepth 2 -maxdepth 2 -name pip_prebundle -type d \
@@ -114,7 +114,7 @@ arches = torch._C._cuda_getArchFlags()  # compiled targets, as get_arch_list() i
 assert "sm_100" in arches, f"torch lacks sm_100: {arches}"
 boxes = torch.tensor([[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0]])
 torchvision.ops.nms(boxes, torch.tensor([1.0, 0.5]), 0.5)  # a torchvision built against another torch fails here
-from pxr import Usd  # usd-core is not installed on aarch64; Kit's USD serves
+from pxr import Usd  # Kit's USD, as usd-core is not installed on aarch64
 Usd.Stage.CreateInMemory()
 print("torch", torch.__version__, "torchvision", torchvision.__version__, "pxr ok")
 EOF
