@@ -451,7 +451,8 @@ def _prune_stages(root: str) -> str:
     work dirs older than ``STAGE_KEEP_DAYS`` whose run is not alive (no heartbeat in the last hour)."""
     q = shlex.quote
     return (
-        f'for d in {q(root)}/*/ {q(root)}/work/*/; do d="${{d%/}}"; case "$(basename "$d")" in cache|work) continue;; '
+        f'for d in {q(root)}/*/ {q(root)}/work/*/; do [ -d "$d" ] || continue; d="${{d%/}}"; '
+        'case "$(basename "$d")" in cache|work) continue;; '
         'esac; [ -n "$(find "$d" -maxdepth 0 -mmin +30)" ] || continue; [ -e "$d/heartbeat" ] || rm -f "$d/env"; '
         '[ -n "$(find "$d" -maxdepth 1 -name heartbeat -mmin -60)" ] && continue; '
         f'[ -n "$(find "$d" -maxdepth 0 -mtime +{STAGE_KEEP_DAYS})" ] && rm -rf "$d"; done; true'
@@ -622,7 +623,7 @@ class Stage:
             lines = [
                 f"{repo} {src} {_describe(src)} -> tree {self.tree}"
                 if repo in staged
-                else f"{repo} {shared}/{repo} {commit.get(repo, '(commit unknown)')} (shared checkout)"
+                else f"{repo} {shared}/{repo} {commit.get(repo, '(no git metadata: as develop sync left it)')} (shared checkout)"
                 for repo, src in code.items()
             ]
             return [f"/workspace/ext/{repo}" for repo in code], lines
