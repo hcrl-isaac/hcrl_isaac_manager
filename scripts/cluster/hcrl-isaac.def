@@ -1,8 +1,5 @@
-# The shared Isaac .sif as an Apptainer recipe, for clusters that build it natively (`CLUSTER_ARCH=arm64`, e.g.
-# TACC Horizon's Grace nodes) instead of converting the x86 docker image. Same steps as scripts/docker/Dockerfile;
-# scripts/cluster/tests/test_sif_recipe.py checks that both install the same packages.
-# the base, pulled from nvcr.io/nvidia/isaac-sim:<ISAACSIM_VERSION> by `setup` (a docker bootstrap here loses
-# hard-linked files of the image, e.g. inside torch); the version comes from the Dockerfile's ARGs
+# scripts/docker/Dockerfile as an Apptainer recipe, built on clusters with CLUSTER_ARCH=arm64 (tests/test_sif_recipe.py
+# keeps the two in step). The base is the Dockerfile's, which `setup` pulls to isaac-sim-base.sif.
 Bootstrap: localimage
 From: isaac-sim-base.sif
 
@@ -19,6 +16,11 @@ From: isaac-sim-base.sif
     export OMNI_KIT_ACCEPT_EULA=YES
     export PATH="/usr/local/nvidia/bin:${PATH}"
     export LD_LIBRARY_PATH="/usr/local/nvidia/lib64"
+    # without usd-core (aarch64), Kit's USD serves outside Kit too: kit-usd.pth puts it on the path, this its libraries
+    for usd_libs in /isaac-sim/extscache/omni.usd.libs-*/bin; do
+        [ "$(uname -m)" != x86_64 ] && [ -d "$usd_libs" ] && export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${usd_libs}"
+        break
+    done
 
 %post
     set -e
@@ -36,9 +38,8 @@ From: isaac-sim-base.sif
         build-essential cmake git wget curl openssh-client rsync graphviz libglib2.0-0 ncurses-term
     apt -y autoremove && apt clean autoclean && rm -rf /var/lib/apt/lists/*
 
-    # Isaac Sim's own packages (its CUDA torch among them) sit in extension prebundles on the path ahead of Kit's
-    # site-packages, and link into one another (torch's vendored packaging into core_archive's). pip "replaces" them
-    # there half-way (PyPI's aarch64 torch is CPU-only), so every prebundle is restored afterwards.
+    # Isaac Sim's packages (its CUDA torch among them) sit in extension prebundles that link into one another; pip
+    # "replaces" them there half-way, so every prebundle is saved here and restored after the pip steps
     site=/isaac-sim/kit/python/lib/python3.11/site-packages
     find /isaac-sim/exts /isaac-sim/extscache -mindepth 2 -maxdepth 2 -name pip_prebundle -type d \
         > /opt/hcrl-build/prebundles.txt
@@ -51,14 +52,17 @@ From: isaac-sim-base.sif
     ${ISAAC_PY} -m pip install flatdict==4.0.0
     ${ISAAC_PY} -m pip install "isaaclab==2.3.2.post1" "rsl-rl-lib==5.4.1"
     ${ISAAC_PY} -m pip install "ray[default,tune]==2.50.1" optuna bayesian-optimization gitman
-    # usd-core publishes no linux aarch64 wheel; inside the image Kit's own USD (pxr) serves instead
-    [ "$(uname -m)" = x86_64 ] || sed -i '/^usd-core\b/d' /opt/hcrl-build/requirements.workspace.txt
+    # usd-core publishes no linux aarch64 wheel; Kit's own USD (pxr) serves instead, outside Kit through kit-usd.pth
+    if [ "$(uname -m)" != x86_64 ]; then
+        sed -i '/^usd-core\b/d' /opt/hcrl-build/requirements.workspace.txt
+        ls -d /isaac-sim/extscache/omni.usd.libs-* | head -1 > "$site/kit-usd.pth"
+    fi
     ${ISAAC_PY} -m pip install -r /opt/hcrl-build/requirements.workspace.txt -c /opt/hcrl-build/constraints.workspace.txt
     while read -r pb; do
         find "$pb/" -mindepth 1 -delete && cp -a "/opt/hcrl-build/saved$pb/." "$pb/"
     done < /opt/hcrl-build/prebundles.txt
-    # site-packages comes first on the path, so pip's copies win as in the docker image, except the CUDA torch family:
-    # a copy of it pip added here (PyPI's, CPU-only on aarch64) is dropped so Isaac Sim's prebundled build serves
+    # site-packages precedes the prebundles on the path, so pip's copies win as in the docker image, except a torch
+    # family copy pip added (PyPI's aarch64 torch is CPU-only): it is dropped so Isaac Sim's CUDA build serves
     ${ISAAC_PY} - <<'EOF'
 import csv, pathlib, shutil
 prebundles = [pathlib.Path(p) for p in pathlib.Path("/opt/hcrl-build/prebundles.txt").read_text().split()]
@@ -97,8 +101,17 @@ EOF
     for c in chown chgrp; do mv -f /usr/bin/$c.build-real /usr/bin/$c; done
 
 %test
-    /isaac-sim/python.sh -c "import torch; assert torch.version.cuda, 'torch in the image has no CUDA'; \
-print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+    /isaac-sim/python.sh - <<'EOF'
+import torch, torchvision
+assert torch.version.cuda and "+cu" in torch.__version__, f"torch {torch.__version__} has no CUDA build"
+arches = torch._C._cuda_getArchFlags()  # compiled targets; get_arch_list() is empty without a GPU, as in a build
+assert "sm_100" in arches, f"torch lacks sm_100: {arches}"
+boxes = torch.tensor([[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0]])
+torchvision.ops.nms(boxes, torch.tensor([1.0, 0.5]), 0.5)  # a torchvision built against another torch fails here
+from pxr import Usd  # usd-core is not installed on aarch64; Kit's USD serves
+Usd.Stage.CreateInMemory()
+print("torch", torch.__version__, "torchvision", torchvision.__version__, "pxr ok")
+EOF
 
 %runscript
     exec /usr/local/bin/hcrl-entrypoint "$@"

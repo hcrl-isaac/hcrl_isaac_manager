@@ -114,7 +114,7 @@ export APPTAINERENV_WANDB_USERNAME="${WANDB_USERNAME:-}" APPTAINERENV_WANDB_API_
 # segfaults at startup on drivers that report a UINT64_MAX maxMemoryAllocationSize (595.71, 615.71)
 VK_BINDS=""
 VKCLAMP_DIR="${CLUSTER_VKCLAMP_DIR:-${CLUSTER_SIF_PATH}/vkclamp}"
-if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ]; then
+if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ] && [ "$(uname -m)" = x86_64 ]; then  # the layer is an x86 build
     VK_BINDS="-B ${VKCLAMP_DIR}:/opt/vkclamp:ro"
     export APPTAINERENV_XDG_CONFIG_DIRS="/opt/vkclamp/conf:/etc/xdg"
 fi
