@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup_and_bench.sh for hosts whose glibc is too old: venv build and bench both run in the Ubuntu 24.04 container.
+# setup_and_bench.sh for hosts whose glibc is too old: venv build and bench both run in the Debian bookworm container.
 # usage: container_setup_and_bench.sh ROOT GPU TAG [ITERS] [NUM_ENVS]
 ROOT=$(readlink -f "$1"); GPU=$2; TAG=$3
 D=$(dirname "$(readlink -f "$0")")
