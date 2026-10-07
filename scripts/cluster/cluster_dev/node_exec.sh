@@ -134,6 +134,7 @@ if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ] && [ "$(uname -m)" = x86_64 ]; then  # 
     VK_BINDS="-B ${VKCLAMP_DIR}:/opt/vkclamp:ro"
     export APPTAINERENV_XDG_CONFIG_DIRS="/opt/vkclamp/conf:/etc/xdg"
 fi
+run_container() {
 apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B ${STAGE}/docker-isaac-sim/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -148,3 +149,16 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/tmp:/tmp:rw \
     --nv --writable-tmpfs --containall --no-home "$SIF" \
     bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
+}
+
+# A segfault (exit 139) within KIT_BOOT_S of start is Kit crashing during boot (seen on Delta in libX11's getenv),
+# before any run registers with W&B, so it is retried once.
+KIT_BOOT_S=20
+for attempt in 1 2; do
+    start=$SECONDS
+    run_container && rc=0 || rc=$?
+    if [ "$rc" -ne 139 ] || [ $((SECONDS - start)) -ge "$KIT_BOOT_S" ] || [ "$attempt" -eq 2 ]; then
+        exit "$rc"
+    fi
+    echo "[node_exec] the container segfaulted $((SECONDS - start)) s after start (exit 139, a Kit boot crash); retrying once" >&2
+done

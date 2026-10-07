@@ -14,8 +14,10 @@ esac
 [ "${EVERY:-0}" -gt 0 ] 2>/dev/null || EVERY=0   # 0 disables the periodic metric line
 
 ERRPAT='Traceback|error running python|Error executing|CUDA out of memory|Could not override|No contact sensors|Segmentation fault|Killed|srun: error|Disk quota exceeded|Worker exited -11'
-# benign boot-time noise: ranks starting together, and srun failing to load its unused http_parser plugin
+# benign noise: ranks starting together, srun failing to load its unused http_parser plugin, and srun answering an
+# internet scanner that probes its port (TACC amd-rtx) with version-mismatch errors while the step runs on
 BENIGNPAT='omni/kit/pipapi|no current CUDA context|ignore_import_check|_process_ext_pipapi_config|http_parser'
+BENIGNPAT+='|Incompatible versions of client and server code|protocol_version [0-9]+ not supported|destroy_forward: no init'
 
 CM=${WATCH_RUN_CONTROL_PATH:-$HOME/.ssh/cm/%C}
 mkdir -p "$(dirname "${CM/\%C/x}")" 2>/dev/null || true
