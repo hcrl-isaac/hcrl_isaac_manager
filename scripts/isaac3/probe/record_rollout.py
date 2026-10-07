@@ -1,0 +1,85 @@
+"""Roll a trained T1 velocity policy through a fixed command schedule and save the robot trajectory.
+
+usage: record_rollout.py CHECKPOINT OUT.npz [physics=newton_mjwarp] [--num_envs 4]
+Saves root pos/quat (MuJoCo wxyz), joint positions by name, commands and falls, one row per policy step.
+"""
+
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("checkpoint")
+parser.add_argument("out")
+parser.add_argument("--task", default="hcrl/T1-Velocity-v0")
+parser.add_argument("--num_envs", type=int, default=4)
+from isaaclab.app import add_launcher_args, launch_simulation
+
+add_launcher_args(parser)
+args, overrides = parser.parse_known_args()
+
+import numpy as np
+import torch
+
+import gymnasium as gym
+import hcrl_isaaclab  # noqa: F401
+from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
+from isaaclab_tasks.utils.hydra import register_task
+from robot_rl.runners import OnPolicyRunner
+
+# (seconds, vx, vy, wz): walk, faster, sideways, turn, back, stand
+SCHEDULE = [
+    (3, 0.5, 0.0, 0.0),
+    (3, 1.0, 0.0, 0.0),
+    (3, 0.0, 0.4, 0.0),
+    (3, 0.5, 0.0, 0.5),
+    (3, -0.5, 0.0, 0.0),
+    (2, 0.0, 0.0, 0.0),
+]
+
+env_cfg, agent_cfg, rest = register_task(args.task, "rsl_rl_cfg_entry_point", overrides=overrides)
+assert not rest, rest
+env_cfg.scene.num_envs = args.num_envs
+env_cfg.commands.base_velocity.resampling_time_range = (1e6, 1e6)
+env_cfg.episode_length_s = sum(s for s, *_ in SCHEDULE) + 5.0
+env_cfg.seed = 0
+physics = type(env_cfg.sim.physics).__name__
+with launch_simulation(env_cfg, args):
+    env = RslRlVecEnvWrapper(gym.make(args.task, cfg=env_cfg), clip_actions=agent_cfg.clip_actions)
+    runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    runner.load(args.checkpoint, load_cfg={"actor": True, "memory": True, "style": False})
+    policy = runner.get_inference_policy(device=env.unwrapped.device)
+    base = env.unwrapped
+    robot = base.scene["robot"]
+    cmd_term = base.command_manager.get_term("base_velocity")
+    obs = env.get_observations()
+    rows = {
+        "root_pos": [],
+        "root_quat_wxyz": [],
+        "joint_pos": [],
+        "cmd": [],
+        "lin_vel_b": [],
+        "ang_vel_b": [],
+        "done": [],
+    }
+    for secs, vx, vy, wz in SCHEDULE:
+        for _ in range(round(secs / base.step_dt)):
+            cmd_term.vel_command_b[:] = torch.tensor([vx, vy, wz], device=base.device)
+            with torch.inference_mode():
+                obs, _, dones, _ = env.step(policy(obs))
+            q = robot.data.root_quat_w.torch.cpu().numpy()  # Isaac Lab 3.0 is xyzw
+            rows["root_pos"].append(robot.data.root_pos_w.torch.cpu().numpy() - base.scene.env_origins.cpu().numpy())
+            rows["root_quat_wxyz"].append(q[:, [3, 0, 1, 2]])
+            rows["joint_pos"].append(robot.data.joint_pos.torch.cpu().numpy())
+            rows["cmd"].append(np.tile([vx, vy, wz], (base.num_envs, 1)))
+            rows["lin_vel_b"].append(robot.data.root_lin_vel_b.torch.cpu().numpy())
+            rows["ang_vel_b"].append(robot.data.root_ang_vel_b.torch.cpu().numpy())
+            rows["done"].append(dones.cpu().numpy())
+    out = {k: np.stack(v, axis=1) for k, v in rows.items()}  # (envs, steps, ...)
+    np.savez(args.out, joint_names=np.array(robot.joint_names), dt=base.step_dt, physics=physics, **out)
+    falls = out["done"].any(axis=1).sum()
+    err = np.abs(out["lin_vel_b"][..., :2] - out["cmd"][..., :2]).mean()
+    print(
+        f"RECORDED {args.out}: {physics}, {out['root_pos'].shape[1]} steps x {base.num_envs} envs, "
+        f"envs with a reset {falls}, mean |v_xy - cmd| {err:.3f} m/s",
+        flush=True,
+    )
+    env.close()
