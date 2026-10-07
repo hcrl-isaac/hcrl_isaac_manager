@@ -68,8 +68,8 @@ if args.rtx_video:
             window_height=720,
             origin_type="asset",
             origin_track_path="robot",
-            eye=(2.6, -2.6, 0.15),
-            lookat=(0.0, 0.0, -0.1),
+            eye=(2.6, -2.6, 1.0),
+            lookat=(0.0, 0.0, -0.25),
             enable_markers=False,
             background_color=None,
         )
@@ -90,13 +90,18 @@ if args.rtx_video:
     import re
     import tempfile
 
+    def _opaque(m: re.Match) -> str:
+        # the URDF's two flat greys, toned for the HDR sky (its light shell blows out to flat white)
+        grey = {0.76: 0.6, 0.4: 0.28}.get(float(m[1]), float(m[1]))
+        return f'rgba="{grey} {grey} {grey} {1 if float(m[4]) > 0 else 0}"'
+
     spawn = env_cfg.scene.robot.spawn
     if str(spawn.asset_path).endswith(".urdf"):
         with open(spawn.asset_path) as f:
             text = f.read()
         text = re.sub(
             r'rgba="([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+)"',
-            lambda m: f'rgba="{m[1]} {m[2]} {m[3]} {1 if float(m[4]) > 0 else 0}"',
+            _opaque,
             text,
         )
         text = text.replace('filename="', f'filename="{os.path.dirname(os.path.abspath(spawn.asset_path))}/')
@@ -108,26 +113,6 @@ if args.rtx_video:
     for term in vars(env_cfg.commands).values():
         if hasattr(term, "debug_vis"):
             term.debug_vis = False
-    env_cfg.video_recorders = [VideoRecorderCfg(source="visualizer:kit", output_dir=args.rtx_video, video_length=steps)]
-if args.rtx_video:
-    from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
-    from isaaclab_visualizers.kit import KitVisualizerCfg
-
-    steps = sum(round(s / (env_cfg.sim.dt * env_cfg.decimation)) for s, *_ in SCHEDULE)
-    # camera follows env 0's robot root
-    env_cfg.sim.visualizer_cfgs = [
-        KitVisualizerCfg(
-            headless=True,
-            window_width=1280,
-            window_height=720,
-            origin_type="asset",
-            origin_track_path="robot",
-            eye=(2.6, -2.6, 0.15),
-            lookat=(0.0, 0.0, -0.1),
-            enable_markers=False,
-            background_color=None,
-        )
-    ]
     env_cfg.video_recorders = [VideoRecorderCfg(source="visualizer:kit", output_dir=args.rtx_video, video_length=steps)]
 if args.gl_video:
     from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
