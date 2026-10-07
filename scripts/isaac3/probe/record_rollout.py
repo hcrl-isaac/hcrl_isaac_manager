@@ -60,16 +60,13 @@ if args.rtx_video:
     from isaaclab_visualizers.kit import KitVisualizerCfg
 
     steps = sum(round(s / (env_cfg.sim.dt * env_cfg.decimation)) for s, *_ in SCHEDULE)
-    if args.num_envs == 1:  # camera follows the robot
-        camera = dict(origin_type="asset", origin_track_path="robot", eye=(2.6, -2.6, 1.0), lookat=(0.0, 0.0, -0.25))
-    else:  # a crowd: envs packed 2 m apart under a fixed wide shot of the grid and the path it walks (+x)
-        from isaaclab.cloner import grid_transforms
-
-        env_cfg.scene.env_spacing = 2.0
-        origins, _ = grid_transforms(args.num_envs, env_cfg.scene.env_spacing, device="cpu")
-        # each env starts at a random heading, so the crowd spreads from the grid's centre in every direction
-        cx, cy = origins[:, :2].mean(0).tolist()
-        camera = dict(origin_type="world", eye=(cx, cy - 14.0, 7.5), lookat=(cx, cy, 0.0))
+    # the task's own viewer, as Isaac Lab 2.x placed it: following env 0's robot at any env count
+    viewer = env_cfg.viewer
+    camera = dict(eye=tuple(viewer.eye), lookat=tuple(viewer.lookat), origin_env_index=viewer.env_index)
+    if viewer.origin_type == "asset_root":
+        camera.update(origin_type="asset", origin_track_path=viewer.asset_name)
+    else:
+        camera.update(origin_type=viewer.origin_type)
     env_cfg.sim.visualizer_cfgs = [
         KitVisualizerCfg(
             headless=True, window_width=1280, window_height=720, enable_markers=False, background_color=None, **camera
