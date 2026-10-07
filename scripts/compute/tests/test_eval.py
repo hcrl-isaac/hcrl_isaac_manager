@@ -521,7 +521,9 @@ class SlurmEvalTest(Isolated):
         node_tmp = self.tmp / "node_tmp" / stage.name
         self.assertIn(f"TMPDIR {node_tmp}", log, "a per-run TMPDIR inside the node-local /tmp")
         self.assertFalse(node_tmp.exists(), "the run's TMPDIR goes with it")
-        self.assertIn(f"CWD {stage}", log)
+        work = self.remote / "artifacts" / "res-eval" / "work" / stage.name
+        self.assertIn(f"CWD {work}", log, "a copied script writes into a work dir that outlives its stage")
+        self.assertTrue(work.is_dir())
         self.assertFalse((stage / "env").exists(), "the runner removes the credentials file")
         self.assertTrue((stage / "heartbeat").exists())
         self.assertEqual([x.card for x in self._leases()], ["c571-003:3 (job 3557743)"], "a detached run keeps it")
@@ -547,7 +549,8 @@ class SlurmEvalTest(Isolated):
         self.assertIn("CUDA_VISIBLE_DEVICES GPU-ab", out)
         self.assertIn("N 7", out)
         self.assertEqual(self._leases(), [])
-        self.assertEqual([p for p in (self.remote / "artifacts" / "res-eval").iterdir() if p.name != "cache"], [])
+        left = [p.name for p in (self.remote / "artifacts" / "res-eval").iterdir()]
+        self.assertEqual(left, ["work"], "the stage goes after a success; its work dir stays")
 
     def test_a_timeout_stops_the_run_through_its_stop_file(self) -> None:
         rc, out = self._eval("--env", "MODE=hang", "--timeout", "3s", "--stall", "0s")

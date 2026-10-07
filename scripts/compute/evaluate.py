@@ -1035,15 +1035,15 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         code = local_code(source, args.wt)
         pythonpath, manifest = stage.sync_code(code)
         stage.write("\n".join(manifest) + "\n", "MANIFEST", mode=0o644)
+        # snapshots are read-only, runs may be concurrent and a stage is removed after a success, so relative outputs
+        # (train.py's logs/, a census's tables) go to a writable working dir of this run's own, kept afterwards
+        work = container_path(t, f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}")
         if repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
             root = dict(zip(code, pythonpath, strict=True))[repo]
-            target_script = f"{root}/{rel}"
-            # snapshots are read-only and runs may be concurrent, so relative outputs (train.py's logs/) go to a
-            # writable working dir of this run's own, kept afterwards
-            cwd = container_path(t, f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}")
+            target_script, cwd = f"{root}/{rel}", work
         else:
             put = stage.put(script, os.path.basename(script), mode=0o644)
-            cwd, target_script = container_path(t, stage.dir) if t.kind == "slurm" else "", container_path(t, put)
+            cwd, target_script = work if t.kind == "slurm" else "", container_path(t, put)
         lines = [f"{k}={shlex.quote(v)}" for k, v in {**wandb_env(), **env, **paths}.items()]
         stage.write("\n".join(lines) + "\n", "env")
         names = sorted({**env, **paths})
