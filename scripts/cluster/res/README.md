@@ -63,7 +63,8 @@ just res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take 
 
 ## One-off scripts (`just res eval`)
 
-Run an eval or analysis script on a leased card of a `local` or `ssh` pool, with its checkpoints brought along:
+Run an eval or analysis script on a leased card of a `local` or `ssh` pool, or of a held SLURM dev sentinel, with its
+checkpoints brought along:
 
 ```bash
 just res eval path/to/census.py --any --pool larg-a100 --holder "<session>" \
@@ -74,6 +75,9 @@ just res eval probe.py --on hazard:2 --holder "<session>" --checkpoint ./model_2
 just res eval probe.py --lease <id> --holder "<session>" --wt my-feature                 # your lease, a worktree set
 just res eval hcrl_isaaclab:scripts/train.py --wt legacy --on pepi:1 --holder "<session>" --detach \
     -- --task hhlm/T1-Kick-v0 --headless --video on                                     # train a branch on LARG
+just res eval probe.py --on local:0 --holder "<session>"                               # this machine's card 0
+just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --detach   # a sentinel's free card
+                                                     # (c571-003:3557743:3 when the node runs several of your jobs)
 ```
 
 - A script is a file on this machine (copied to the target) or `<repo>:<path>` inside a shipped repo, which runs
@@ -84,9 +88,32 @@ just res eval hcrl_isaaclab:scripts/train.py --wt legacy --on pepi:1 --holder "<
   owns its stage dir, and its lease stays held until the card goes idle (or `just res release <id>`). `--timeout`
   and `--stall` do not apply to a detached run.
 
-- The card comes from `--on host:gpu`, `--any` or `--lease <id>`. A lease `eval` takes is released when the script
-  ends, success or failure; a `--lease` you pass stays yours. `ray` and `slurm` pools are refused (use
-  `just ray job` or a dev-node `develop exec`).
+- The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
+  several jobs), `--any` or `--lease <id>`. A busy card is refused; `just res claim --adopt` takes over the run on it.
+  A lease `eval` takes is released when the script ends, success or failure; a `--lease` you pass stays yours.
+  `--any` stays on the local and ssh pools unless `--pool` names a cluster. `ray` pools are refused (use
+  `just ray job`).
+- On a SLURM card (a running job of yours, normally a held dev sentinel) the script runs in the container through a
+  `develop exec` step on that job, with the job's own partition, account and GPU request. The stage dir is
+  `<cluster checkout>/artifacts/res-eval/<id>`, which the container sees as `/workspace/artifacts/res-eval/<id>`; the
+  `--wt` repos are staged over the cluster's shared checkout as a code tree (`develop stage`), and the rest run from
+  that shared checkout as `develop sync` left it (the MANIFEST gives each one's commit). The card is pinned by its GPU
+  UUID, and a step that cannot see it fails with status 98 (on Delta a step holding the job's GPUs can starve
+  another). The container's `/tmp` is the job's node-local dir, which every step of the sentinel shares, so the run
+  gets its own `TMPDIR` there (removed when it ends) and per-card Kit caches beside it (gone with the job). A script
+  runs from the per-run work dir `artifacts/res-eval/work/<id>`.
+- The container hides a SLURM run's processes from the node, so it reports through files in its stage dir:
+  `heartbeat` (touched every 2 s while it runs), `stop` (create it to end the run: TERM, then KILL after 10 s) and
+  `status` (its exit status, written once the card's processes are gone or after 60 s; a Python traceback with exit
+  0 counts as 1). `--detach` waits for the first heartbeat, prints the follow and stop commands over the SSH
+  master, and logs the step's wrapper to `<stage>/wrapper.log`. A detached run that does not start within 20 min
+  (a job's first step copies the .sif to the node) is stopped and its credentials removed; a run whose `stop`
+  exists before it starts exits 130 without launching. Each new SLURM stage prunes earlier ones: credentials of
+  runs that never started after 30 min, and stages and work dirs older than 7 days whose run is not alive;
+  `res-eval` code trees unused for 14 days (reuse counts) that no running step marks are removed when one is staged.
+- From a manager worktree, `res` and `develop stage|exec|status|tail` use the main checkout's cluster profiles (a
+  worktree has none of its own); `develop start|sync|stop|kill` refuse there, since they change the shared sentinel
+  state.
 - `--checkpoint [NAME=]<ref>` (repeatable) exports the checkpoint's path on the target as `NAME` (default
   `CHECKPOINT`). A ref is a local path, a W&B run URL or `entity/project/run_id`, with `@<iter>` for
   `model_<iter>.pt` (default: the run's latest). W&B checkpoints download on this machine through the same code as

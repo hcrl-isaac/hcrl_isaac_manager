@@ -47,6 +47,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # cluster_interface.sh, which sets CLUSTER when invoked as `cluster_interface.sh develop`.
 CLUSTER="${CLUSTER:-default}"
 ENV_FILE="${SCRIPT_DIR}/../config/${CLUSTER}/.env.cluster"
+# profiles are gitignored and per user, so a manager worktree has none: it borrows the main checkout's for the
+# commands that leave the shared sentinel state alone (see MAIN_PROFILE_COMMANDS)
+MAIN_CHECKOUT=""
+if [ ! -f "$ENV_FILE" ]; then
+    _common="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    _main_env="$(dirname "${_common:-/nonexistent}")/scripts/cluster/config/${CLUSTER}/.env.cluster"
+    if [ -n "$_common" ] && [ -f "$_main_env" ]; then
+        ENV_FILE="$_main_env"; MAIN_CHECKOUT="$(dirname "$_common")"
+        echo "[cluster_dev] using the main checkout's profile ${ENV_FILE}" >&2
+    fi
+fi
+MAIN_PROFILE_COMMANDS=" stage trees exec status tail open attach __resolve_tree __free_gb help -h --help "
+if [ -n "$MAIN_CHECKOUT" ] && [[ "$MAIN_PROFILE_COMMANDS" != *" ${1:-help} "* ]]; then
+    echo "[cluster_dev] '${1}' changes the shared sentinel state; run it from the main checkout ${MAIN_CHECKOUT}" >&2
+    exit 1
+fi
 # shellcheck disable=SC1090
 [ -f "$ENV_FILE" ] && source "$ENV_FILE"
 
@@ -78,11 +94,12 @@ SRUN_ACCT_OPT=""; [ -n "$DEV_ACCOUNT" ]   && SRUN_ACCT_OPT="-A ${DEV_ACCOUNT}"
 # included) ran pinned to core 0 of the whole allocation -- measured ~2.9x slower. Reuse the sentinel's
 # own --cpus-per-task so a step gets the same share the batch job asked for.
 SRUN_CPUS_OPT=""; [ -n "$DEV_CPUS" ]      && SRUN_CPUS_OPT="--cpus-per-task=${DEV_CPUS}"
-DEV_SRUN_OPTS="${SRUN_PART_OPT} ${SRUN_ACCT_OPT} -N 1 -n 1 -t ${DEV_TIME:-48:00:00} ${SRUN_GRES_OPT} ${SRUN_CPUS_OPT} ${CLUSTER_SRUN_EXTRA:-}"
+_srun_opts() { DEV_SRUN_OPTS="${SRUN_PART_OPT} ${SRUN_ACCT_OPT} -N 1 -n 1 -t ${DEV_TIME:-48:00:00} ${SRUN_GRES_OPT} ${SRUN_CPUS_OPT} ${CLUSTER_SRUN_EXTRA:-}"; }
+_srun_opts
 
 # Local code to mirror to the cluster (the manager workspace root -- flat layout: scripts/ + the
 # resources/<pkg> repos; the shared .sif provides isaacsim + Isaac Lab so no IsaacLab tree is required).
-LOCAL_ISAACLAB_DIR="${LOCAL_ISAACLAB_DIR:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
+LOCAL_ISAACLAB_DIR="${LOCAL_ISAACLAB_DIR:-${MAIN_CHECKOUT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}}"
 
 # Local state -- keyed by CLUSTER so concurrent dev sessions on different clusters (e.g. a
 # Delta box and a TACC box at the same time) keep separate state and don't clobber each other.
@@ -385,10 +402,18 @@ require_running() {
     if [ -n "${DEV_JOBID:-}" ]; then
         DD_JOBID="$DEV_JOBID"
         master_alive || { err "SSH master is down -- re-run './cluster_dev.sh start' (needs 2FA)."; exit 1; }
-        local row state; row="$(on_login "squeue -j ${DD_JOBID} -h -o '%T %N' 2>/dev/null")"
+        local row state part acct gpus; row="$(on_login "squeue -j ${DD_JOBID} -h -o '%T %N %P %a %b' 2>/dev/null")"
         state="$(echo "$row" | awk '{print $1}')"
         [ "$state" = "RUNNING" ] || { err "Job ${DD_JOBID} not RUNNING (state=${state:-gone})."; exit 1; }
         DD_NODE="$(echo "$row" | awk '{print $2}')"; DD_MODE="srun"
+        # step with the job's own partition, account and GPU request: a site with several projects (TACC) refuses a
+        # step without -A, and this profile's sbatch need not be the one that submitted the job
+        part="$(echo "$row" | awk '{print $3}')"; acct="$(echo "$row" | awk '{print $4}')"
+        gpus="$(echo "$row" | awk '{print $5}' | grep -oE 'gpu(:[A-Za-z0-9_-]+)?:[0-9]+' | grep -oE '[0-9]+$' | head -1 || true)"
+        [ -n "$part" ] && SRUN_PART_OPT="-p ${part}"
+        [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A ${acct}"
+        [ -n "$gpus" ] && SRUN_GRES_OPT="--gres=gpu:${gpus}"
+        _srun_opts
         log "[override] targeting job ${DD_JOBID} on ${DD_NODE} via srun --overlap"
         return
     fi

@@ -37,4 +37,4 @@ scripts/cluster/exports/
 /scripts/cluster/config/
 
 # per-user compute overrides (login names, extra pools)
-/scripts/compute/compute.local.toml
+/scripts/cluster/res/compute.local.toml

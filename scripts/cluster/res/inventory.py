@@ -8,8 +8,25 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-COMPUTE_DIR = Path(__file__).resolve().parent
-CLUSTER_CONFIG_DIR = COMPUTE_DIR.parent / "cluster" / "config"
+RES_DIR = Path(__file__).resolve().parent
+MANAGER_DIR = RES_DIR.parents[2]
+
+
+def _cluster_config_dir() -> Path:
+    """This checkout's cluster profiles, or the main checkout's when this worktree has none (they are gitignored)."""
+    own = MANAGER_DIR / "scripts" / "cluster" / "config"
+    if any(own.glob("*/.env.cluster")):
+        return own
+    common = subprocess.run(
+        ["git", "-C", str(RES_DIR), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    main = Path(common).parent / "scripts" / "cluster" / "config" if common else own
+    return main if any(main.glob("*/.env.cluster")) else own
+
+
+CLUSTER_CONFIG_DIR = _cluster_config_dir()
 
 
 @dataclass
@@ -38,11 +55,27 @@ def _read_toml(path: Path) -> dict:
     return tomllib.loads(path.read_text()) if path.is_file() else {}
 
 
-def _cluster_login(env_file: Path) -> str:
-    """CLUSTER_LOGIN as the shell sees it after sourcing the profile (values may reference variables)."""
-    script = 'source "$1" >/dev/null 2>&1; printf %s "${CLUSTER_LOGIN:-}"'
+def profile_value(profile: str, key: str) -> str:
+    """A cluster profile's variable as the shell sees it after sourcing the profile (values may reference others).
+
+    Args:
+        profile: Profile name (a directory under scripts/cluster/config/).
+        key: Variable name, e.g. ``CLUSTER_ISAACLAB_DIR``.
+
+    Returns:
+        Its value, or "" when the profile or the variable is missing.
+    """
+    env_file = CLUSTER_CONFIG_DIR / profile / ".env.cluster"
+    if not env_file.is_file():
+        return ""
+    script = f'source "$1" >/dev/null 2>&1; printf %s "${{{key}:-}}"'
     cmd = ["bash", "-c", script, "_", str(env_file)]
     return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout
+
+
+def _cluster_login(env_file: Path) -> str:
+    """CLUSTER_LOGIN as the shell sees it after sourcing the profile (values may reference variables)."""
+    return profile_value(env_file.parent.name, "CLUSTER_LOGIN")
 
 
 def slurm_pools() -> list[Pool]:
@@ -57,7 +90,7 @@ def slurm_pools() -> list[Pool]:
 
 def load_config() -> dict:
     """compute.toml merged with compute.local.toml."""
-    return _merge(_read_toml(COMPUTE_DIR / "compute.toml"), _read_toml(COMPUTE_DIR / "compute.local.toml"))
+    return _merge(_read_toml(RES_DIR / "compute.toml"), _read_toml(RES_DIR / "compute.local.toml"))
 
 
 def load_pools() -> list[Pool]:

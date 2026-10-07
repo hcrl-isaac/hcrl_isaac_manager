@@ -146,10 +146,10 @@ cluster *args:
     if [ -n "$name" ]; then CLUSTER="$name" scripts/cluster/cluster_interface.sh "$@"; \
     else scripts/cluster/cluster_interface.sh "$@"; fi
 
-# Compute resources (scripts/compute/): `status` (default) probes every GPU on every pool, `pools` lists them.
+# Compute resources (scripts/cluster/res/): `status` (default) probes every GPU on every pool, `pools` lists them.
 [positional-arguments]
 res *args:
-    @python3 scripts/compute/res.py "$@"
+    @python3 scripts/cluster/res/res.py "$@"
 
 # Ray interface (scripts/ray/): `setup`, `job`, `bench`, `push`, `list`, `logs`, `stop`; bare shows a picker.
 [positional-arguments]
