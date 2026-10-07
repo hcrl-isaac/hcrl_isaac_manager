@@ -140,11 +140,25 @@ class CheckpointRefTest(unittest.TestCase):
 
 
 class TargetTest(unittest.TestCase):
-    def test_ray_and_slurm_refuse_with_a_pointer(self) -> None:
-        for kind, hint in (("ray", "just ray job"), ("slurm", "develop exec")):
-            with self.subTest(kind=kind), self.assertRaises(SystemExit) as cm:
-                ev.make_target(Pool("p", kind, {}), "h", 0)
-            self.assertIn(hint, str(cm.exception.code))
+    def test_ray_refuses_with_a_pointer(self) -> None:
+        with self.assertRaises(SystemExit) as cm:
+            ev.make_target(Pool("p", "ray", {}), "h", 0)
+        self.assertIn("just ray job", str(cm.exception.code))
+
+    def test_a_slurm_card_needs_its_job(self) -> None:
+        with self.assertRaises(SystemExit) as cm:
+            ev.make_target(Pool("amd-rtx", "slurm", {"login": "u@login"}), "c571-003", 3)
+        self.assertIn("running job", str(cm.exception.code))
+
+    def test_slurm_target_stages_under_the_cluster_artifacts(self) -> None:
+        with mock.patch.object(ev, "profile_value", return_value="/work/u/isaaclab"):
+            t = ev.make_target(Pool("amd-rtx", "slurm", {"login": "u@login"}), "c571-003", 3, "3557743", "GPU-ab")
+        self.assertEqual((t.ssh, t.workspace, t.scratch, t.job, t.uuid), (
+            "u@login", "/work/u/isaaclab", "/work/u/isaaclab/artifacts", "3557743", "GPU-ab"
+        ))  # fmt: skip
+        self.assertIn("ControlPath", " ".join(t.ssh_opts), "a TACC login is reached over its master only")
+        self.assertEqual(ev.container_path(t, "/work/u/isaaclab/artifacts/res-eval/x/ckpt/A/m.pt"),
+                         "/workspace/artifacts/res-eval/x/ckpt/A/m.pt")  # fmt: skip
 
     def test_ssh_target_uses_pool_settings(self) -> None:
         t = ev.make_target(Pool("larg", "ssh", {"user": "u", "domain": "cs.x"}), "hazard", 2)
@@ -162,11 +176,54 @@ class TargetTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             ev.make_target(Pool("a", "ssh", {"user": "u", "pin": "maybe"}), "h", 0)
 
-    def test_on_a_cluster_node_names_the_backend(self) -> None:
-        pools = [Pool("larg", "ssh", {"hosts": ["pepi"]}), Pool("delta", "slurm", {})]
+    def test_on_an_unknown_host_without_clusters_names_the_backend(self) -> None:
+        pools = [Pool("larg", "ssh", {"hosts": ["pepi"]}), Pool("ray", "ray", {})]
         with self.assertRaises(SystemExit) as cm:
-            ev._check_on("gpub065:0", pools)
-        self.assertIn("slurm", str(cm.exception.code))
+            ev.resolve_on("gpub065:0", pools)
+        self.assertIn("ray", str(cm.exception.code))
+
+    def test_on_a_cluster_node_is_left_for_the_claim(self) -> None:
+        pools = [Pool("larg", "ssh", {"hosts": ["pepi"]}), Pool("delta", "slurm", {})]
+        self.assertEqual(ev.resolve_on("gpub065:22681023:0", pools), "gpub065:22681023:0")
+
+    def test_local_names_this_machine(self) -> None:
+        pools = [Pool("local", "local", {})]
+        self.assertEqual(ev.resolve_on("local:0", pools), f"{os.uname().nodename.split('.')[0]}:0")
+
+
+class SlurmTest(unittest.TestCase):
+    """The SLURM pieces that run here: profile choice and the container runner."""
+
+    def test_the_profile_named_after_the_partition_wins(self) -> None:
+        pools = [Pool(n, "slurm", {"login": "u@login"}) for n in ("amd-rtx", "rtx-small", "stampede")]
+        for partition, want in (("rtx-small\n", "rtx-small"), ("skx\n", "amd-rtx"), ("", "amd-rtx")):
+            with self.subTest(partition=partition):
+                done = mock.Mock(returncode=0, stdout=partition)
+                with mock.patch.object(ev.subprocess, "run", return_value=done):
+                    got = ev.slurm_profile("stampede3 (amd-rtx, rtx-small, stampede)", "3566414", pools)
+                self.assertEqual(got.name, want)
+
+    def test_runner_pins_by_uuid_and_stops_on_request(self) -> None:
+        t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
+        runner = ev.slurm_runner_script(t, "/workspace/artifacts/res-eval/x", "/workspace/ext/r/s.py", ["A"], "/c")
+        self.assertIn("nvidia-smi -i GPU-ab", runner)
+        self.assertIn("export CUDA_VISIBLE_DEVICES=GPU-ab RES_EVAL_DEVICE=cuda:0", runner)
+        self.assertIn("/isaac-sim/python.sh /workspace/ext/r/s.py", runner)
+        self.assertIn("/workspace/artifacts/res-eval/x/stop", runner)
+        self.assertIn("> /workspace/artifacts/res-eval/x/status", runner)
+
+    def test_a_staged_tree_id_is_read_from_develop_stage(self) -> None:
+        out = "  robot_rl /p abc worktree 123\nRun with: just cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
+        done = mock.Mock(returncode=0, stdout=out)
+        with (
+            mock.patch.object(ev.subprocess, "run", return_value=done) as run,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            tree = ev.stage_tree("amd-rtx", {"robot_rl": "/p", "hcrl_robots": "/q", "IsaacLab": "/i"})
+        self.assertEqual(tree, "res-eval-0123456789")
+        cmd = run.call_args.args[0]
+        self.assertEqual(cmd[2:], ["stage", "res-eval", "robot_rl=/p"], "asset repos and IsaacLab stay shared")
+        self.assertEqual(run.call_args.kwargs["env"]["CLUSTER"], "amd-rtx")
 
 
 class LocalCodeTest(unittest.TestCase):
@@ -326,6 +383,91 @@ class SshStageTest(Isolated):
         dest = stage.link_checkpoint(str(link), "A")
         self.assertEqual(Path(dest).read_text(), "weights")
         self.assertFalse(os.path.islink(dest))
+
+
+CLUSTER_DEV_STUB = """#!/usr/bin/env bash
+{ echo "JOB=${DEV_JOBID:-} CLUSTER=${CLUSTER:-}"; printf '%s\\n' "$@"; } > "$CALLS"
+"""
+
+
+class SlurmEvalTest(Isolated):
+    """A detached run on a held sentinel's card, against a stub ssh (the login is this machine) and cluster_dev.sh."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "ssh").write_text(SSH_STUB)
+        (bin_dir / "ssh").chmod(0o755)
+        stub = self.tmp / "cluster_dev.sh"
+        stub.write_text(CLUSTER_DEV_STUB)
+        self.calls = self.tmp / "calls"
+        self.remote = self.tmp / "cluster"
+        self.src = self.tmp / "local" / "robot_rl" / "worktrees" / "wt"
+        _git_repo(self.src)
+        for p in (
+            mock.patch.dict(os.environ, {"PATH": f"{bin_dir}:{os.environ['PATH']}", "CALLS": str(self.calls)}),
+            mock.patch.object(ev, "CLUSTER_DEV", stub),
+            mock.patch.object(ev, "profile_value", return_value=str(self.remote)),
+            mock.patch.object(ev, "stage_tree", return_value="res-eval-0123456789"),
+            mock.patch.object(ev, "local_code", return_value={"robot_rl": str(self.src), "hcrl_isaaclab": "/ws/x"}),
+        ):
+            p.start()
+            self.patches.append(p)
+        self.pool = Pool("amd-rtx", "slurm", {"login": "u@login"})
+        card = Card("stampede3 (amd-rtx)", "c571-003", 3, "RTX", 0, 97000, 0, "free", job="3557743", uuid="GPU-ab")
+        self.report = Report("stampede3 (amd-rtx)", "slurm", [card], owner="u")
+        self.script = self.tmp / "census.py"
+        self.script.write_text("print('hi')\n")
+        self.ckpt = self.tmp / "model_5.pt"
+        self.ckpt.write_text("weights")
+
+    def _claim(self, args: argparse.Namespace, pools: list) -> tuple:
+        with mock.patch.object(res, "probe_all", return_value=[self.report]):
+            return res.claim(args, pools)
+
+    def _detached(self) -> None:
+        parser = argparse.ArgumentParser()
+        ev.add_parser(parser.add_subparsers(dest="cmd"))
+        argv = ["eval", str(self.script), "--holder", "me", "--on", "c571-003:3", "--detach"]
+        head, tail = ev.split_script_args([*argv, "--checkpoint", f"CKPT_A={self.ckpt}", "--env", "N=2", "--", "-x"])
+        args = parser.parse_args(head)
+        args.script_args = tail
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            ev.cmd_eval(args, [self.pool], self._claim)
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_without_worktrees_the_run_uses_the_shared_checkout(self) -> None:
+        with mock.patch.object(ev, "local_code", return_value={"hcrl_isaaclab": "/ws/resources/hcrl_isaaclab"}):
+            self._detached()
+        ev.stage_tree.assert_not_called()
+        self.assertNotIn("--tree", self.calls.read_text().splitlines())
+
+    def test_detached_run_goes_through_develop_exec_on_the_sentinel(self) -> None:
+        self._detached()
+        ev.stage_tree.assert_called_once_with("amd-rtx", {"robot_rl": str(self.src)})
+        with ls.locked_store() as leases:
+            self.assertEqual([x.card for x in leases], ["c571-003:3 (job 3557743)"], "the lease stays held")
+        [stage] = list((self.remote / "artifacts" / "res-eval").iterdir())
+        inside = f"/workspace/artifacts/res-eval/{stage.name}"
+        self.assertEqual((stage / "ckpt" / "CKPT_A" / "model_5.pt").read_text(), "weights")
+        self.assertIn(f"CKPT_A={inside}/ckpt/CKPT_A/model_5.pt", (stage / "env").read_text())
+        self.assertIn("CUDA_VISIBLE_DEVICES=GPU-ab", (stage / "run.sh").read_text())
+        self.assertIn(f"/isaac-sim/python.sh {inside}/census.py", (stage / "run.sh").read_text())
+        calls = self.calls.read_text().splitlines()
+        self.assertEqual(calls[0], "JOB=3557743 CLUSTER=amd-rtx")
+        self.assertEqual(calls[1:], [
+            "exec", "--tree", "res-eval-0123456789", "--detach", "--log", f"{stage}/wrapper.log",
+            "--", "bash", f"{inside}/run.sh", "-x",
+        ])  # fmt: skip
+
+    def test_stop_waits_for_the_runner_status(self) -> None:
+        t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", str(self.remote), str(self.remote / "artifacts"))
+        stage = ev.Stage(t)
+        stage.make()
+        Path(stage.dir, "status").write_text("143\n")  # the runner answers the stop request
+        self.assertTrue(stage.kill())
+        self.assertTrue(Path(stage.dir, "stop").exists())
 
 
 class EvalRunTest(Isolated):

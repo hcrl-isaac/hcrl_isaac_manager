@@ -38,11 +38,27 @@ def _read_toml(path: Path) -> dict:
     return tomllib.loads(path.read_text()) if path.is_file() else {}
 
 
-def _cluster_login(env_file: Path) -> str:
-    """CLUSTER_LOGIN as the shell sees it after sourcing the profile (values may reference variables)."""
-    script = 'source "$1" >/dev/null 2>&1; printf %s "${CLUSTER_LOGIN:-}"'
+def profile_value(profile: str, key: str) -> str:
+    """A cluster profile's variable as the shell sees it after sourcing the profile (values may reference others).
+
+    Args:
+        profile: Profile name (a directory under scripts/cluster/config/).
+        key: Variable name, e.g. ``CLUSTER_ISAACLAB_DIR``.
+
+    Returns:
+        Its value, or "" when the profile or the variable is missing.
+    """
+    env_file = CLUSTER_CONFIG_DIR / profile / ".env.cluster"
+    if not env_file.is_file():
+        return ""
+    script = f'source "$1" >/dev/null 2>&1; printf %s "${{{key}:-}}"'
     cmd = ["bash", "-c", script, "_", str(env_file)]
     return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout
+
+
+def _cluster_login(env_file: Path) -> str:
+    """CLUSTER_LOGIN as the shell sees it after sourcing the profile (values may reference variables)."""
+    return profile_value(env_file.parent.name, "CLUSTER_LOGIN")
 
 
 def slurm_pools() -> list[Pool]:

@@ -63,7 +63,8 @@ just res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take 
 
 ## One-off scripts (`just res eval`)
 
-Run an eval or analysis script on a leased card of a `local` or `ssh` pool, with its checkpoints brought along:
+Run an eval or analysis script on a leased card of a `local` or `ssh` pool, or of a held SLURM dev sentinel, with its
+checkpoints brought along:
 
 ```bash
 just res eval path/to/census.py --any --pool larg-a100 --holder "<session>" \
@@ -74,6 +75,8 @@ just res eval probe.py --on hazard:2 --holder "<session>" --checkpoint ./model_2
 just res eval probe.py --lease <id> --holder "<session>" --wt my-feature                 # your lease, a worktree set
 just res eval hcrl_isaaclab:scripts/train.py --wt legacy --on pepi:1 --holder "<session>" --detach \
     -- --task hhlm/T1-Kick-v0 --headless --video on                                     # train a branch on LARG
+just res eval probe.py --on local:0 --holder "<session>"                               # this machine's card 0
+just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --detach   # a sentinel's free card
 ```
 
 - A script is a file on this machine (copied to the target) or `<repo>:<path>` inside a shipped repo, which runs
@@ -84,9 +87,20 @@ just res eval hcrl_isaaclab:scripts/train.py --wt legacy --on pepi:1 --holder "<
   owns its stage dir, and its lease stays held until the card goes idle (or `just res release <id>`). `--timeout`
   and `--stall` do not apply to a detached run.
 
-- The card comes from `--on host:gpu`, `--any` or `--lease <id>`. A lease `eval` takes is released when the script
-  ends, success or failure; a `--lease` you pass stays yours. `ray` and `slurm` pools are refused (use
-  `just ray job` or a dev-node `develop exec`).
+- The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
+  several jobs), `--any` or `--lease <id>`. A busy card is refused; `just res claim --adopt` takes over the run on it.
+  A lease `eval` takes is released when the script ends, success or failure; a `--lease` you pass stays yours.
+  `--any` stays on the local and ssh pools unless `--pool` names a cluster. `ray` pools are refused (use
+  `just ray job`).
+- On a SLURM card (a running job of yours, normally a held dev sentinel) the script runs in the container through a
+  `develop exec` step on that job, with the job's partition and account. The stage dir is
+  `<cluster checkout>/artifacts/res-eval/<id>`, which the container sees as `/workspace/artifacts/res-eval/<id>`; the
+  `--wt` repos are staged over the cluster's shared checkout as a code tree (`develop stage`), and the rest run from
+  that shared checkout as `develop sync` left it (the MANIFEST says which). The card is pinned by its GPU UUID, and a
+  step that cannot see it fails with status 98 (on Delta another step of the job may hold the job's GPUs). A `<repo>:`
+  script runs from its staged repo, a copied script from its stage dir. The container hides its processes from the
+  node, so a run stops when `<stage>/stop` appears and writes its exit status to `<stage>/status`; `--detach` prints
+  both commands and logs the step's wrapper to `<stage>/wrapper.log`.
 - `--checkpoint [NAME=]<ref>` (repeatable) exports the checkpoint's path on the target as `NAME` (default
   `CHECKPOINT`). A ref is a local path, a W&B run URL or `entity/project/run_id`, with `@<iter>` for
   `model_<iter>.pt` (default: the run's latest). W&B checkpoints download on this machine through the same code as

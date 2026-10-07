@@ -1,4 +1,9 @@
-"""`just res eval`: run a one-off script on a leased GPU of a local or ssh pool, with its checkpoints and code."""
+"""`just res eval`: run a one-off script on a leased GPU, with its checkpoints and code.
+
+Local and ssh pools run the workspace's ilab python on the box. A SLURM card is one of a held dev sentinel's: the
+script runs in the container through a `develop exec` step on that job, against the cluster's shared checkout with
+the ``--wt`` repos staged over it as a code tree.
+"""
 
 from __future__ import annotations
 
@@ -22,11 +27,14 @@ from pathlib import Path
 
 import checkpoints as ck
 import leases as ls
-from inventory import COMPUTE_DIR, Pool
-from probe import SSH_OPTS
+from inventory import COMPUTE_DIR, Pool, profile_value
+from probe import MASTER_OPTS, SSH_OPTS
 
 MANAGER_DIR = COMPUTE_DIR.parents[1]
-SUPPORTED = ("local", "ssh")
+CLUSTER_DEV = MANAGER_DIR / "scripts" / "cluster" / "cluster_dev" / "cluster_dev.sh"
+SUPPORTED = ("local", "ssh", "slurm")
+# where node_exec binds the cluster checkout's artifacts/ inside the container
+CONTAINER_ARTIFACTS = "/workspace/artifacts"
 CKPT_CACHE = Path.home() / ".cache" / "hcrl_res" / "checkpoints"
 TRACEBACK = "Traceback (most recent call last)"
 TIMED_OUT = 124
@@ -35,18 +43,20 @@ _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 @dataclass
 class Target:
-    """Where the script runs: one card of a local or ssh pool.
+    """Where the script runs: one card of a local or ssh pool, or of a SLURM job's node.
 
     Args:
-        pool: Pool name.
-        kind: ``local`` or ``ssh``.
+        pool: Pool name (for slurm, the cluster profile).
+        kind: ``local``, ``ssh`` or ``slurm``.
         host: Host name as the probe reports it.
         gpu: Physical GPU index.
-        ssh: ``user@fqdn`` for ssh pools, "" for local.
-        workspace: Manager checkout on the target (holds ilab/ and the asset repos).
+        ssh: ``user@fqdn`` for ssh pools, the login node for slurm, "" for local.
+        workspace: Manager checkout on the target (holds ilab/ and the asset repos; the cluster checkout for slurm).
         scratch: Per-box scratch dir that stage dirs and code snapshots go under.
         pin: ``cvd`` masks CUDA_VISIBLE_DEVICES to the card; ``device`` leaves it unmasked and the script
             selects the card from RES_EVAL_DEVICE.
+        job: The SLURM job (a held dev sentinel) whose node the card is on.
+        uuid: The card's GPU UUID, which pins it inside a SLURM step whose device numbering may differ.
     """
 
     pool: str
@@ -57,6 +67,13 @@ class Target:
     workspace: str = ""
     scratch: str = ""
     pin: str = "cvd"
+    job: str = ""
+    uuid: str = ""
+
+    @property
+    def ssh_opts(self) -> list[str]:
+        """ssh options: a SLURM login only over its existing master (a new connection would need 2FA)."""
+        return [*MASTER_OPTS, *SSH_OPTS] if self.kind == "slurm" else list(SSH_OPTS)
 
 
 def local_workspace() -> str:
@@ -71,21 +88,31 @@ def local_workspace() -> str:
     return str(Path(out).parent) if out else str(MANAGER_DIR)
 
 
-def make_target(pool: Pool, host: str, gpu: int) -> Target:
+def make_target(pool: Pool, host: str, gpu: int, job: str = "", uuid: str = "") -> Target:
     """Target for one card; refuses pools whose backend `eval` cannot run on yet.
 
     Args:
-        pool: The card's pool.
+        pool: The card's pool (for a SLURM card, the cluster profile).
         host: Host name from the probe.
         gpu: Physical GPU index.
+        job: The SLURM job holding the card.
+        uuid: The card's GPU UUID (SLURM cards).
 
     Returns:
         The target, with workspace, scratch and pin from the pool settings or their defaults.
     """
     if pool.kind not in SUPPORTED:
-        hint = {"ray": "use `just ray job`", "slurm": "use a dev-node step (`just cluster <c> develop exec`)"}
-        sys.exit(f"[res] eval does not run on {pool.kind} pools yet; {hint.get(pool.kind, 'pick a local/ssh card')}")
+        hint = {"ray": "use `just ray job`"}
+        sys.exit(f"[res] eval does not run on {pool.kind} pools yet; {hint.get(pool.kind, 'pick another card')}")
     s = pool.settings
+    if pool.kind == "slurm":
+        if not job or not uuid:
+            sys.exit(f"[res] {host}:{gpu} on {pool.name}: eval runs only on a card of a running job")
+        remote = profile_value(pool.name, "CLUSTER_ISAACLAB_DIR")
+        if not remote:
+            sys.exit(f"[res] cluster profile {pool.name} sets no CLUSTER_ISAACLAB_DIR")
+        login = s.get("login") or profile_value(pool.name, "CLUSTER_LOGIN")
+        return Target(pool.name, "slurm", host, gpu, login, remote, f"{remote}/artifacts", "cvd", job, uuid)
     pin = s.get("pin", "cvd")
     if pin not in ("cvd", "device"):
         sys.exit(f"[res] pool {pool.name}: pin must be 'cvd' or 'device', not {pin!r}")
@@ -290,6 +317,97 @@ mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
 """
 
 
+def cluster_dev_cmd(profile: str, job: str, *args: str) -> tuple[list[str], dict[str, str]]:
+    """``cluster_dev.sh`` argv and environment for one profile, aimed at ``job`` (a held sentinel) when given.
+
+    Args:
+        profile: Cluster profile name.
+        job: SLURM job id, or "" for commands that need no job.
+        *args: The cluster_dev.sh subcommand and its arguments.
+
+    Returns:
+        The argv and the environment to run it with.
+    """
+    env = {**os.environ, "CLUSTER": profile, "LOCAL_ISAACLAB_DIR": local_workspace()}
+    if job:
+        env["DEV_JOBID"] = job
+    return ["bash", str(CLUSTER_DEV), *args], env
+
+
+def stage_tree(profile: str, code: dict[str, str]) -> str:
+    """Stage ``code`` on the cluster as a code tree (deduplicated against earlier trees) and return its id.
+
+    Args:
+        profile: Cluster profile name.
+        code: Repo name -> local checkout or worktree path.
+
+    Returns:
+        The tree id (``res-eval-<fingerprint>``) for ``develop exec --tree``.
+    """
+    specs = [f"{repo}={src}" for repo, src in code.items() if repo != "IsaacLab" and not repo.endswith("_robots")]
+    cmd, env = cluster_dev_cmd(profile, "", "stage", "res-eval", *specs)
+    print(f"[res] staging {', '.join(code)} on {profile} as a code tree", file=sys.stderr)
+    res = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, text=True)
+    found = re.search(r"--tree (\S+) --", res.stdout)
+    if res.returncode != 0 or not found:
+        sys.exit(f"[res] could not stage the code on {profile} (develop stage exited {res.returncode})")
+    return found.group(1)
+
+
+def container_path(t: Target, path: str) -> str:
+    """A path under the cluster checkout's artifacts/ as the container sees it (unchanged off SLURM)."""
+    if t.kind == "slurm" and path.startswith(t.scratch + "/"):
+        return CONTAINER_ARTIFACTS + path[len(t.scratch) :]
+    return path
+
+
+def slurm_runner_script(t: Target, stage: str, script: str, env_names: list[str], cwd: str) -> str:
+    """The bash that runs inside the container on a SLURM node: pin by UUID, run, stop on request, record status.
+
+    Args:
+        t: The target.
+        stage: The stage dir as the container sees it.
+        script: The script's path in the container.
+        env_names: Names of the exported variables, for the log.
+        cwd: Directory to run the script from, in the container.
+
+    Returns:
+        The run.sh text. The container hides its processes from the node, so ``<stage>/stop`` asks the run to
+        end and ``<stage>/status`` records how it did.
+    """
+    q = shlex.quote
+    return f"""#!/usr/bin/env bash
+set -u
+exec > >(tee -a {q(stage + "/log")}) 2>&1
+set -a; source {q(stage + "/env")}; set +a
+rm -f {q(stage + "/env")}  # credentials stay in this process's environment only
+if ! nvidia-smi -i {q(t.uuid)} > /dev/null 2>&1; then
+    echo "[res] card {t.uuid} ({t.host}:gpu{t.gpu}) is not visible in this step; another step of job {t.job} may hold it"
+    echo 98 > {q(stage + "/status")}; exit 98
+fi
+export CUDA_VISIBLE_DEVICES={q(t.uuid)} RES_EVAL_DEVICE=cuda:0 PYTHONUNBUFFERED=1
+cat {q(stage + "/MANIFEST")}
+echo "[res] {t.host}:gpu{t.gpu} job {t.job} (uuid) env: {" ".join(env_names) or "-"}"
+cd {q(cwd)} || {{ echo 97 > {q(stage + "/status")}; exit 97; }}
+setsid /isaac-sim/python.sh {q(script)} "$@" &
+child=$!
+trap 'kill -TERM -- -$child 2>/dev/null' TERM INT HUP
+while kill -0 "$child" 2>/dev/null; do
+    if [ -e {q(stage + "/stop")} ]; then
+        echo "[res] stop requested"
+        kill -TERM -- -"$child" 2>/dev/null
+        for _ in $(seq 20); do kill -0 "$child" 2>/dev/null || break; sleep 0.5; done
+        kill -KILL -- -"$child" 2>/dev/null
+        break
+    fi
+    sleep 2
+done
+wait "$child"; rc=$?
+echo "$rc" > {q(stage + "/status")}
+exit "$rc"
+"""
+
+
 class Stage:
     """A fresh per-invocation directory on the target, plus the immutable code snapshots it links to."""
 
@@ -298,9 +416,13 @@ class Stage:
         self.dir = f"{t.scratch}/res-eval/{uuid.uuid4().hex[:8]}"
         self.proc: subprocess.Popen | None = None
         self.dead = False
+        self.tree = ""  # the staged code tree a SLURM run uses
 
     def _ssh(self, cmd: str, **kw: object) -> subprocess.CompletedProcess:
-        return subprocess.run(["ssh", *SSH_OPTS, self.t.ssh, cmd], **kw)
+        return subprocess.run(["ssh", *self.t.ssh_opts, self.t.ssh, cmd], **kw)
+
+    def _rsync_ssh(self) -> str:
+        return "ssh " + " ".join(shlex.quote(o) for o in self.t.ssh_opts)
 
     def sh(self, cmd: str) -> int:
         """Run a shell command on the target (here, for a local pool) and return its status."""
@@ -333,8 +455,7 @@ class Stage:
             os.chmod(dest, mode)
         else:
             self._ssh(f"mkdir -p {shlex.quote(os.path.dirname(dest))}")
-            ssh = "ssh " + " ".join(shlex.quote(o) for o in SSH_OPTS)
-            cmd = ["rsync", "-L", "-s", f"--chmod=F{mode:o}", "-e", ssh, real, f"{self.t.ssh}:{dest}"]
+            cmd = ["rsync", "-L", "-s", f"--chmod=F{mode:o}", "-e", self._rsync_ssh(), real, f"{self.t.ssh}:{dest}"]
             if subprocess.run(cmd).returncode != 0:
                 sys.exit(f"[res] could not copy {src} to {self.t.host}:{dest}")
         if self.sh(f'[ "$(stat -c %s {shlex.quote(dest)})" = {os.path.getsize(real)} ]') != 0:
@@ -398,7 +519,7 @@ class Stage:
         drop = f"chmod -R u+w {q(part)} 2>/dev/null; rm -rf {q(part)}"
         try:
             self._ssh(f"mkdir -p {q(part)}")
-            ssh = "ssh " + " ".join(q(o) for o in SSH_OPTS)
+            ssh = self._rsync_ssh()
             cmd = ["rsync", "-rlp", "--checksum", "-s", "--from0", "--files-from=-", *links, "-e", ssh, f"{src}/"]
             if subprocess.run([*cmd, f"{self.t.ssh}:{part}/"], input=b"\0".join(code_files(src))).returncode != 0:
                 sys.exit(f"[res] could not upload {repo} to {self.t.host}")
@@ -427,6 +548,16 @@ class Stage:
         """
         if self.t.kind == "local":
             return list(code.values()), [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
+        if self.t.kind == "slurm":
+            # only worktree-set repos are staged; the rest run from the cluster's shared checkout (`develop sync`)
+            worktrees = {repo: src for repo, src in code.items() if f"{os.sep}worktrees{os.sep}" in src}
+            self.tree = stage_tree(self.t.pool, worktrees) if worktrees else ""
+            shared = f"{self.t.workspace}/resources"
+            lines = [
+                f"{repo} {src} {_describe(src)} -> tree {self.tree}" if repo in worktrees else f"{repo} {shared}/{repo}"
+                for repo, src in code.items()
+            ]
+            return [f"/workspace/ext/{repo}" for repo in code], lines
         q = shlex.quote
         res = f"{self.dir}/resources"
         snaps, lines = {}, []
@@ -450,6 +581,18 @@ class Stage:
             The local process streaming the run (the runner itself, or its ssh).
         """
         q = shlex.quote
+        if self.t.kind == "slurm":
+            cmd, env = self._exec_cmd(argv)
+            self.proc = subprocess.Popen(
+                cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                start_new_session=True,
+            )
+            return self.proc
         if self.t.kind == "local":
             self.proc = subprocess.Popen(
                 ["bash", f"{self.dir}/run.sh", *argv],
@@ -479,6 +622,11 @@ class Stage:
             argv: The script's arguments.
         """
         q = shlex.quote
+        if self.t.kind == "slurm":
+            cmd, env = self._exec_cmd(argv, "--detach", "--log", f"{self.dir}/wrapper.log")
+            if subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL).returncode != 0:
+                sys.exit(f"[res] could not start the run on job {self.t.job}")
+            return
         if self.t.kind == "local":
             proc = subprocess.Popen(
                 ["bash", f"{self.dir}/run.sh", *argv],
@@ -494,8 +642,22 @@ class Stage:
         if self._ssh(cmd).returncode != 0:
             sys.exit(f"[res] could not start the run on {self.t.host}")
 
+    def _exec_cmd(self, argv: list[str], *opts: str) -> tuple[list[str], dict[str, str]]:
+        """`develop exec` of this stage's run.sh in the staged tree, on the target's job."""
+        run_sh = container_path(self.t, f"{self.dir}/run.sh")
+        tree = ["--tree", self.tree] if self.tree else []
+        return cluster_dev_cmd(self.t.pool, self.t.job, "exec", *tree, *opts, "--", "bash", run_sh, *argv)
+
     def kill(self) -> bool:
         """Kill the runner's process group on the target (TERM, then KILL) and report whether it is gone."""
+        if self.t.kind == "slurm":
+            # the container hides the run from the node: ask its runner to stop and wait for its status
+            q = shlex.quote
+            wait = f"for _ in $(seq 40); do [ -f {q(self.dir)}/status ] && exit 0; sleep 1; done; exit 1"
+            self.dead = self.sh(f"touch {q(self.dir)}/stop && {{ {wait}; }}") == 0
+            if self.proc is not None and self.proc.poll() is None:
+                _kill_local_group(self.proc)
+            return self.dead
         if self.t.kind == "local" and self.proc is not None:
             self.dead = _kill_local_group(self.proc)
             return self.dead
@@ -587,8 +749,33 @@ def run(stage: Stage, argv: list[str], timeout: float, stall: float) -> int:
     return rc
 
 
-def _lease_card(lease_id: str, holder: str, pools: list[Pool]) -> tuple[Pool, str, int]:
-    """Pool, host and gpu of a lease the caller already holds.
+def slurm_profile(report_pool: str, job: str, pools: list[Pool]) -> Pool:
+    """The cluster profile to run a SLURM card through: the one named after its job's partition, else the first.
+
+    Args:
+        report_pool: The card's report label, ``<site> (<profile>, ...)``.
+        job: The job holding the card.
+        pools: Configured pools.
+
+    Returns:
+        The profile's pool; its #SBATCH options are the ones `develop exec` steps onto the job with.
+    """
+    names = [n.strip() for n in report_pool.partition("(")[2].rstrip(")").split(",")]
+    profiles = [p for n in names for p in pools if p.kind == "slurm" and p.name == n]
+    if not profiles:
+        sys.exit(f"[res] no cluster profile for {report_pool}")
+    login = profiles[0].settings.get("login", "")
+    res = subprocess.run(
+        ["ssh", *MASTER_OPTS, *SSH_OPTS, login, f"squeue -h -j {shlex.quote(job)} -o %P"],
+        capture_output=True,
+        text=True,
+    )
+    partition = res.stdout.strip().splitlines()[-1].strip() if res.stdout.strip() else ""
+    return next((p for p in profiles if p.name == partition), profiles[0])
+
+
+def _lease_card(lease_id: str, holder: str, pools: list[Pool]) -> tuple[Pool, str, int, str, str]:
+    """Pool, host, gpu, job and card UUID of a lease the caller already holds.
 
     Args:
         lease_id: The lease id.
@@ -596,7 +783,8 @@ def _lease_card(lease_id: str, holder: str, pools: list[Pool]) -> tuple[Pool, st
         pools: Configured pools.
 
     Returns:
-        The lease's pool, host and GPU index; exits when the lease is missing, foreign or on a SLURM job.
+        The lease's pool (a cluster profile for a SLURM card), host, GPU index, job and UUID; exits when the lease
+        is missing or foreign.
     """
     try:
         with ls.locked_store() as leases:
@@ -609,11 +797,13 @@ def _lease_card(lease_id: str, holder: str, pools: list[Pool]) -> tuple[Pool, st
     if lease.holder != holder:
         sys.exit(f"[res] lease {lease_id} is held by {lease.holder}, not {holder}")
     host, _, gpu = lease.card.split(" ")[0].partition(":")
+    if lease.job:
+        return slurm_profile(lease.report.split(" job ")[0], lease.job, pools), host, int(gpu), lease.job, lease.key
     name = lease.report.split("/")[0]
     pool = next((p for p in pools if p.name == name), None)
-    if pool is None or lease.job:
+    if pool is None:
         sys.exit(f"[res] lease {lease_id} is on {lease.report}, which eval cannot run on")
-    return pool, host, int(gpu)
+    return pool, host, int(gpu), "", ""
 
 
 def _touch_lease(lease_id: str) -> None:
@@ -624,14 +814,26 @@ def _touch_lease(lease_id: str) -> None:
                 lease.last_active, lease.idle_since = time.time(), 0.0
 
 
-def _check_on(spec: str, pools: list[Pool]) -> None:
-    """Refuse ``--on`` a host no local or ssh pool lists, naming the backends eval does not run on."""
-    host = spec.split(":")[0]
-    known = {os.uname().nodename.split(".")[0]} if any(p.kind == "local" for p in pools) else set()
+def resolve_on(spec: str, pools: list[Pool]) -> str:
+    """``--on`` with ``local`` as this machine's host name, refused when no pool eval runs on can hold it.
+
+    Args:
+        spec: ``host:gpu`` or ``host:job:gpu``; ``local:<gpu>`` names this machine's card.
+        pools: Configured pools.
+
+    Returns:
+        The card spec for the claim. A SLURM node is left for the claim's probe to find.
+    """
+    host, sep, rest = spec.partition(":")
+    has_local = any(p.kind == "local" for p in pools)
+    if host == "local" and has_local:
+        host = os.uname().nodename.split(".")[0]
+    known = {os.uname().nodename.split(".")[0]} if has_local else set()
     known |= {h for p in pools if p.kind == "ssh" for h in p.settings.get("hosts", [])}
-    if host not in known:
+    if host not in known and not any(p.kind == "slurm" for p in pools):
         other = "/".join(sorted({p.kind for p in pools if p.kind not in SUPPORTED})) or "other"
-        sys.exit(f"[res] --on {spec}: not a host of a local or ssh pool; eval does not run on {other} pools yet")
+        sys.exit(f"[res] --on {spec}: not a host of a local, ssh or slurm pool; eval does not run on {other} pools")
+    return f"{host}{sep}{rest}"
 
 
 def _interrupt(signum: int, _frame: object) -> None:
@@ -662,10 +864,14 @@ def _repo_script(spec: str, wt: str) -> tuple[str, str]:
 def _print_detached(stage: Stage, taken: ls.Lease | None) -> None:
     """How to follow, stop and release a detached run."""
     q = shlex.quote
-    on = (lambda c: f"ssh {stage.t.ssh} {q(c)}") if stage.t.kind == "ssh" else (lambda c: c)
-    print(f"[res] started detached on {stage.t.host}:gpu{stage.t.gpu} (stage {stage.dir})", file=sys.stderr)
+    on = (lambda c: f"ssh {stage.t.ssh} {q(c)}") if stage.t.kind != "local" else (lambda c: c)
+    where = f"{stage.t.host}:gpu{stage.t.gpu}" + (f" of job {stage.t.job}" if stage.t.job else "")
+    print(f"[res] started detached on {where} (stage {stage.dir})", file=sys.stderr)
     print(f"[res] follow: {on('tail -f ' + q(stage.dir + '/log'))}", file=sys.stderr)
-    print(f"[res] stop:   {on('kill -TERM -- -$(cat ' + q(stage.dir + '/pid') + ')')}", file=sys.stderr)
+    if stage.t.kind == "slurm":
+        print(f"[res] stop:   {on('touch ' + q(stage.dir + '/stop'))}  (exit status lands in status)", file=sys.stderr)
+    else:
+        print(f"[res] stop:   {on('kill -TERM -- -$(cat ' + q(stage.dir + '/pid') + ')')}", file=sys.stderr)
     if taken is not None:
         print(
             f"[res] lease {taken.id} stays held; it releases once the card idles, or: just res release {taken.id}",
@@ -689,18 +895,18 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         sys.exit("[res] pick the card with exactly one of --on host:gpu, --any or --lease <id>")
     env = parse_env(args.env or [])
     refs = parse_checkpoints(args.checkpoint or [])
-    taken = None
+    taken, job, uuid = None, "", ""
     if args.lease:
-        pool, host, gpu = _lease_card(args.lease, args.holder, pools)
+        pool, host, gpu, job, uuid = _lease_card(args.lease, args.holder, pools)
     else:
-        usable = [p for p in pools if p.kind in SUPPORTED]
         named = [p for p in pools if any(p.name.startswith(s) for s in args.pool or [])]
         if args.pool and named and not any(p.kind in SUPPORTED for p in named):
             make_target(named[0], "", 0)  # exits with the per-backend hint
-        if args.on:
-            _check_on(args.on, pools)
+        on = resolve_on(args.on, pools) if args.on else ""
+        # a cluster job's cards only when named: --any stays on the boxes unless --pool picks a cluster
+        usable = [p for p in pools if p.kind in SUPPORTED and (p.kind != "slurm" or on or p in named)]
         ns = argparse.Namespace(
-            cards=[args.on] if args.on else [],
+            cards=[on] if on else [],
             any=args.any,
             count=1,
             min_free_gb=args.min_free_gb,
@@ -710,16 +916,21 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             for_=0.0,
         )
         [(taken, card, rep)] = claim(ns, usable)[0]
-        pool = next(p for p in pools if p.name == rep.pool.split("/")[0])
         host, gpu = card.host, card.index
         print(f"[res] leased {taken.id}: {taken.card} for {args.holder}", file=sys.stderr)
+        if rep.kind == "slurm":
+            pool, job, uuid = None, card.job, card.uuid
+        else:
+            pool = next(p for p in pools if p.name == rep.pool.split("/")[0])
     rc, stage, detached = 1, None, False
     handlers = {sig: signal.signal(sig, _interrupt) for sig in (signal.SIGTERM, signal.SIGHUP)}
     try:
-        t = make_target(pool, host, gpu)
+        if pool is None:  # inside the try, so a refusal still releases the lease
+            pool = slurm_profile(rep.pool, job, pools)
+        t = make_target(pool, host, gpu, job, uuid)
         stage = Stage(t)
         stage.make()
-        paths = {ref.name: stage.link_checkpoint(fetch_checkpoint(ref), ref.name) for ref in refs}
+        paths = {ref.name: container_path(t, stage.link_checkpoint(fetch_checkpoint(ref), ref.name)) for ref in refs}
         source = t.workspace if t.kind == "local" else local_workspace()
         code = local_code(source, args.wt)
         pythonpath, manifest = stage.sync_code(code)
@@ -728,13 +939,18 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             root = dict(zip(code, pythonpath, strict=True))[repo]
             target_script = f"{root}/{rel}"
             # snapshots are read-only and runs may be concurrent, so relative outputs (train.py's logs/) go to a
-            # writable working dir of this run's own, kept afterwards
-            cwd = f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}"
+            # writable working dir of this run's own, kept afterwards; a staged tree's repo redirects its own
+            cwd = root if t.kind == "slurm" else f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}"
         else:
-            cwd, target_script = "", stage.put(script, os.path.basename(script), mode=0o644)
+            put = stage.put(script, os.path.basename(script), mode=0o644)
+            cwd, target_script = container_path(t, stage.dir) if t.kind == "slurm" else "", container_path(t, put)
         lines = [f"{k}={shlex.quote(v)}" for k, v in {**wandb_env(), **env, **paths}.items()]
         stage.write("\n".join(lines) + "\n", "env")
-        runner = runner_script(t, stage.dir, target_script, sorted({**env, **paths}), pythonpath, cwd)
+        names = sorted({**env, **paths})
+        if t.kind == "slurm":
+            runner = slurm_runner_script(t, container_path(t, stage.dir), target_script, names, cwd)
+        else:
+            runner = runner_script(t, stage.dir, target_script, names, pythonpath, cwd)
         stage.write(runner, "run.sh", mode=0o700)
         if taken is not None:
             _touch_lease(taken.id)
@@ -763,7 +979,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if stage is not None:
             stage.remove(keep_log=rc != 0)
             if rc != 0:
-                print(f"[res] FAILED with status {rc}; log at {stage.t.host}:{stage.dir}/log", file=sys.stderr)
+                where = stage.t.ssh if stage.t.kind == "slurm" else stage.t.host
+                print(f"[res] FAILED with status {rc}; log at {where}:{stage.dir}/log", file=sys.stderr)
         if taken is not None and gone:
             with ls.locked_store() as leases:
                 leases[:] = [x for x in leases if x.id != taken.id]
@@ -788,12 +1005,12 @@ def _duration(text: str) -> float:
 
 def add_parser(sub: argparse._SubParsersAction) -> None:
     """Register `eval` on the `just res` subparsers."""
-    ev = sub.add_parser("eval", help="run a one-off script on a leased GPU (local or ssh pools)")
+    ev = sub.add_parser("eval", help="run a one-off script on a leased GPU (local, ssh, or a held SLURM sentinel)")
     ev.add_argument(
         "script", help="script on this machine, or <repo>:<path> inside a shipped repo; its arguments follow --"
     )
     ev.add_argument("--detach", action="store_true", help="start the run and return; the lease stays held")
-    ev.add_argument("--on", help="card as host:gpu")
+    ev.add_argument("--on", help="card as host:gpu (local:<gpu> for this machine), or host:job:gpu on a SLURM node")
     ev.add_argument("--any", action="store_true", help="take any free card")
     ev.add_argument("--lease", help="run on a card you already lease (left leased afterwards)")
     ev.add_argument("--pool", action="append", help="with --any/--on: only these pools (prefix match)")
