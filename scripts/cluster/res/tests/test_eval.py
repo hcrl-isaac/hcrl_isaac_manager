@@ -143,7 +143,7 @@ class TargetTest(unittest.TestCase):
     def test_ray_refuses_with_a_pointer(self) -> None:
         with self.assertRaises(SystemExit) as cm:
             ev.make_target(Pool("p", "ray", {}), "h", 0)
-        self.assertIn("just ray job", str(cm.exception.code))
+        self.assertIn("just ray run", str(cm.exception.code))
 
     def test_a_slurm_card_needs_its_job(self) -> None:
         with self.assertRaises(SystemExit) as cm:

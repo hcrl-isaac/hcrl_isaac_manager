@@ -21,3 +21,21 @@ def split_jobs(tokens: list[str]) -> list[str]:
         else:
             jobs[-1].append(tok)
     return [shlex.join(job) for job in jobs if job]
+
+
+def ext_script(spec: str) -> str:
+    """The worker path of a script named as ``<repo>/<path inside the repo>``, as the job mounts it.
+
+    Args:
+        spec: E.g. ``hcrl_isaaclab/scripts/video_logger.py``.
+
+    Returns:
+        ``/workspace/ext/<spec>``.
+
+    Raises:
+        ValueError: For an absolute path, one that climbs out with ``..``, one without a repo, or a non-``.py`` file.
+    """
+    parts = spec.split("/")
+    if spec.startswith("/") or ".." in parts or len(parts) < 2 or not spec.endswith(".py") or "" in parts:
+        raise ValueError(f"script must be <repo>/<path>.py inside a shipped repo, got {spec!r}")
+    return f"/workspace/ext/{spec}"

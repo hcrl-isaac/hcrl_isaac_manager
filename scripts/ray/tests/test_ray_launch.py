@@ -128,3 +128,19 @@ class PreflightTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExtScriptTest(unittest.TestCase):
+    def test_a_repo_script_maps_to_its_worker_mount(self) -> None:
+        from job_args import ext_script
+
+        self.assertEqual(
+            ext_script("hcrl_isaaclab/scripts/video_logger.py"), "/workspace/ext/hcrl_isaaclab/scripts/video_logger.py"
+        )
+
+    def test_paths_outside_a_shipped_repo_are_refused(self) -> None:
+        from job_args import ext_script
+
+        for bad in ("/abs/x.py", "hcrl_isaaclab/../x.py", "video_logger.py", "hcrl_isaaclab/scripts/run.sh", "a//b.py"):
+            with self.assertRaises(ValueError, msg=bad):
+                ext_script(bad)
