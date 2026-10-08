@@ -12,17 +12,22 @@ RES_DIR = Path(__file__).resolve().parent
 MANAGER_DIR = RES_DIR.parents[2]
 
 
-def _cluster_config_dir() -> Path:
-    """This checkout's cluster profiles, or the main checkout's when this worktree has none (they are gitignored)."""
-    own = MANAGER_DIR / "scripts" / "cluster" / "config"
-    if any(own.glob("*/.env.cluster")):
-        return own
+def _main_checkout() -> Path:
+    """The main checkout of this repo (this one, unless this is a worktree)."""
     common = subprocess.run(
         ["git", "-C", str(RES_DIR), "rev-parse", "--path-format=absolute", "--git-common-dir"],
         capture_output=True,
         text=True,
     ).stdout.strip()
-    main = Path(common).parent / "scripts" / "cluster" / "config" if common else own
+    return Path(common).parent if common else MANAGER_DIR
+
+
+def _cluster_config_dir() -> Path:
+    """This checkout's cluster profiles, or the main checkout's when this worktree has none (they are gitignored)."""
+    own = MANAGER_DIR / "scripts" / "cluster" / "config"
+    if any(own.glob("*/.env.cluster")):
+        return own
+    main = _main_checkout() / "scripts" / "cluster" / "config"
     return main if any(main.glob("*/.env.cluster")) else own
 
 
@@ -89,8 +94,12 @@ def slurm_pools() -> list[Pool]:
 
 
 def load_config() -> dict:
-    """compute.toml merged with compute.local.toml."""
-    return _merge(_read_toml(RES_DIR / "compute.toml"), _read_toml(RES_DIR / "compute.local.toml"))
+    """compute.toml merged with compute.local.toml: this checkout's, or the main checkout's in a worktree that has none
+    (it is gitignored, so a worktree never has one and would lose the ssh logins)."""
+    local = RES_DIR / "compute.local.toml"
+    if not local.exists():
+        local = _main_checkout() / "scripts" / "cluster" / "res" / "compute.local.toml"
+    return _merge(_read_toml(RES_DIR / "compute.toml"), _read_toml(local))
 
 
 def load_pools() -> list[Pool]:
