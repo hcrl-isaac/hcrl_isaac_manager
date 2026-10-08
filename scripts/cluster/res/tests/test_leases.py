@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 RES = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RES))
@@ -297,6 +298,56 @@ class CommandTest(TempStore):
         with self.assertRaises(SystemExit):
             self.claim("mckennie:2")  # busy card: refused
         self.assertEqual(self.stored(), [])
+
+    def _probes(self, *rounds: list) -> list[int]:
+        """Each probe returns the next round's cards (the last repeats); returns a probe counter."""
+        calls = [0]
+
+        def probe(pools: list) -> list:
+            cards = rounds[min(calls[0], len(rounds) - 1)]
+            calls[0] += 1
+            return [report(*cards)]
+
+        res.probe_all = probe
+        return calls
+
+    def test_wait_leases_the_card_once_it_frees(self) -> None:
+        calls = self._probes([card(index=2, state="busy")], [card(index=2, state="busy")], [card(index=2)])
+        with mock.patch.object(res, "WAIT_POLL_S", 0.01), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.claim("mckennie:2", wait=0.0)
+        self.assertEqual(self.stored(), ["mckennie:2"])
+        self.assertEqual(calls[0], 3)
+        self.assertEqual(err.getvalue().count("waiting for one to free"), 1, "it says so once, not every poll")
+
+    def test_wait_takes_the_first_free_any_match(self) -> None:
+        self._probes([card(index=0, state="busy")], [card(index=0), card(index=1)])
+        with mock.patch.object(res, "WAIT_POLL_S", 0.01), contextlib.redirect_stderr(io.StringIO()):
+            self.claim(any=True, wait=0.0)
+        self.assertEqual(len(self.stored()), 1)
+
+    def test_wait_gives_up_at_its_limit(self) -> None:
+        self._probes([card(index=2, state="busy")])
+        with (
+            mock.patch.object(res, "WAIT_POLL_S", 0.05),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            self.claim("mckennie:2", wait=0.12)
+        self.assertIn("gave up waiting", str(ctx.exception.code))
+        self.assertEqual(self.stored(), [])
+
+    def test_without_wait_a_taken_card_is_refused_at_once(self) -> None:
+        calls = self._probes([card(index=2, state="busy")])
+        with self.assertRaises(SystemExit):
+            self.claim("mckennie:2")
+        self.assertEqual(calls[0], 1)
+
+    def test_wait_never_retries_a_card_that_does_not_exist(self) -> None:
+        calls = self._probes([card(index=0)])
+        with mock.patch.object(res, "WAIT_POLL_S", 0.01), self.assertRaises(SystemExit) as ctx:
+            self.claim("nosuch:0", wait=0.0)
+        self.assertIn("not found", str(ctx.exception.code))
+        self.assertEqual(calls[0], 1)
 
     def test_any_packs_onto_hosts_already_in_use(self) -> None:
         self.cards = [card(host="solo", index=0), card(index=0), card(index=1, state="busy")]

@@ -1013,6 +1013,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             holder=args.holder,
             note=args.note or f"res eval {os.path.basename(script)}",
             for_=0.0,
+            wait=args.wait,
         )
         [(taken, card, rep)] = claim(ns, usable)[0]
         host, gpu = card.host, card.index
@@ -1117,6 +1118,13 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     ev.add_argument("--pool", action="append", help="with --any/--on: only these pools (prefix match)")
     ev.add_argument("--min-free-gb", type=float, default=0, help="with --any: free memory the card needs")
     ev.add_argument("--holder", required=True, help="your session name")
+    ev.add_argument(
+        "--wait",
+        nargs="?",
+        const=0.0,
+        type=_duration,
+        help="when the card (or every --any match) is taken, wait for one to free (optionally at most this long)",
+    )
     ev.add_argument("--note", default="", help="lease note")
     ev.add_argument(
         "--checkpoint",

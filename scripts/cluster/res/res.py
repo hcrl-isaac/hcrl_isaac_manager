@@ -19,6 +19,11 @@ from inventory import Pool, load_config, load_pools
 from probe import HELD_UTIL, Card, Report, probe_local, probe_ray, probe_slurm_login, probe_ssh_host
 
 CAUTION = {"free": 0, "held": 1, "busy": 2, "unknown": 3}
+WAIT_POLL_S = 60.0  # how often --wait probes again for a card to free
+
+
+class Busy(SystemExit):
+    """A claim refused only because the cards it wants are taken right now, which --wait retries."""
 
 
 def _guarded(fn: Callable[..., list[Report]], label: str, kind: str, *args: Any) -> list[Report]:
@@ -239,17 +244,19 @@ def _choose(seen: list[tuple[Card, Report]], taken: set[str], args: argparse.Nam
 
         free.sort(key=pack)
         if len(free) < args.count:
-            sys.exit(f"[res] only {len(free)} free card(s) match; nothing claimed")
+            raise Busy(f"[res] only {len(free)} free card(s) match; nothing claimed")
         return free[: args.count]
     chosen = []
     for spec in dict.fromkeys(args.cards):
         card, rep = _named(spec, seen)
         key = ls.card_key(card)
         if key in taken:
-            sys.exit(f"[res] {spec} is leased; move it with `just res transfer {spec} --to <holder>`; nothing claimed")
+            raise Busy(
+                f"[res] {spec} is leased; move it with `just res transfer {spec} --to <holder>`; nothing claimed"
+            )
         if card.state != "free" and not (adopt and card.state in ("busy", "held")):
             hint = "; pass --adopt to take over the run on it" if card.state in ("busy", "held") else ""
-            sys.exit(f"[res] {spec} is {card.state}{hint}; nothing claimed")
+            raise Busy(f"[res] {spec} is {card.state}{hint}; nothing claimed")
         if key in {ls.card_key(c) for c, _ in chosen}:
             continue
         chosen.append((card, rep))
@@ -259,14 +266,36 @@ def _choose(seen: list[tuple[Card, Report]], taken: set[str], args: argparse.Nam
 def claim(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple[ls.Lease, Card, Report]], dict]:
     """Lease named cards, or --any free ones, after a fresh probe; all or nothing (exits when refused).
 
+    With ``args.wait`` set (seconds, 0 for no limit) a refusal only because the cards are taken right now is retried
+    every ``WAIT_POLL_S`` until they free or the wait runs out.
+
     Args:
         args: cards, any, count, min_free_gb, pool, holder, note and for_ as `just res claim` takes them, plus
-            optional adopt and run.
+            optional adopt, run and wait.
         pools: Pools to probe.
 
     Returns:
         The new leases with their cards and reports, and the lease windows.
     """
+    wait = getattr(args, "wait", None)
+    deadline = time.monotonic() + wait if wait else None
+    announced = False
+    while True:
+        try:
+            return _claim_once(args, pools)
+        except Busy as exc:
+            if wait is None:
+                raise
+            if deadline is not None and time.monotonic() + WAIT_POLL_S > deadline:
+                raise SystemExit(f"{exc.code}; gave up waiting after {wait / 60:g} min") from None
+            if not announced:
+                print(f"{exc.code}; waiting for one to free (--wait)", file=sys.stderr, flush=True)
+                announced = True
+            time.sleep(WAIT_POLL_S)
+
+
+def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple[ls.Lease, Card, Report]], dict]:
+    """One probe-and-lease attempt of :func:`claim`."""
     reports = probe_all(select_pools(pools, args.pool))
     seen = [(c, r) for r in reports for c in r.cards]
     windows = lease_windows()
@@ -409,6 +438,13 @@ def main() -> None:
     cl.add_argument("--for", dest="for_", type=_duration, default=0.0, help="hard time box, e.g. 90m or 2h")
     cl.add_argument("--adopt", action="store_true", help="take over named busy cards whose run you are taking on")
     cl.add_argument("--run", default="", help="the run the lease covers (W&B id, job.step)")
+    cl.add_argument(
+        "--wait",
+        nargs="?",
+        const=0.0,
+        type=_duration,
+        help="when the cards are taken, wait for them to free (optionally at most this long, e.g. 2h)",
+    )
     rl = sub.add_parser("release", help="release your leases by id or host:gpu")
     rl.add_argument("targets", nargs="+")
     rl.add_argument("--holder", required=True, help="your session name (must match the lease)")
