@@ -52,8 +52,9 @@ if [ "$DRY" = 1 ]; then
     echo "$JOB"
     exit 0
 fi
-# one deploy root, installed editable into the venv: deploying under a pending or running job swaps its code
-busy=$(ssh "${SSH[@]}" "$CLUSTER_LOGIN" "squeue -h -u \$USER -n isaac3-train -t PENDING,RUNNING -o '%i %T'")
+# one deploy root, installed editable into the venv: deploying under a queued, starting, running or suspended job swaps
+# its code. Only a COMPLETING job, which no longer imports the trees, is left out.
+busy=$(ssh "${SSH[@]}" "$CLUSTER_LOGIN" "squeue -h -u \$USER -n isaac3-train -t PENDING,CONFIGURING,RUNNING,SUSPENDED,REQUEUED -o '%i %T'")
 if [ -n "$busy" ] && [ "$FORCE" = 0 ]; then
     echo "[isaac3] not deploying: isaac3-train jobs import the trees at $ROOT and would get this checkout's code:" >&2
     echo "$busy" | sed 's/^/  /' >&2
