@@ -14,7 +14,7 @@ cp -r "$REPO/scripts/cluster/cluster_dev" "$REPO/scripts/cluster/tools" "$M/scri
 mkdir -p "$M/scripts/cluster/config/zz"
 printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nCLUSTER_MIN_FREE_GB=0\n' "$T/remote" \
     > "$M/scripts/cluster/config/zz/.env.cluster"
-printf '#!/usr/bin/env bash\n#SBATCH -p test\n' > "$M/scripts/cluster/config/zz/submit_job_slurm.sh"
+printf '#!/usr/bin/env bash\n#SBATCH -p test\n#SBATCH -A IRI26004\n' > "$M/scripts/cluster/config/zz/submit_job_slurm.sh"
 git -C "$M" worktree add -q "$T/wt"
 cat > "$T/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
@@ -53,8 +53,14 @@ check "and its account" "grep -q -- '-A IRI26004 ' '$T/srun_args'"
 check "and its GPU request" "grep -q -- '--gres=gpu:4 ' '$T/srun_args'"
 check "the command reaches node_exec" "grep -q '^ARG<hi>' '$T/out1'"
 
+SQ_ROW="RUNNING n1 amd-rtx iri26004 gres/gpu:4" dev "$M" exec -- echo hi > "$T/out5" 2>&1
+check "squeue's lowercased account takes the profile's spelling (TACC refuses cda26011)" "grep -q -- '-A IRI26004 ' '$T/srun_args'"
+SQ_ROW="RUNNING n1 amd-rtx otherproj gres/gpu:4" dev "$M" exec -- echo hi > "$T/out6" 2>&1
+check "a different account is kept as squeue gives it" "grep -q -- '-A otherproj ' '$T/srun_args'"
+
 SQ_ROW="RUNNING n1 skx (null) N/A" dev "$M" exec -- echo hi > "$T/out2" 2>&1
-check "no account and no GPU request add none" "grep -q -- '-p skx ' '$T/srun_args' && ! grep -q -- ' -A ' '$T/srun_args' && ! grep -q -- '--gres' '$T/srun_args'"
+check "a job without an account keeps the profile's, and no GPU request adds none" \
+    "grep -q -- '-p skx ' '$T/srun_args' && grep -q -- '-A IRI26004 ' '$T/srun_args' && ! grep -q -- '--gres' '$T/srun_args'"
 
 SQ_ROW="RUNNING n1 amd-rtx IRI26004 N/A" dev "$T/wt" exec -- echo hi > "$T/out3" 2>&1
 check "a worktree's exec uses the main checkout's profile" "grep -q '^ARG<hi>' '$T/out3' && grep -q \"main checkout's profile\" '$T/out3'"
