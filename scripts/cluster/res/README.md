@@ -84,6 +84,10 @@ just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --d
   from its shipped copy, so its own sibling imports resolve (e.g. `hcrl_isaaclab:scripts/train.py`). It runs in a
   writable working dir of its own, `<scratch>/res-eval/work/<stage id>`, where relative outputs such as `logs/` land
   and stay.
+- On an ssh card the `--wt` repos ship as read-only snapshots under `<scratch>/res-eval/code/`, and every other repo
+  runs from the box's synced workspace (never from this machine's shared checkouts). Output a script writes inside a
+  shipped repo (`logs/`, `outputs/`, `wandb/`, e.g. video_logger's checkpoints and videos) lands in the box
+  workspace's copy of that repo.
 - `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
   owns its stage dir, and its lease stays held until the card goes idle (or `just res release <id>`). `--timeout`
   and `--stall` do not apply to a detached run.

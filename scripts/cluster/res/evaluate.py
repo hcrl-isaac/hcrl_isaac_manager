@@ -336,6 +336,8 @@ def cluster_dev_cmd(profile: str, job: str, *args: str) -> tuple[list[str], dict
 
 
 TREE_KEEP_DAYS = 14  # an unused res-eval tree older than this is removed when a newer one is staged
+# the dirs a repo's scripts write run output to inside the repo (a staged cluster tree's TREE_RW_DIRS)
+SNAPSHOT_RW_DIRS = ("logs", "outputs", "wandb")
 
 
 def stage_tree(t: Target, code: dict[str, str]) -> str:
@@ -573,7 +575,23 @@ class Stage:
         root = f"{self.t.scratch}/res-eval/code"
         snap = f"{root}/{repo}-{fp}"
         line = f"{repo} {src} {desc} -> {snap}"
+
+        # run output a repo writes inside itself (logs/, outputs/, wandb/) lands in the box workspace's copy of that
+        # repo, as a staged tree's does on a cluster: the snapshot itself is read-only and shared between runs
+        def rw(path: str) -> str:
+            """Shell that links each output dir of ``path`` to the workspace's, each step ending in ``&&``."""
+            steps = []
+            for d in SNAPSHOT_RW_DIRS:
+                target = q(f"{self.t.workspace}/resources/{repo}/{d}")
+                steps.append(f"mkdir -p {target} && {{ [ -e {path}/{d} ] || ln -s {target} {path}/{d}; }} &&")
+            return " ".join(steps)
+
         if self._ssh(f"[ -f {q(snap)}/.complete ]").returncode == 0:
+            # a snapshot made before these links existed gets them now
+            missing = " || ".join(f"[ ! -e {q(snap)}/{d} ]" for d in SNAPSHOT_RW_DIRS)
+            add = f"chmod u+w {q(snap)} && {rw(q(snap))} chmod a-w {q(snap)}"
+            if self._ssh(f"if {missing}; then {add}; fi").returncode != 0:
+                sys.exit(f"[res] could not link the output dirs of {snap} on {self.t.host}")
             return snap, line
         part = f"{snap}.partial.{uuid.uuid4().hex[:6]}"
         prev = self._ssh(
@@ -588,7 +606,10 @@ class Stage:
             cmd = ["rsync", "-rlp", "--checksum", "-s", "--from0", "--files-from=-", *links, "-e", ssh, f"{src}/"]
             if subprocess.run([*cmd, f"{self.t.ssh}:{part}/"], input=b"\0".join(code_files(src))).returncode != 0:
                 sys.exit(f"[res] could not upload {repo} to {self.t.host}")
-            finish = f"touch {q(part)}/.complete && chmod -R a-w {q(part)} && mv -T {q(part)} {q(snap)} 2>/dev/null"
+            finish = (
+                f"{rw(q(part))} touch {q(part)}/.complete && chmod -R a-w {q(part)} && "
+                f"mv -T {q(part)} {q(snap)} 2>/dev/null"
+            )
             if self._ssh(finish).returncode == 0:
                 part = ""
         finally:
@@ -602,7 +623,7 @@ class Stage:
         """PYTHONPATH entries that import ``code`` on the target, and the MANIFEST lines describing them.
 
         A local target imports the checkouts in place. An ssh target gets a fresh ``<stage>/resources/`` of links:
-        package repos to their snapshots, every other repo to the target workspace's copy (so RESOURCES_DIR
+        worktree-set repos to their snapshots, every other repo to the target workspace's copy (so RESOURCES_DIR
         resolves); nothing is ever synced through a link.
 
         Args:
@@ -613,14 +634,15 @@ class Stage:
         """
         if self.t.kind == "local":
             return list(code.values()), [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
+        # only worktree-set repos ship; the rest run from the target's own checkout (`develop sync`, the box's synced
+        # workspace), never from this machine's shared checkouts and whatever uncommitted work sits in them
+        main = os.path.join(local_workspace(), "resources")
+        staged = {
+            repo: src
+            for repo, src in code.items()
+            if os.path.realpath(src) != os.path.realpath(os.path.join(main, repo))
+        }
         if self.t.kind == "slurm":
-            # only worktree-set repos are staged; the rest run from the cluster's shared checkout (`develop sync`)
-            main = os.path.join(local_workspace(), "resources")
-            staged = {
-                repo: src
-                for repo, src in code.items()
-                if os.path.realpath(src) != os.path.realpath(os.path.join(main, repo))
-            }
             self.tree = stage_tree(self.t, staged) if staged else ""
             shared = f"{self.t.workspace}/resources"
             q = shlex.quote
@@ -643,7 +665,10 @@ class Stage:
         res = f"{self.dir}/resources"
         snaps, lines = {}, []
         for repo, src in code.items():
-            snaps[repo], line = self.snapshot(repo, src)
+            if repo in staged:
+                snaps[repo], line = self.snapshot(repo, src)
+            else:
+                line = f"{repo} {self.t.workspace}/resources/{repo} (the box's workspace)"
             lines.append(line)
         links = " ".join(f"ln -s {q(s)} {q(res)}/{repo};" for repo, s in snaps.items())
         assets = f'for d in {q(self.t.workspace)}/resources/*/; do n=$(basename "$d"); '

@@ -348,6 +348,42 @@ class SshStageTest(Isolated):
         self.assertFalse(os.access(snap / "mod.py", os.W_OK))
         self.assertFalse(os.access(snap, os.W_OK))
 
+    def test_run_output_inside_a_snapshot_lands_in_the_workspace(self) -> None:
+        """A script that writes <repo>/logs (video_logger's checkpoints and videos) writes the box workspace's copy."""
+        stage = self._stage()
+        snap = Path(os.path.realpath(f"{stage.dir}/resources/robot_rl"))
+        for d in ev.SNAPSHOT_RW_DIRS:
+            self.assertEqual(os.path.realpath(snap / d), str(self.ws / "resources" / "robot_rl" / d))
+        (snap / "logs" / "video_logger").mkdir()
+        (snap / "logs" / "video_logger" / "model_10.pt").write_text("w")
+        self.assertTrue((self.ws / "resources/robot_rl/logs/video_logger/model_10.pt").is_file())
+        self.assertFalse(os.access(snap, os.W_OK), "the snapshot itself stays read-only")
+
+    def test_a_snapshot_from_before_the_output_links_gets_them_on_reuse(self) -> None:
+        snap = Path(os.path.realpath(f"{self._stage().dir}/resources/robot_rl"))
+        snap.chmod(0o755)
+        for d in ev.SNAPSHOT_RW_DIRS:
+            (snap / d).unlink()
+        snap.chmod(0o555)
+        again = Path(os.path.realpath(f"{self._stage().dir}/resources/robot_rl"))
+        self.assertEqual(again, snap)
+        self.assertTrue(all((snap / d).is_symlink() for d in ev.SNAPSHOT_RW_DIRS))
+        self.assertFalse(os.access(snap, os.W_OK))
+
+    def test_a_main_checkout_repo_is_not_shipped(self) -> None:
+        """Without a worktree, a repo runs from the box's workspace, never from this machine's shared checkout."""
+        local_ws = self.tmp / "local_ws"
+        (local_ws / "resources").mkdir(parents=True)
+        (local_ws / "resources" / "robot_rl").symlink_to(self.src)
+        with mock.patch.object(ev, "local_workspace", return_value=str(local_ws)):
+            stage = self._stage()
+        self.assertEqual(os.path.realpath(f"{stage.dir}/resources/robot_rl"), str(self.ws / "resources/robot_rl"))
+        self.assertFalse(
+            (self.tmp / "scratch" / "res-eval" / "code").exists()
+            and any((self.tmp / "scratch" / "res-eval" / "code").glob("robot_rl-*"))
+        )
+        self.assertIn("the box's workspace", stage.manifest[0])
+
     def test_an_interrupted_upload_leaves_no_partial(self) -> None:
         stage = ev.Stage(self.t)
         stage.make()
