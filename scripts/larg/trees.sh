@@ -21,7 +21,7 @@ SSH_OPTS=(-o ConnectTimeout=10)
 REMOTE_ISAACLAB_DIR="$(larg_remote_path)"
 LOCAL_ISAACLAB_DIR="$LARG_LOCAL_DIR"
 SCRIPT_DIR="$HERE/../cluster/cluster_dev"  # trees.sh carries node_exec.sh and scripts/.env.* from beside it
-TREE_RUN_HINT="scripts/larg/train.sh --tree"  # cmd_stage's closing hint
+TREE_RUN_HINT="scripts/larg/train.sh --tree <id> $host <task> <run_name> [run_group] [num_envs] [-- train.py args]"
 ensure_master() { :; }  # plain ssh, no control master
 log() { echo -e "[larg] $*"; }
 err() { echo -e "\033[31m[larg] ERROR: $*\033[0m" >&2; }

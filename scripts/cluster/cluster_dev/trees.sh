@@ -154,7 +154,8 @@ cmd_stage() {  # stage [--no-space-check] NAME REPO=REF|REPO=PATH ... : upload t
         log "Staged ${tree}"
     fi
     printf '%s' "$manifest" | sed 's/^/  /'
-    echo "Run with: ${TREE_RUN_HINT:-just cluster ${CLUSTER:-} develop exec --tree} $(basename "$tree") -- <cmd>"
+    local hint="${TREE_RUN_HINT:-just cluster ${CLUSTER:-} develop exec --tree <id> -- <cmd>}"
+    echo "Run with: ${hint//<id>/$(basename "$tree")}"
 }
 
 _stage_cleanup() {  # trap: drop this run's temporary checkouts and any partial upload

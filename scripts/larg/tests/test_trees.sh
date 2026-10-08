@@ -48,7 +48,7 @@ check "it holds the ref's content" "grep -qx feat '$tree/resources/hcrl_isaaclab
 check "unstaged repos link to the workspace" "[ -L '$tree/resources/hcrl_robots' ] && [ -f '$tree/resources/hcrl_robots/t1.urdf' ]"
 check "the artifact root is the workspace's" \
     "[ \"\$(readlink '$tree/resources/hcrl_isaaclab/.artifacts')\" = '$R/resources/hcrl_isaaclab/.artifacts' ]"
-check "the closing hint names train.sh --tree" "grep -q 'Run with: scripts/larg/train.sh --tree t1-' '$T/out1'"
+check "the closing hint names train.sh --tree with the tree and host" "grep -q 'Run with: scripts/larg/train.sh --tree t1-[0-9a-f]* hazard <task>' '$T/out1'"
 larg list hazard > "$T/out2" 2>&1
 check "list shows the tree and its manifest" "grep -q '^t1-' '$T/out2' && grep -q 'hcrl_isaaclab feat' '$T/out2'"
 
