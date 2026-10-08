@@ -63,8 +63,8 @@ cmd_stage() {  # stage [--no-space-check] NAME REPO=REF|REPO=PATH ... : upload t
         repo="${spec%%=*}"; ref="${spec#*=}"
         [ "$repo" != "$spec" ] && [ -n "$ref" ] || { err "bad spec '${spec}' (want repo=ref)"; exit 1; }
         _tree_valid "$repo" || { err "repo '${repo}': use letters, digits, . _ -"; exit 1; }
-        case "$repo" in  # USD conversion writes into the asset repos, and IsaacLab is a separate overlay
-            *_robots | IsaacLab) err "${repo} cannot be staged: it stays linked to the shared checkout"; exit 1 ;;
+        case "$repo" in  # IsaacLab is a separate overlay
+            IsaacLab) err "${repo} cannot be staged: it stays linked to the shared checkout"; exit 1 ;;
         esac
         [ -d "${LOCAL_ISAACLAB_DIR}/resources/${repo}" ] || { err "no repo resources/${repo} in ${LOCAL_ISAACLAB_DIR}"; exit 1; }
         case "$seen" in *" ${repo} "*) err "repo '${repo}' named twice"; exit 1 ;; esac
@@ -108,17 +108,22 @@ cmd_stage() {  # stage [--no-space-check] NAME REPO=REF|REPO=PATH ... : upload t
     else
         STAGE_PART="${tree}.partial.$$"
         on_login "mkdir -p '${STAGE_PART}/resources' '${STAGE_PART}/scripts/cluster/cluster_dev'" || exit 1
-        local entry links prev d
+        local entry links mode prev d
         for entry in "${srcs[@]}"; do
             repo="${entry%%=*}"; src="${entry#*=}"
             log "Uploading ${repo} -> ${STAGE_PART}/resources/${repo}"
             # identical files are hardlinked from the newest earlier trees with this repo, never the mutable shared copy
-            links=()
-            while IFS= read -r prev; do
-                [ -n "$prev" ] && links+=(--link-dest="${prev}/")
-            done < <(on_login "for d in \$(ls -1dt '${TREES_DIR}'/*/resources/'${repo}' 2>/dev/null); do \
-                case \"\$d\" in *.partial.*) continue ;; esac; [ -L \"\$d\" ] || echo \"\$d\"; done | head -3")
-            _tree_files "$src" | rsync -rlp --chmod=Fa-w --checksum --info=progress2 --from0 --files-from=- "${links[@]}" \
+            links=() mode=(--chmod=Fa-w)
+            case "$repo" in
+                # an asset repo is written to by the run (URDF -> USD conversion rewrites files beside the URDF), so
+                # its files stay writable and are its own: a file hardlinked between trees would change in all of them
+                *_robots) mode=() ;;
+                *) while IFS= read -r prev; do
+                       [ -n "$prev" ] && links+=(--link-dest="${prev}/")
+                   done < <(on_login "for d in \$(ls -1dt '${TREES_DIR}'/*/resources/'${repo}' 2>/dev/null); do \
+                       case \"\$d\" in *.partial.*) continue ;; esac; [ -L \"\$d\" ] || echo \"\$d\"; done | head -3") ;;
+            esac
+            _tree_files "$src" | rsync -rlp "${mode[@]}" --checksum --info=progress2 --from0 --files-from=- "${links[@]}" \
                 -e "ssh ${SSH_OPTS[*]}" "${src}/" "${CLUSTER_LOGIN}:${STAGE_PART}/resources/${repo}/" || exit 1
             for d in "${TREE_RW_DIRS[@]}"; do on_login "mkdir -p '${STAGE_PART}/resources/${repo}/${d}'" || exit 1; done
             [ "$repo" = hcrl_isaaclab ] && { on_login "mkdir -p '${STAGE_PART}/resources/${repo}/.artifacts'" || exit 1; }
