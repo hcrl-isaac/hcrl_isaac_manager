@@ -93,7 +93,7 @@ check "earlier trees serve as hardlink sources too" \
 # names are validated before anything is touched
 mkdir -p "$L/resources/hcrl_robots" "$L/resources/IsaacLab"
 for spec in "../../../resources/hcrl_isaaclab=feat" "=feat" "hcrl_isaacla=feat" "hcrl_isaaclab=feat hcrl_isaaclab=main" \
-    "hcrl_robots=main" "IsaacLab=main" "hcrl_isaaclab=$G/sub"; do
+    "IsaacLab=main" "hcrl_isaaclab=$G/sub"; do
     # shellcheck disable=SC2086
     dev stage bad $spec > "$T/out_b1" 2>&1
     check "rejects spec '$spec'" "[ $? -ne 0 ] && [ \$(ntrees bad) -eq 0 ]"
@@ -192,6 +192,30 @@ check "rm --partials removes only partials idle for an hour" \
 
 dev sync --dry-run > "$T/out7" 2>&1
 check "develop sync leaves trees alone" "! grep -q '^\*deleting *trees/' '$T/out7'"
+
+# an asset repo stages at a ref like a code repo, but writable and with files of its own: the run's URDF -> USD
+# conversion rewrites files beside the URDF, which must touch neither another tree nor the shared checkout
+A="$L/resources/ssti_robots"
+mkdir -p "$A" "$R/resources/ssti_robots"
+(
+    cd "$A" && git init -q -b main . && git config user.email t@t && git config user.name t
+    echo "mass 1.0" > shank.urdf && git add -A && git commit -qm main
+    git switch -q -c heavy && echo "mass 1.82" > shank.urdf && git commit -qam heavy && git switch -q main
+)
+echo "mass 1.0" > "$R/resources/ssti_robots/shank.urdf"
+dev stage assets1 ssti_robots=heavy hcrl_isaaclab=feat > "$T/out_a1" 2>&1
+check "an asset repo stages at a ref" "[ $? -eq 0 ]"
+at="$(ls -d "$R"/trees/assets1-* 2>/dev/null | head -1)"
+check "with the ref's content" "grep -qx 'mass 1.82' '$at/resources/ssti_robots/shank.urdf'"
+check "its files stay writable for the run's conversions" "[ -w '$at/resources/ssti_robots/shank.urdf' ]"
+check "while code repos stay read-only" "[ ! -w '$at/resources/hcrl_isaaclab/code.py' ]"
+dev stage assets2 ssti_robots=heavy > "$T/out_a2" 2>&1
+at2="$(ls -d "$R"/trees/assets2-* 2>/dev/null | head -1)"
+check "and no file is shared with another tree" \
+    "[ \"\$(stat -c %i '$at/resources/ssti_robots/shank.urdf')\" != \"\$(stat -c %i '$at2/resources/ssti_robots/shank.urdf')\" ]"
+echo "usd" > "$at/resources/ssti_robots/shank.usd" && echo "mass 9" > "$at/resources/ssti_robots/shank.urdf"
+check "so a write in one tree stays there" \
+    "grep -qx 'mass 1.82' '$at2/resources/ssti_robots/shank.urdf' && grep -qx 'mass 1.0' '$R/resources/ssti_robots/shank.urdf'"
 
 if [ "$fails" -ne 0 ]; then
     ls -la "$R/trees"
