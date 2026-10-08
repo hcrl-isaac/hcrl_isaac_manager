@@ -94,8 +94,11 @@ def slurm_pools() -> list[Pool]:
 
 
 def load_config() -> dict:
-    """compute.toml merged with compute.local.toml: this checkout's, or the main checkout's in a worktree that has none
-    (it is gitignored, so a worktree never has one and would lose the ssh logins)."""
+    """compute.toml merged with compute.local.toml.
+
+    The local file is this checkout's, or the main checkout's in a worktree that has none (it is gitignored, so a
+    worktree never has one and would lose the ssh logins).
+    """
     local = RES_DIR / "compute.local.toml"
     if not local.exists():
         local = _main_checkout() / "scripts" / "cluster" / "res" / "compute.local.toml"
