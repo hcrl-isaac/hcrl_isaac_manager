@@ -684,6 +684,15 @@ class EvalRunTest(Isolated):
         self.assertEqual(self._leases(), [])
         self.assertEqual(self._stages(), [], "stage dir not removed")
 
+    def test_a_checkpoint_placeholder_in_the_args_becomes_its_path(self) -> None:
+        rc, out = self._eval(
+            "--any", "--checkpoint", f"CKPT_A={self.ckpt}", "--", "--checkpoint", "{CKPT_A}", "--other={CKPT_A}", "{X}"
+        )
+        self.assertEqual(rc, 0, out)
+        argv = next(line for line in out.splitlines() if line.startswith("ARGV "))
+        path = next(line.split(" ", 1)[1] for line in out.splitlines() if line.startswith("CKPT_A "))
+        self.assertIn(f"'--checkpoint', '{path}', '--other={path}', '{{X}}'", argv, "unknown braces stay as written")
+
     def test_failure_status_propagates_keeps_the_log_and_releases(self) -> None:
         rc, out = self._eval("--any", "--env", "MODE=fail")
         self.assertEqual(rc, 3, out)
