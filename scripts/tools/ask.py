@@ -54,6 +54,8 @@ def _wandb_env(template: Path, out: Path) -> None:
     rendered = template.read_text()
     for key, val in {"WANDB_USERNAME": username, "WANDB_API_KEY": api_key}.items():
         rendered = rendered.replace(f"${key}", val)
+    out.touch(mode=0o600)
+    out.chmod(0o600)  # an API key: owner-only, and the syncs carry the mode to the clusters
     out.write_text(rendered)
     print(f"[ask] wrote {out}")
 

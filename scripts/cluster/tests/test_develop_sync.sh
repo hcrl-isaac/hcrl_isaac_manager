@@ -33,6 +33,8 @@ echo wl > "$L/resources/hcrl_isaaclab/worktrees/wtlocal/x.py"
 echo b > "$L/resources/motion_datasets/bundle_local.pt"
 echo n > "$L/resources/motion_datasets/notes.txt"
 echo LOCAL_SLOT > "$L/scripts/cluster/.env.cluster"
+echo WANDB_API_KEY=k > "$L/scripts/.env.wandb"
+chmod 664 "$L/scripts/.env.wandb"
 
 mkdir -p "$R/resources/hcrl_isaaclab/worktrees/wtremote" "$R/resources/hcrl_isaaclab/protected_dir" \
     "$R/resources/motion_datasets" "$R/resources/fork_pbfm" "$R/scripts/cluster" "$R/artifacts"
@@ -92,6 +94,7 @@ check "sibling-config protection honored" "[ -e '$R/resources/hcrl_isaaclab/prot
 check "remote shared slot untouched" "grep -q REMOTE_SLOT '$R/scripts/cluster/.env.cluster'"
 check "config env pushed to its config dir" "grep -q CLUSTER_LOGIN=fake@host '$R/scripts/cluster/config/zz/.env.cluster'"
 check "local slot not rewritten" "grep -q LOCAL_SLOT '$L/scripts/cluster/.env.cluster'"
+check "the W&B key lands owner-only" "[ \"\$(stat -c %a '$R/scripts/.env.wandb')\" = 600 ]"
 
 # a fresh profile whose workspace and its parent do not exist on the remote yet
 FRESH="$T/fresh/parent/isaaclab"

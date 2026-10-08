@@ -131,6 +131,8 @@ cmd_stage() {  # stage [--no-space-check] NAME REPO=REF|REPO=PATH ... : upload t
         rsync -t -e "ssh ${SSH_OPTS[*]}" "${SCRIPT_DIR}/node_exec.sh" \
             "${CLUSTER_LOGIN}:${STAGE_PART}/scripts/cluster/cluster_dev/node_exec.sh" || exit 1
         local f
+        # the API key: owner-only here, which -p carries to the tree
+        [ ! -f "${SCRIPT_DIR}/../../.env.wandb" ] || chmod go-rwx "${SCRIPT_DIR}/../../.env.wandb"
         for f in .env.wandb .env.base; do
             [ -f "${SCRIPT_DIR}/../../${f}" ] && { rsync -tp -e "ssh ${SSH_OPTS[*]}" "${SCRIPT_DIR}/../../${f}" \
                 "${CLUSTER_LOGIN}:${STAGE_PART}/scripts/${f}" || exit 1; }
