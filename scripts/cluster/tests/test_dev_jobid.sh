@@ -63,6 +63,16 @@ for cmd in sync stop start kill; do
     check "a worktree refuses $cmd" "[ \$? -ne 0 ] && grep -q 'run it from the main checkout' '$T/out4'"
 done
 
+# kill: the job DEV_JOBID names, not the tracked one; a full <job>.<step> is not prefixed again
+mkdir -p "$T/.cluster_dev/zz" && echo "JOBID=777" > "$T/.cluster_dev/zz/state"
+printf '#!/usr/bin/env bash\nprintf "%%s " "$@" > "%s/scancel_args"\n' "$T" > "$T/bin/scancel" && chmod +x "$T/bin/scancel"
+SQ_ROW="900.248 1:00" dev "$M" kill > "$T/out_k1" 2>&1
+check "kill lists the DEV_JOBID job's steps" "grep -q 'Running steps on job 900' '$T/out_k1' && grep -q '^900.248' '$T/out_k1'"
+SQ_ROW="900.248 1:00" dev "$M" kill 248 > "$T/out_k2" 2>&1
+check "a bare step is on the DEV_JOBID job" "grep -qx '900.248 ' '$T/scancel_args'"
+SQ_ROW="900.248 1:00" dev "$M" kill 900.248 > "$T/out_k3" 2>&1
+check "a full job.step is cancelled as given" "grep -qx '900.248 ' '$T/scancel_args'"
+
 if [ "$fails" -ne 0 ]; then
     for f in "$T"/out*; do echo "--- $f"; tail -5 "$f"; done
     echo "--- srun args"; cat "$T/srun_args" 2>/dev/null
