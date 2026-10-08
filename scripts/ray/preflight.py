@@ -76,7 +76,7 @@ def _published_rel_paths() -> set[str]:
 
 def main() -> None:
     """Exit 1 listing each artifact-only entry with no artifact; warn and pass if W&B cannot be read."""
-    sources = mounted_sources(os.environ.get("HCRL_WT", ""))
+    sources = mounted_sources(os.environ.get("WT", ""))
     wanted = [
         (rel, os.path.join(src, os.path.relpath(rel, repo)))
         for src, repo in sources

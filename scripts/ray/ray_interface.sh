@@ -37,20 +37,20 @@ sync_resources() {
     ( set -a; . "$mgr/scripts/.env.wandb"; set +a; python "$up" ) || echo "[WARN] resource sync failed; submitting with existing artifacts."
 }
 
-# Render the job configs from their templates. WT=<name> (or HCRL_WT) routes ext_dir + file mounts
+# Render the job configs from their templates. WT=<name> routes ext_dir + file mounts
 # through resources/<repo>/worktrees/<name> wherever one exists.
 render_job_configs() {  # render_job_configs <ut_eid>
     local ut_eid="$1" manager_dir venv_py
     manager_dir="$( cd "$SCRIPT_DIR/../.." && pwd )"
     venv_py="$manager_dir/ilab/bin/python"
     [ -x "$venv_py" ] || venv_py="python3"
-    export HCRL_WT="${HCRL_WT:-${WT:-}}"
+    export WT="${WT:-}"
     export WORKSPACE_FILE_MOUNTS="$("$venv_py" "$SCRIPT_DIR/build_file_mounts.py")"
     WORKSPACE_EXT_DIR="$manager_dir/resources/hcrl_isaaclab/scripts"
-    if [ -n "$HCRL_WT" ] && [ -d "$manager_dir/resources/hcrl_isaaclab/worktrees/$HCRL_WT" ]; then
-        WORKSPACE_EXT_DIR="$manager_dir/resources/hcrl_isaaclab/worktrees/$HCRL_WT/scripts"
+    if [ -n "$WT" ] && [ -d "$manager_dir/resources/hcrl_isaaclab/worktrees/$WT" ]; then
+        WORKSPACE_EXT_DIR="$manager_dir/resources/hcrl_isaaclab/worktrees/$WT/scripts"
     fi
-    [ -n "$HCRL_WT" ] && echo "[INFO] Worktree set '$HCRL_WT': ext_dir + mounts via resources/<repo>/worktrees/$HCRL_WT" >&2
+    [ -n "$WT" ] && echo "[INFO] Worktree set '$WT': ext_dir + mounts via resources/<repo>/worktrees/$WT" >&2
     export WORKSPACE_EXT_DIR
     local cfg
     for cfg in job_config bench_job_config job_config_distributed; do
@@ -176,7 +176,7 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         repo="${script%%/*}"; rest="${script#*/}"
         mgr="$( cd "$SCRIPT_DIR/../.." && pwd )"
         local_copy="$mgr/resources/$repo/$rest"
-        wt="${HCRL_WT:-${WT:-}}"  # as render_job_configs reads it
+        wt="${WT:-}"
         [ -n "$wt" ] && [ -d "$mgr/resources/$repo/worktrees/$wt" ] && local_copy="$mgr/resources/$repo/worktrees/$wt/$rest"
         [ -f "$local_copy" ] || { echo "[ERROR] no $local_copy to ship" >&2; exit 1; }
         echo "[INFO] Running $script on the Ray cluster ($worker)"
