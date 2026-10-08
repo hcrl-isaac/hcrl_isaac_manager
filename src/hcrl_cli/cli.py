@@ -49,7 +49,7 @@ VERBS: dict[str, tuple[str, str, Callable[[list[str]], None]]] = {
     "run": ("<script> [args]", "run hcrl_isaaclab/scripts/<script>.py with the ilab venv (WT=<name>: worktree set)", _first("script", infra.run_script)),
     "res": ("[args]", "compute: probe every GPU, claim/release leases, eval on a leased card", infra.res),
     "cluster": ("[<name>] [args]", "cluster interface: add/setup/job/develop/repush/build", infra.cluster),
-    "ray": ("[args]", "Ray interface: setup/job/bench/push/list/logs/stop", infra.ray),
+    "ray": ("[args]", "Ray interface: setup/job/run/bench/push/list/logs/stop", infra.ray),
     "sync": ("<host> [args]", "push this workspace + Claude sessions to a peer box", _first("host", infra.sync)),
     "sim2real": ("<cmd> [args]", "hcrl_sim2real: MuJoCo sim/sysid, replay, fits, measure, fetch-model/policy", sim2real),
     "upload-artifacts": ("[args]", "upload managed large-file resources to W&B as artifacts", infra.upload_artifacts),

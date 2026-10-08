@@ -11,7 +11,7 @@ from hcrl_cli.proc import ROOT, VENV_PY, ask_select, handoff
 CLUSTER_CONFIGS = Path("scripts/cluster/config")
 CLUSTER_VERBS = ("setup", "job", "develop", "repush", "build", "add")
 CLUSTER_TARGETED = ("setup", "job", "develop", "repush")  # verbs that ask for a target when several clusters exist
-RAY_VERBS = ("setup", "job", "bench", "push", "list", "logs", "stop")
+RAY_VERBS = ("setup", "job", "run", "bench", "push", "list", "logs", "stop")
 
 
 def cluster(args: list[str]) -> None:
@@ -34,7 +34,7 @@ def res(args: list[str]) -> None:
 
 
 def ray(args: list[str]) -> None:
-    """Ray interface (scripts/ray/): setup, job, bench, push, list, logs, stop; bare args show a picker."""
+    """Ray interface (scripts/ray/): setup, job, run (a one-off script), bench, push, list, logs, stop; bare picks."""
     if not args or not args[0]:
         args = [ask_select("Ray subcommand:", RAY_VERBS)]
     handoff(["scripts/ray/ray_interface.sh", *args])
