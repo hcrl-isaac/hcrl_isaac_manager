@@ -34,12 +34,15 @@ if [ "${1:-}" = "--log" ]; then
   exit 0
 fi
 
-host="${1:-}"; task="${2:-}"; run_name="${3:-}"; run_group="${4:-larg}"; num_envs="${5:-}"
-shift $(( $# < 5 ? $# : 5 )) || true
-extra=()
-if [ "${1:-}" = "--" ]; then shift; extra=("$@"); fi
-[ -n "$host" ] && [ -n "$task" ] && [ -n "$run_name" ] || {
-  echo "usage: $0 <host> <task> <run_name> [run_group] [num_envs] [-- extra]"; exit 1; }
+# positionals end at `--`, so an omitted run_group or num_envs never takes the separator as its value
+pos=()
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do pos+=("$1"); shift; done
+[ "${1:-}" = "--" ] && shift
+extra=("$@")
+host="${pos[0]:-}"; task="${pos[1]:-}"; run_name="${pos[2]:-}"; run_group="${pos[3]:-larg}"; num_envs="${pos[4]:-}"
+[ -n "$host" ] && [ -n "$task" ] && [ -n "$run_name" ] && [ "${#pos[@]}" -le 5 ] || {
+  echo "usage: $0 [--tree <name>] <host> <task> <run_name> [run_group] [num_envs] [-- extra]"; exit 1; }
+[[ -z "$num_envs" || "$num_envs" =~ ^[0-9]+$ ]] || { echo "[larg] num_envs must be a number, got '$num_envs'"; exit 1; }
 
 video=async
 for h in "${LARG_A40_HOSTS[@]}"; do [ "${host%%.*}" = "$h" ] && video=on; done

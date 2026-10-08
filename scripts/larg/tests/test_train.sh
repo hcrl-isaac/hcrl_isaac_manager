@@ -65,6 +65,17 @@ wait_ran
 check "an A100 host passes --video async" "sed -n '/^ARG<--video>$/{n;p}' '$T/ran' | grep -qx 'ARG<async>'"
 check "a run without a tree reports python's own pid" "grep -qx \"SELF=\$(sed -n 's/^started pid //p' '$T/out3')\" '$T/ran'"
 
+# `--` right after run_group: num_envs is omitted, not the separator
+rm -f "$T/ran"
+launch CUDA_VISIBLE_DEVICES=3 bash "$REPO/scripts/larg/train.sh" hazard hhlm/T1-Kick-v0 r grp -- --seed 7 > "$T/out9" 2>&1
+wait_ran
+check "an omitted num_envs never takes the -- separator" \
+    "! grep -qx 'ARG<--num_envs>' '$T/ran' && ! grep -qx 'ARG<-->' '$T/ran' && grep -qx 'ARG<--seed>' '$T/ran' && grep -qx 'ARG<grp>' '$T/ran'"
+rm -f "$T/ran"
+launch bash "$REPO/scripts/larg/train.sh" hazard hhlm/T1-Kick-v0 r grp lots > "$T/out10" 2>&1
+sleep 1
+check "a num_envs that is not a number launches nothing" "[ ! -e '$T/ran' ] && grep -q 'num_envs must be a number' '$T/out10'"
+
 # LARG_HOLDER leases the pinned cards through `just res claim` first; a refused claim launches nothing
 printf '#!/usr/bin/env bash\necho "$@" > "%s/claimed"\nexit "${CLAIM_RC:-0}"\n' "$T" > "$T/bin/python3"
 chmod +x "$T/bin/python3"
