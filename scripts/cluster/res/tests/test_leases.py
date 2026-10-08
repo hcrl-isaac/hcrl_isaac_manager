@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 RES = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RES))
@@ -297,6 +298,78 @@ class CommandTest(TempStore):
         with self.assertRaises(SystemExit):
             self.claim("mckennie:2")  # busy card: refused
         self.assertEqual(self.stored(), [])
+
+    def _probes(self, *rounds: list) -> list[int]:
+        """Each probe returns the next round's cards (the last repeats); returns a probe counter."""
+        calls = [0]
+
+        def probe(pools: list) -> list:
+            cards = rounds[min(calls[0], len(rounds) - 1)]
+            calls[0] += 1
+            return [report(*cards)]
+
+        res.probe_all = probe
+        return calls
+
+    def test_wait_leases_the_card_once_it_frees(self) -> None:
+        calls = self._probes([card(index=2, state="busy")], [card(index=2, state="busy")], [card(index=2)])
+        with mock.patch.object(res, "WAIT_POLL_S", 0.01), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.claim("mckennie:2", wait=0.0)
+        self.assertEqual(self.stored(), ["mckennie:2"])
+        self.assertEqual(calls[0], 3)
+        self.assertEqual(err.getvalue().count("waiting for one to free"), 1, "it says so once, not every poll")
+
+    def test_a_wait_on_named_cards_probes_only_their_pools(self) -> None:
+        """Retries for named cards probe the pools those cards were found in, not every login and box."""
+        self.pools = [Pool("larg-a100", "ssh", {}), Pool("delta", "slurm", {}), Pool("horizon", "slurm", {})]
+        rounds = [[card(index=2, state="busy")], [card(index=2)]]
+        probed = []
+
+        def probe(pools: list) -> list:
+            probed.append(sorted(p.name for p in pools))
+            return [report(*rounds[min(len(probed) - 1, 1)], label="larg-a100/mckennie")]
+
+        res.probe_all = probe
+        with mock.patch.object(res, "WAIT_POLL_S", 0.01), contextlib.redirect_stderr(io.StringIO()):
+            self.claim("mckennie:2", wait=0.0)
+        self.assertEqual(probed[0], ["delta", "horizon", "larg-a100"])
+        self.assertEqual(probed[1], ["larg-a100"])
+
+    def test_report_labels_name_their_pools(self) -> None:
+        self.assertEqual(res._report_pools("larg-a100/mckennie"), {"larg-a100"})
+        self.assertEqual(
+            res._report_pools("stampede3 (amd-rtx, rtx-small, stampede)"), {"amd-rtx", "rtx-small", "stampede"}
+        )
+
+    def test_wait_takes_the_first_free_any_match(self) -> None:
+        self._probes([card(index=0, state="busy")], [card(index=0), card(index=1)])
+        with mock.patch.object(res, "WAIT_POLL_S", 0.01), contextlib.redirect_stderr(io.StringIO()):
+            self.claim(any=True, wait=0.0)
+        self.assertEqual(len(self.stored()), 1)
+
+    def test_wait_gives_up_at_its_limit(self) -> None:
+        self._probes([card(index=2, state="busy")])
+        with (
+            mock.patch.object(res, "WAIT_POLL_S", 0.05),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            self.claim("mckennie:2", wait=0.12)
+        self.assertIn("gave up waiting", str(ctx.exception.code))
+        self.assertEqual(self.stored(), [])
+
+    def test_without_wait_a_taken_card_is_refused_at_once(self) -> None:
+        calls = self._probes([card(index=2, state="busy")])
+        with self.assertRaises(SystemExit):
+            self.claim("mckennie:2")
+        self.assertEqual(calls[0], 1)
+
+    def test_wait_never_retries_a_card_that_does_not_exist(self) -> None:
+        calls = self._probes([card(index=0)])
+        with mock.patch.object(res, "WAIT_POLL_S", 0.01), self.assertRaises(SystemExit) as ctx:
+            self.claim("nosuch:0", wait=0.0)
+        self.assertIn("not found", str(ctx.exception.code))
+        self.assertEqual(calls[0], 1)
 
     def test_any_packs_onto_hosts_already_in_use(self) -> None:
         self.cards = [card(host="solo", index=0), card(index=0), card(index=1, state="busy")]

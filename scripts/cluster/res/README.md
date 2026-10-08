@@ -44,6 +44,9 @@ just res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take 
 
 - A claim probes first and succeeds only on cards it sees as free that nobody holds; all named cards or none.
   `--any` fills partly used hosts first and skips Ray unless `--pool ray` is given (Ray schedules onto its cards).
+- `--wait [limit]` queues instead of refusing: while the cards are leased or busy (or too few `--any` matches are
+  free), the claim probes again every minute and leases them once they free, giving up after the limit (e.g.
+  `--wait 2h`; bare `--wait` has none). A card that does not exist is still refused at once.
 - Activity renews a lease: a process of the holder's OS user on that pool, or a busy card whose processes cannot be
   attributed (Ray lists them as `?`). If every attributable process belongs to another user the lease is not renewed
   and shows `CONFLICT`, even when unattributed processes share the card; retained memory with no process and no
@@ -89,7 +92,8 @@ just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --d
   and `--stall` do not apply to a detached run.
 
 - The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
-  several jobs), `--any` or `--lease <id>`. A busy card is refused; `just res claim --adopt` takes over the run on it.
+  several jobs), `--any` or `--lease <id>`. A busy card is refused (`--wait [limit]` waits for it, or for an `--any`
+  match, to free, as `res claim --wait` does); `just res claim --adopt` takes over the run on it.
   A lease `eval` takes is released when the script ends, success or failure; a `--lease` you pass stays yours.
   `--any` stays on the local and ssh pools unless `--pool` names a cluster. `ray` pools are refused (use
   `just ray job`).
