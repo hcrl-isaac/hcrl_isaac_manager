@@ -77,6 +77,14 @@ def resolve(name: str) -> tuple[dict[str, str], list[str]]:
     return paths, overridden
 
 
+def select(name: str) -> tuple[str, str, list[str]]:
+    """``(WT_PYTHONPATH, WT_CORE, overridden repos)`` for a worktree set; a name no repo has is an error."""
+    paths, overridden = resolve(name)
+    if name and not overridden:
+        raise SystemExit(f"[worktree] no repo has worktrees/{name}; nothing to select")
+    return ":".join(paths[r] for r in overridden), paths["hcrl_isaaclab"], overridden
+
+
 def main() -> None:
     """Print eval-able exports for the requested worktree set."""
     ap = argparse.ArgumentParser()
@@ -87,12 +95,9 @@ def main() -> None:
         help="Worktree-set name (empty = main checkouts).",
     )
     args = ap.parse_args()
-    paths, overridden = resolve(args.name)
-    if args.name and not overridden:
-        raise SystemExit(f"[worktree] no repo has worktrees/{args.name}; nothing to select")
-    pypath = ":".join(paths[r] for r in overridden)
+    pypath, core, overridden = select(args.name)
     print(f'export WT_PYTHONPATH="{pypath}"')
-    print(f'export WT_CORE="{paths["hcrl_isaaclab"]}"')
+    print(f'export WT_CORE="{core}"')
     if overridden:
         print(f'echo "[worktree] {args.name}: {", ".join(overridden)} (others from main checkouts)" >&2')
 
