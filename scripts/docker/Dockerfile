@@ -1,5 +1,5 @@
 # Shared Isaac image for the Ray worker and the HPC .sif: nvcr isaacsim base + pip Isaac Lab, with the
-# workspace packages mounted at job start (entrypoint.sh). Build: `just docker build`.
+# workspace packages mounted at job start (entrypoint.sh). Build: `pls docker build`.
 
 ARG ISAACSIM_BASE_IMAGE=nvcr.io/nvidia/isaac-sim
 ARG ISAACSIM_VERSION=5.1.0

@@ -1,4 +1,4 @@
-"""Unit tests for the GPU probe parser (run all script tests: just test-scripts)."""
+"""Unit tests for the GPU probe parser (run all script tests: pls test-scripts)."""
 
 import io
 import json

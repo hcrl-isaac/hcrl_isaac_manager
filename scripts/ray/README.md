@@ -25,7 +25,7 @@ The ray scripts assume that you will be developing on hcrl_isaaclab within manag
 
 Set up the Ray configuration with
 ```bash
-just ray
+pls ray
 ```
 
 If you have additional non-standard configurations (e.g. additional file mounts, env variables, etc.), you can edit the config files at `ray/.env.ray` and `ray/job_config.yaml`.
@@ -54,20 +54,20 @@ This should display a blank table, like so:
 ### Upload large assets (first time)
 
 Robot assets, motion datasets, and exported policies are excluded from the per-job upload (they would
-blow Ray's size limit) and fetched at runtime as W&B artifacts instead. `just ray setup` uploads them
-(it calls `just upload-artifacts`), and every `just ray job` refreshes the ones present locally. Before
+blow Ray's size limit) and fetched at runtime as W&B artifacts instead. `pls ray setup` uploads them
+(it calls `pls upload-artifacts`), and every `pls run --on ray -- train` refreshes the ones present locally. Before
 submitting, a pre-flight (`scripts/ray/preflight.py`) fails naming any excluded entry (every exported policy,
 `**/policies/<task>/<robot>/<name>` whether a dir or a file, and `**/style_data`) in the mounted sources that has no
 artifact at its path, with the command to publish it. A new export therefore needs publishing before its first Ray
 job; Ray's 100 MiB `py_modules` limit is why exports cannot ship with the code:
 
 ```bash
-just upload-artifacts --list                         # what is published, and where it resolves
-just upload-artifacts <path>                         # publish a dir at the path it sits in
-just upload-artifacts <path> --rel-path <rel> --tier cache   # publish from a worktree under the main path
+pls upload-artifacts --list                         # what is published, and where it resolves
+pls upload-artifacts <path>                         # publish a dir at the path it sits in
+pls upload-artifacts <path> --rel-path <rel> --tier cache   # publish from a worktree under the main path
 ```
 
-Job arguments keep their quoting (`--run_group "push foot contact"` stays one argument). `WT=<name>` mounts
+Job arguments keep their quoting (`--run_group "push foot contact"` stays one argument). `--wt <name>` mounts
 `resources/<repo>/worktrees/<name>` wherever one exists; without it the job runs the shared checkout's branches.
 
 See [Large-file resources](#large-file-resources) for how the runtime resolver fetches them and how to
@@ -84,13 +84,13 @@ from this interface.
     - You can modify the script that runs (e.g. between `train.py` and `play.py`) in the `python_script` field of `job_config.yaml`
 - Can be followed by any arguments you'd like to pass to the script (e.g. `--task reach-v0`)
 
-### `just ray run <repo>/<path>.py [args]`
+### `pls run --on ray -- <repo>/<path>.py [args]`
 
 - Runs a one-off script (an eval, a render, a census) on the cluster instead of `train.py`, shipped exactly like a
-  job: the same mounts, artifact fetching and `WT=<name>` worktree routing.
+  job: the same mounts, artifact fetching and `--wt <name>` worktree routing.
 - The script is named inside a shipped repo, e.g.
-  `WT=steady-camera just ray run hcrl_isaaclab/scripts/video_logger.py --wandb_run <run> --task <task> --num_envs 16`.
-- Ray holds the job until a GPU frees, so a busy cluster queues it instead of refusing it. `just res eval` refuses
+  `pls run --on ray --wt steady-camera -- hcrl_isaaclab/scripts/video_logger.py --wandb_run <run> --task <task> --num_envs 16`.
+- Ray holds the job until a GPU frees, so a busy cluster queues it instead of refusing it. A card run (`--on <pool>`) refuses
   Ray pools and points here.
 
 ### `scripts/ray.sh stop <job_id>`
@@ -151,7 +151,7 @@ There is no registry to edit: each artifact stores its placement (`rel_path`, `t
 metadata, and the resolver discovers it. Upload the path once from the manager directory:
 
 ```bash
-just upload-artifacts <path> [--tier cache] [--name <existing name>] [--rel-path <rel>]
+pls upload-artifacts <path> [--tier cache] [--name <existing name>] [--rel-path <rel>]
 ```
 
 This sources W&B credentials from `scripts/.env.wandb` and runs the uploader in the `ilab` venv. Uploading

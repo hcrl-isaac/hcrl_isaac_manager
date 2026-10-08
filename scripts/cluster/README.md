@@ -7,7 +7,7 @@ Apptainer image, following the workflow of the [Isaac Lab docs](https://isaac-si
 
 1. Create your cluster profile:
    ```bash
-   just cluster add [name]
+   pls cluster add [name]
    ```
    The prompts write `scripts/cluster/config/<name>/.env.cluster` and `submit_job_slurm.sh`. Profiles are per-user
    and gitignored; every cluster command snapshots a changed profile into `config/<name>/.backup/` and restores a
@@ -19,17 +19,17 @@ Apptainer image, following the workflow of the [Isaac Lab docs](https://isaac-si
 2. Regenerate a profile after a template change, keeping your values as defaults (old files are backed up and the
    diff is printed):
    ```bash
-   just cluster add --update <name>
+   pls cluster add --update <name>
    ```
-3. Create `scripts/.env.wandb` from `scripts/tools/.env.wandb.template`; `just cluster job` refuses to run without it.
+3. Create `scripts/.env.wandb` from `scripts/tools/.env.wandb.template`; `pls cluster job` refuses to run without it.
 4. Build the `.sif` from the shared docker image and push it to the cluster (only needed when the image changes):
    ```bash
-   just cluster <name> setup
+   pls cluster <name> setup
    ```
 
 ## Commands
 
-`CLUSTER=<name> just cluster <cmd>` and `just cluster <name> <cmd>` are equivalent.
+`pls cluster <name> <cmd>` selects `config/<name>/`; without a name, a command that needs a cluster asks which.
 
 | command | what it does |
 |---|---|

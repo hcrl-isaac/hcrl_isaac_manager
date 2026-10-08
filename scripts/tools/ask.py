@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small questionary-backed prompts shared by the justfile (pretty, TTY-aware, non-TTY fallbacks).
+"""Small questionary-backed prompts shared by pls (pretty, TTY-aware, non-TTY fallbacks).
 
 Subcommands:
     select <title> <option>...     Arrow-key pick one option; prints the chosen value to stdout.

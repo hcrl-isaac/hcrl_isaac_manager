@@ -7,14 +7,16 @@ quickstart; per-cluster READMEs ([Ray](scripts/ray/README.md), [Cluster](scripts
 
 ## Prerequisites
 
-- `$HOME/.local/bin` on your `PATH`.
-- [just](https://just.systems/man/en/introduction.html): `uv tool install rust-just`.
+- `$HOME/.local/bin` on your `PATH`, and `sh` + `curl` (`./bootstrap.sh` installs uv if it is missing).
+
+All workspace commands go through `pls` (below). On a fresh machine, `./bootstrap.sh` runs `pls setup` before `pls`
+is installed; afterwards `pls` is on your PATH whenever the `ilab` venv is active.
 
 ## Configure the workspace
 
-**Always run `just setup`** — whether or not you want a local IsaacLab install. It opens a picker (arrow
+**Always run `pls setup`** — whether or not you want a local IsaacLab install. It opens a picker (arrow
 keys, space to toggle) for **which projects** to install and how to handle **IsaacLab**, pre-filled with
-your current selection, so re-running `just setup` doubles as reconfiguration. The IsaacLab choice is:
+your current selection, so re-running `pls setup` doubles as reconfiguration. The IsaacLab choice is:
 
 - **pip** — install `isaacsim` + `isaaclab` wheels (the usual local setup).
 - **source** — clone IsaacLab under `resources/` and install it editable.
@@ -30,13 +32,14 @@ shared catalog of selectable projects and the defaults (org, refs, IsaacLab vers
 committed [`workspace.defaults.yaml`](workspace.defaults.yaml). To add a new selectable project, add it
 to `available_projects` there. This replaces the old per-project git branches — selection is now local.
 
-To pull in or update the workspace repos at any time, run **`just resolve`** (see [`resolve`](#resolve)) —
+To pull in or update the workspace repos at any time, run **`pls resolve`** (see [`resolve`](#resolve)) —
 after a repo adds a dependency in its `dependencies.yaml`, or to fetch each repo up to its pinned ref.
 
 ## Install (local)
 
 ```bash
-just setup
+./bootstrap.sh          # a fresh machine: installs uv, then runs `pls setup`
+pls setup               # afterwards (from the ilab venv), to reinstall or reconfigure
 ```
 
 Resolves `workspace.yaml` into a flat, deduped set of repos under `resources/`, then builds a single
@@ -44,9 +47,9 @@ uv venv (`ilab`) with the manager + Isaac Lab / Isaac Sim stack (unless you pick
 stops after fetching the repos). Adds one bash alias:
 
 - `ilab` — activate the `ilab` venv and cd to the manager dir. From there, run any extension script
-  with `just run <script> <args>` (no need to cd into the extension).
+  with `pls run <script> <args>` (no need to cd into the extension).
 
-Scaffold a new project repo with `just new <name>` (registers under the `<name>/` namespace).
+Scaffold a new project repo with `pls new <name>` (registers under the `<name>/` namespace).
 
 ## Run
 
@@ -55,27 +58,27 @@ Scaffold a new project repo with `just new <name>` (registers under the `<name>/
 **Local:**
 ```bash
 ilab                                                   # activate the ilab venv + cd to the manager dir
-just run train --task <task-id> [--source <ssti|hhlm>] # run any hcrl_isaaclab script from here
+pls run train --task <task-id> [--source <ssti|hhlm>] # run any hcrl_isaaclab script from here
 ```
-`just run <script> <args>` runs any `hcrl_isaaclab/scripts/<script>.py` from the manager dir (no need
-to cd into the extension): `just run play --task <id> --checkpoint <path>`, `just run video_logger …`,
-`just run export …`, etc.
+`pls run <script> <args>` runs any `hcrl_isaaclab/scripts/<script>.py` from the manager dir (no need
+to cd into the extension): `pls run play --task <id> --checkpoint <path>`, `pls run video_logger …`,
+`pls run export …`, etc.
 
 **Ray:**
 ```bash
-just ray setup                 # one-time / when assets change: write Ray configs + upload large assets as W&B artifacts
+pls ray setup                 # one-time / when assets change: write Ray configs + upload large assets as W&B artifacts
 ilab
-just ray job --task <task-id> [train args]
+pls run --on ray -- train --task <task-id> [train args]
 ```
 Large files (robot assets, motions, policies) are excluded from the job upload and fetched at runtime
-as W&B artifacts; `just ray setup` uploads them (it calls `just upload-artifacts`) before the first job.
+as W&B artifacts; `pls ray setup` uploads them (it calls `pls upload-artifacts`) before the first job.
 See the [Ray README](scripts/ray/README.md).
 
 **HPC:**
 ```bash
-just cluster add               # one-time per cluster (CLUSTER=<name>)
-just cluster setup             # build + push the .sif (when deps change)
-just cluster job --task <task-id> [train args]
+pls cluster add                       # one-time per cluster
+pls cluster <name> setup              # build + push the .sif (when deps change)
+pls cluster <name> job --task <task-id> [train args]   # stages the workspace as a code tree, then submits
 ```
 See the [Cluster README](scripts/cluster/README.md).
 
@@ -116,10 +119,10 @@ Runs tagged with the old `log_videos_async` are still picked up.
 
 ### 2. Run the async eval logger (on an RT-capable device)
 
-The unified logger is `hcrl_isaaclab/scripts/video_logger.py`; run it from the manager dir via `just run`:
+The unified logger is `hcrl_isaaclab/scripts/video_logger.py`; run it from the manager dir via `pls run`:
 
 ```bash
-just run video_logger --mode async --task <task_name> --wandb_project <entity>/<project> [options]
+pls run video_logger --mode async --task <task_name> --wandb_project <entity>/<project> [options]
 ```
 
 Async mode scans `--wandb_project` for `log_evals_async`-tagged runs and records any checkpoints
@@ -175,10 +178,10 @@ pls run --on ray -- train --task <id>                         # a Ray training j
 The shared `ilab`'s `pls` runs the main checkout's `src/hcrl_cli`; to try `pls` changes from a worktree, run
 `PYTHONPATH=<worktree>/src python -m hcrl_cli <verb> ...` from anywhere.
 
-## Justfile Targets
+## pls verbs
 
-`just --list` shows all targets. The project uses [just](https://just.systems/man/en/introduction.html)
-to manage setup and deployment; environment dependencies are managed with the **uv** package manager.
+`pls --help` lists every verb; environment dependencies are managed with the **uv** package manager. A verb's own
+`--help` comes from the script it runs (`pls res --help`, `pls run --help`).
 
 ### `deps`
 
@@ -190,15 +193,15 @@ to manage setup and deployment; environment dependencies are managed with the **
 
 ### `setup`
 
-- Installs general dependencies (`just deps`)
+- Installs general dependencies (`pls deps`)
 - Opens the project + IsaacLab-mode (pip/source/**none**) picker (arrow keys + space), pre-filled with your current selection, so re-running `setup` reconfigures; writes the gitignored `workspace.yaml` (keeps the existing selection on a non-interactive shell)
-- Resolves the selection + defaults and fetches the workspace repos (`just resolve`)
+- Resolves the selection + defaults and fetches the workspace repos (`pls resolve`)
 - Installs Isaac Lab + Isaac Sim and editable-installs every workspace package into the local uv env — **skipped entirely for IsaacLab `none`** (repos are just fetched, for editing locally + running elsewhere)
 
 ### `resolve`
 
 - Merges your selection (`workspace.yaml`) with the committed `workspace.defaults.yaml` and each repo's `dependencies.yaml` into a flat, deduped `gitman.yaml`, then fetches/updates all repos as siblings under `resources/` (via `gitman update`)
-- This is how you **pull and update workspace dependencies**. Re-run it after a repo declares a new dependency in its `dependencies.yaml`, or to pull every repo up to its pinned ref. (To *change* which projects are installed, re-run `just setup`, which also installs the new deps.)
+- This is how you **pull and update workspace dependencies**. Re-run it after a repo declares a new dependency in its `dependencies.yaml`, or to pull every repo up to its pinned ref. (To *change* which projects are installed, re-run `pls setup`, which also installs the new deps.)
 - Afterwards every repo is **returned to the branch it was on** — updating fetches the pinned rev without silently moving your checkout
 - Repos with **uncommitted local changes** get a per-repo `[y/N]` prompt to merge them onto the updated rev (stash → update → stash pop; conflicts are left in the tree with the stash preserved). Flags:
   - `--force` — merge all dirty repos without prompting
@@ -212,7 +215,8 @@ to manage setup and deployment; environment dependencies are managed with the **
 ### `run <script> [args]`
 
 - Runs `hcrl_isaaclab/scripts/<script>.py` with the `ilab` venv from the manager dir (no need to cd
-  into the extension), e.g. `just run train --task <id>`, `just run play …`, `just run video_logger …`
+  into the extension), e.g. `pls run train --task <id>`, `pls run play …`, `pls run video_logger …`
+- With options (`--on`, `--wt`, `--cmd`) the script follows `--`: see [pls](#pls) above and `pls run --help`
 - Executes the script *file* directly so Isaac Sim's `AppLauncher` runs before the package import
   (the reason `python -m hcrl_isaaclab.scripts.<script>` can't work); auto-accepts the Isaac Sim EULA
 
@@ -229,18 +233,19 @@ to manage setup and deployment; environment dependencies are managed with the **
 ### `cluster [name] <subcommand>`
 
 - A subcommand is required: `add` creates a cluster config from template; `setup` builds + pushes the Apptainer `.sif`; plus `job`/`develop`/`repush`/…
-- Optional leading cluster name selects `config/<name>` (else `CLUSTER` env / "default")
-- Bare `just cluster` (no subcommand) shows an arrow-key picker
+- A leading cluster name selects `config/<name>`; without one, a verb that needs a cluster asks which
+- Bare `pls cluster` (no subcommand) shows an arrow-key picker
 
 ### `ray <subcommand>`
 
-- A subcommand is required: `setup` writes the Ray config files **and** uploads large assets (`just upload-artifacts`)
-- Plus `job`/`bench`/`list`/`logs`/`stop`/`push`. Run `just deps` first so the venv + `.env.wandb` exist.
+- A subcommand is required: `setup` writes the Ray config files **and** uploads large assets (`pls upload-artifacts`)
+- Plus `bench`/`list`/`logs`/`stop`/`push`; jobs go through `pls run --on ray`. Run `pls deps` first so the venv +
+  `.env.wandb` exist.
 
 ### `upload-artifacts [args]`
 
 - Uploads managed large-file resources (robot assets, motion datasets, exported policies) to W&B as versioned artifacts
-- Also run automatically by `just ray setup`
+- Also run automatically by `pls ray setup`
 - `--list` shows the registry + local presence; `--all` uploads everything; or pass specific resource keys
 - Dedups unchanged content by hash (cheap to re-run); reads W&B credentials from `scripts/.env.wandb`
 - Fetched back at runtime by the in-script resolver — see [Large-file resources](scripts/ray/README.md#large-file-resources)

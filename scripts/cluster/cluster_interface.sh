@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Single cluster entrypoint (used directly by `just cluster`). Builds/pushes the shared Isaac .sif,
+# Single cluster entrypoint (used directly by `pls cluster`). Builds/pushes the shared Isaac .sif,
 # submits batch jobs, and drives the persistent dev node. CLUSTER=<name> selects config/<name>/.
 set -e
 
@@ -18,7 +18,7 @@ source "${SCRIPT_DIR}/tools/restore_profiles.sh"
 
 source_cluster_env() {
     if [ ! -f "$CLUSTER_ENV_FILE" ]; then
-        echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'just cluster add'). Available:" \
+        echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'pls cluster add'). Available:" \
             "$(ls "$SCRIPT_DIR/config" 2>/dev/null | paste -sd, -)." >&2
         exit 1
     fi
@@ -195,7 +195,7 @@ case "$cmd" in
     job)         cmd_job "$@" ;;
     develop)     exec env CLUSTER="$CLUSTER" "${SCRIPT_DIR}/cluster_dev/cluster_dev.sh" "$@" ;;
     -h | --help | help)
-        echo "usage: CLUSTER=<name> just cluster [<name>] <command> [args]"
+        echo "usage: pls cluster [<name>] <command> [args]"
         echo "  setup         build the shared .sif and rsync it to the cluster (CLUSTER_ARCH=arm64: build it there)"
         echo "  build         build the .sif from the shared docker image (no push)"
         echo "  push/repush   rsync the built .sif to the cluster (reuses the SSH master; no 2FA)"

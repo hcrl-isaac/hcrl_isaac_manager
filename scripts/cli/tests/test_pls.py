@@ -4,7 +4,6 @@ Every process step is stubbed: nothing is installed, probed or launched.
 """
 
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -82,11 +81,6 @@ class PassThroughTest(unittest.TestCase):
                 with self.assertRaises(SystemExit) as ctx:
                     cli.main(argv)
                 self.assertEqual(ctx.exception.code, 2)
-
-    def test_every_justfile_recipe_has_a_verb(self) -> None:
-        recipes = re.findall(r"^([a-z][\w-]*)(?:\s[^:]*)?:(?!=)", (ROOT / "justfile").read_text(), re.M)
-        self.assertTrue(recipes)
-        self.assertEqual(sorted(set(recipes) - set(cli.VERBS)), [])
 
 
 class PickerTest(unittest.TestCase):
@@ -360,8 +354,12 @@ class Sim2realTest(unittest.TestCase):
         return {"hcrl_sim2real": pkg, "hcrl_sim2real.cli": cli_mod, "hcrl_sim2real.fit_mod": target}
 
     def test_a_command_runs_from_the_registry_in_the_callers_cwd(self) -> None:
-        fn = mock.Mock()
-        with mock.patch.dict(sys.modules, self._modules(fn)), mock.patch("os.chdir") as chdir:
+        fn = mock.Mock(side_effect=lambda _: self.assertEqual(sys.argv[0], "pls sim2real fit", "names its usage"))
+        with (
+            mock.patch.dict(sys.modules, self._modules(fn)),
+            mock.patch("os.chdir") as chdir,
+            mock.patch.object(sys, "argv", ["pls"]),
+        ):
             cli.main(["sim2real", "fit", "runs/a", "--plot"])
         fn.assert_called_once_with(["runs/a", "--plot"])
         chdir.assert_not_called()

@@ -98,7 +98,7 @@ def main() -> None:
         file=sys.stderr,
     )
     for rel, local in missing:
-        print(f"  {rel}\n    publish: just upload-artifacts {local} --rel-path {rel} --tier cache", file=sys.stderr)
+        print(f"  {rel}\n    publish: pls upload-artifacts {local} --rel-path {rel} --tier cache", file=sys.stderr)
     sys.exit(1)
 
 

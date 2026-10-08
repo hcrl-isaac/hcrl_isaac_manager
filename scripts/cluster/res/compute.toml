@@ -1,4 +1,4 @@
-# Compute pools `just res` probes; `kind` picks the backend. compute.local.toml (gitignored) is merged over this
+# Compute pools `pls res` probes; `kind` picks the backend. compute.local.toml (gitignored) is merged over this
 # file for per-user settings, and SLURM pools come from the cluster profiles (scripts/cluster/config/).
 
 [compute.local]
@@ -14,7 +14,7 @@ domain = "cs.utexas.edu"
 kind = "ssh"
 hosts = ["pepi", "pulisic", "salah", "pogba"]
 domain = "cs.utexas.edu"
-# Kit has refused masked CUDA_VISIBLE_DEVICES on these boxes, so `res eval` scripts read RES_EVAL_DEVICE
+# Kit has refused masked CUDA_VISIBLE_DEVICES on these boxes, so card runs (`pls run --on`) read RES_EVAL_DEVICE
 pin = "device"
 
 [compute.ray]

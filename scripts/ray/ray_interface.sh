@@ -63,7 +63,7 @@ render_job_configs() {  # render_job_configs <ut_eid>
 # Re-render the job configs before a submit so the mounts match this job's WT, not the one setup saw.
 prepare_submit() {
     if [ ! -f "$SCRIPT_DIR/.env.ray" ]; then
-        echo "[ERROR] $SCRIPT_DIR/.env.ray not found. Run 'just ray setup' first." >&2
+        echo "[ERROR] $SCRIPT_DIR/.env.ray not found. Run 'pls ray setup' first." >&2
         exit 1
     fi
     local ut_eid
@@ -133,7 +133,7 @@ case $command in
     setup)
         MANAGER_DIR="$( cd "$SCRIPT_DIR/../.." && pwd )"
         if [ ! -f "$MANAGER_DIR/scripts/.env.wandb" ]; then
-            echo "[ERROR] $MANAGER_DIR/scripts/.env.wandb not found. Run 'just deps' first." >&2
+            echo "[ERROR] $MANAGER_DIR/scripts/.env.wandb not found. Run 'pls deps' first." >&2
             exit 1
         fi
         read -p "UT EID: " ut_eid

@@ -1,4 +1,4 @@
-"""Compute inventory: the pools `just res` knows about, from compute.toml plus per-user overrides."""
+"""Compute inventory: the pools `pls res` knows about, from compute.toml plus per-user overrides."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class Pool:
     """One compute pool and the settings its backend needs.
 
     Args:
-        name: Pool name shown by `just res`.
+        name: Pool name shown by `pls res`.
         kind: Backend name (local, ssh, slurm, ray).
         settings: Backend-specific settings from the inventory.
     """

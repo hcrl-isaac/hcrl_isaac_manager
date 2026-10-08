@@ -1,15 +1,15 @@
-# Compute resources (`just res`)
+# Compute resources (`pls res`)
 
 One view of every GPU we can use, probed live from each pool rather than declared on a board.
 
 ```bash
-just res                      # = just res status: every card on every pool
-just res status --free        # only free cards
-just res status --pool larg   # pools whose name starts with "larg" (repeatable)
-just res status --json        # machine-readable
-just res pools                # the configured pools
-just res claim / release / leases   # card leases, below
-just res eval <script> ...    # run a one-off script on a leased card, below
+pls res                      # = pls res status: every card on every pool
+pls res status --free        # only free cards
+pls res status --pool larg   # pools whose name starts with "larg" (repeatable)
+pls res status --json        # machine-readable
+pls res pools                # the configured pools
+pls res claim / release / leases   # card leases, below
+pls run --on <card> --holder <you> -- <script> ...   # a one-off script on a leased card, below
 ```
 
 Card states:
@@ -23,17 +23,17 @@ Card states:
 
 ## Leases
 
-A lease says who is using a card. There is no daemon: every `just res` call reconciles the leases with the live
+A lease says who is using a card. There is no daemon: every `pls res` call reconciles the leases with the live
 probe, so a lease's state only changes when someone runs `res`.
 
 ```bash
-just res claim mckennie:1 --holder "<session>" --note "T1 kick seed 3"   # host:gpu (host:job:gpu on SLURM)
-just res claim --any --count 2 --min-free-gb 40 --pool larg --holder "<session>"
-just res claim gpub065:2 --holder "<session>" --for 2h                   # time-boxed interactive work
-just res leases                                                          # list (no probe)
-just res release <id|host:gpu|host:job:gpu> --holder "<session>"         # --force for someone else's
-just res transfer <id|host:gpu> --holder "<you>" --to "<session>"        # hand a lease over (--force: not yours)
-just res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take over a busy card's running run
+pls res claim mckennie:1 --holder "<session>" --note "T1 kick seed 3"   # host:gpu (host:job:gpu on SLURM)
+pls res claim --any --count 2 --min-free-gb 40 --pool larg --holder "<session>"
+pls res claim gpub065:2 --holder "<session>" --for 2h                   # time-boxed interactive work
+pls res leases                                                          # list (no probe)
+pls res release <id|host:gpu|host:job:gpu> --holder "<session>"         # --force for someone else's
+pls res transfer <id|host:gpu> --holder "<you>" --to "<session>"        # hand a lease over (--force: not yours)
+pls res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take over a busy card's running run
 ```
 
 - A handover moves the lease (`transfer`, which records the previous holder) instead of releasing and reclaiming:
@@ -61,38 +61,40 @@ just res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take 
   not honour, so run `res` from one machine. A store that cannot be read or has wrong-typed fields is moved aside:
   `status` then shows no leases and `claim`/`release`/`leases` refuse.
 
-## One-off scripts (`just res eval`)
+## One-off scripts on a card (`pls run --on`)
 
-Run an eval or analysis script on a leased card of a `local` or `ssh` pool, or of a held SLURM dev sentinel, with its
-checkpoints brought along:
+`pls run --on <card>` runs an eval or analysis script on a leased card of a `local` or `ssh` pool, or of a held SLURM
+dev sentinel, with its checkpoints brought along (`pls run --help` for the whole grammar, `--on any --help` for the
+card options):
 
 ```bash
-just res eval path/to/census.py --any --pool larg-a100 --holder "<session>" \
+pls run --on larg-a100 --holder "<session>" \
     --checkpoint REORIENT_CKPT=hcrl-ssti/Crab_Agile/d1tafrx7@5999 \
     --checkpoint TRAVERSE_CKPT=https://wandb.ai/hcrl-ssti/Crab_Agile/runs/d1tafrx7 \
-    --env CENSUS_N=512 -- --script-flag value
-just res eval probe.py --on hazard:2 --holder "<session>" --checkpoint ./model_200.pt   # exported as CHECKPOINT
-just res eval probe.py --lease <id> --holder "<session>" --wt my-feature                 # your lease, a worktree set
-just res eval hcrl_isaaclab:scripts/train.py --wt legacy --on pepi:1 --holder "<session>" --detach \
-    -- --task hhlm/T1-Kick-v0 --headless --video on                                     # train a branch on LARG
-just res eval probe.py --on local:0 --holder "<session>"                               # this machine's card 0
-just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --detach   # a sentinel's free card
+    --env CENSUS_N=512 -- path/to/census.py --script-flag value                       # any free card of a pool
+pls run --on hazard:2 --holder "<session>" --checkpoint ./model_200.pt -- probe.py     # exported as CHECKPOINT
+pls run --on lease:<id> --holder "<session>" --wt my-feature -- probe.py               # your lease, a worktree set
+pls run --on pepi:1 --wt legacy --holder "<session>" --detach \
+    -- train --task hhlm/T1-Kick-v0 --headless --video on                              # train a branch on LARG
+pls run --on local:0 --holder "<session>" -- probe.py                                  # this machine's card 0
+pls run --on c571-003:3 --holder "<session>" --wt my-feature --detach -- census.py     # a sentinel's free card
                                                      # (c571-003:3557743:3 when the node runs several of your jobs)
+pls run --on any --holder "<session>" --cmd -- nvidia-smi                              # a command, not a script
 ```
 
-- A script is a file on this machine (copied to the target) or `<repo>:<path>` inside a shipped repo, which runs
-  from its shipped copy, so its own sibling imports resolve (e.g. `hcrl_isaaclab:scripts/train.py`). It runs in a
-  writable working dir of its own, `<scratch>/res-eval/work/<stage id>`, where relative outputs such as `logs/` land
-  and stay.
+- A script is `<name>` (hcrl_isaaclab/scripts/<name>.py), `<repo>/<path>` or `<repo>:<path>` inside a shipped repo,
+  which runs from its shipped copy so its own sibling imports resolve, or a local file (copied to the target). It runs
+  in a writable working dir of its own, `<scratch>/res-eval/work/<stage id>`, where relative outputs such as `logs/`
+  land and stay. `--cmd` runs a command line instead, from the box workspace (the work dir on SLURM).
 - `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
-  owns its stage dir, and its lease stays held until the card goes idle (or `just res release <id>`). `--timeout`
+  owns its stage dir, and its lease stays held until the card goes idle (or `pls res release <id>`). `--timeout`
   and `--stall` do not apply to a detached run.
 
 - The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
-  several jobs), `--any` or `--lease <id>`. A busy card is refused; `just res claim --adopt` takes over the run on it.
-  A lease `eval` takes is released when the script ends, success or failure; a `--lease` you pass stays yours.
-  `--any` stays on the local and ssh pools unless `--pool` names a cluster. `ray` pools are refused (use
-  `just ray job`).
+  several jobs), `--on any`, `--on <pool>` or `--on lease:<id>`. A busy card is refused; `pls res claim --adopt` takes
+  over the run on it. A lease the run takes is released when the script ends, success or failure; a `lease:<id>` you
+  pass stays yours. `any` stays on the local and ssh pools; name a cluster pool to use its sentinel. Ray is its own
+  target, `--on ray`.
 - On a SLURM card (a running job of yours, normally a held dev sentinel) the script runs in the container through a
   `develop exec` step on that job, with the job's own partition, account and GPU request. The stage dir is
   `<cluster checkout>/artifacts/res-eval/<id>`, which the container sees as `/workspace/artifacts/res-eval/<id>`; the
@@ -138,7 +140,7 @@ just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --d
   after a Python traceback counts as a failure, and a killed run reports 124.
 - Everything goes to `<stage>/log`, which starts with a MANIFEST of each repo's commit and dirty count. The stage is
   removed after success; a failed run keeps its log, MANIFEST and run.sh (its checkpoints and credentials are always
-  removed). A lease `eval` took is released whatever happens. Old snapshots are not pruned yet.
+  removed). A lease the run took is released whatever happens. Old snapshots are not pruned yet.
 - Pool settings: `workspace` (the manager checkout on the target, providing the venv and the asset repos; default
   `/var/local/<user>/hcrl_isaac_manager` on ssh pools, this machine's checkout locally), `scratch` (default
   `/var/local/<user>`, `~/tmp` locally) and `pin`. Keep `scratch` on local disk, never a quota'd NFS home: snapshots,
