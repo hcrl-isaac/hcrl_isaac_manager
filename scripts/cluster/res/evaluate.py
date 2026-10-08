@@ -21,7 +21,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -222,6 +222,23 @@ def _git(src: str, *args: str) -> bytes:
     return subprocess.run(["git", "-C", src, *args], capture_output=True, check=True).stdout
 
 
+def _head(src: str) -> str:
+    """The commit a checkout has checked out."""
+    return _git(src, "rev-parse", "HEAD").decode().strip()
+
+
+@contextlib.contextmanager
+def clean_head(src: str) -> Iterator[str]:
+    """A temporary detached worktree of ``src`` at its HEAD: the committed code, none of the checkout's own edits."""
+    tmp = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"res-eval-head-{uuid.uuid4().hex[:8]}")
+    _git(src, "worktree", "add", "-q", "--detach", tmp, "HEAD")
+    try:
+        yield tmp
+    finally:
+        subprocess.run(["git", "-C", src, "worktree", "remove", "--force", tmp], capture_output=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def code_files(src: str) -> list[bytes]:
     """Tracked and untracked non-ignored files of a checkout that exist on disk (relative, as git lists them)."""
     files = _git(src, "ls-files", "-z", "--cached", "--others", "--exclude-standard").split(b"\0")
@@ -336,6 +353,8 @@ def cluster_dev_cmd(profile: str, job: str, *args: str) -> tuple[list[str], dict
 
 
 TREE_KEEP_DAYS = 14  # an unused res-eval tree older than this is removed when a newer one is staged
+# the dirs a repo's scripts write run output to inside the repo (a staged cluster tree's TREE_RW_DIRS)
+SNAPSHOT_RW_DIRS = ("logs", "outputs", "wandb")
 
 
 def stage_tree(t: Target, code: dict[str, str]) -> str:
@@ -573,7 +592,23 @@ class Stage:
         root = f"{self.t.scratch}/res-eval/code"
         snap = f"{root}/{repo}-{fp}"
         line = f"{repo} {src} {desc} -> {snap}"
+
+        # run output a repo writes inside itself (logs/, outputs/, wandb/) lands in the box workspace's copy of that
+        # repo, as a staged tree's does on a cluster: the snapshot itself is read-only and shared between runs
+        def rw(path: str) -> str:
+            """Shell that links each output dir of ``path`` to the workspace's, each step ending in ``&&``."""
+            steps = []
+            for d in SNAPSHOT_RW_DIRS:
+                target = q(f"{self.t.workspace}/resources/{repo}/{d}")
+                steps.append(f"mkdir -p {target} && {{ [ -e {path}/{d} ] || ln -s {target} {path}/{d}; }} &&")
+            return " ".join(steps)
+
         if self._ssh(f"[ -f {q(snap)}/.complete ]").returncode == 0:
+            # a snapshot made before these links existed gets them now
+            missing = " || ".join(f"[ ! -e {q(snap)}/{d} ]" for d in SNAPSHOT_RW_DIRS)
+            add = f"chmod u+w {q(snap)} && {rw(q(snap))} chmod a-w {q(snap)}"
+            if self._ssh(f"if {missing}; then {add}; fi").returncode != 0:
+                sys.exit(f"[res] could not link the output dirs of {snap} on {self.t.host}")
             return snap, line
         part = f"{snap}.partial.{uuid.uuid4().hex[:6]}"
         prev = self._ssh(
@@ -588,7 +623,10 @@ class Stage:
             cmd = ["rsync", "-rlp", "--checksum", "-s", "--from0", "--files-from=-", *links, "-e", ssh, f"{src}/"]
             if subprocess.run([*cmd, f"{self.t.ssh}:{part}/"], input=b"\0".join(code_files(src))).returncode != 0:
                 sys.exit(f"[res] could not upload {repo} to {self.t.host}")
-            finish = f"touch {q(part)}/.complete && chmod -R a-w {q(part)} && mv -T {q(part)} {q(snap)} 2>/dev/null"
+            finish = (
+                f"{rw(q(part))} touch {q(part)}/.complete && chmod -R a-w {q(part)} && "
+                f"mv -T {q(part)} {q(snap)} 2>/dev/null"
+            )
             if self._ssh(finish).returncode == 0:
                 part = ""
         finally:
@@ -601,8 +639,10 @@ class Stage:
     def sync_code(self, code: dict[str, str]) -> tuple[list[str], list[str]]:
         """PYTHONPATH entries that import ``code`` on the target, and the MANIFEST lines describing them.
 
-        A local target imports the checkouts in place. An ssh target gets a fresh ``<stage>/resources/`` of links:
-        package repos to their snapshots, every other repo to the target workspace's copy (so RESOURCES_DIR
+        A local target imports the checkouts in place. A remote one gets every package repo shipped: a worktree-set
+        repo as it is on disk, any other at the main checkout's HEAD commit (its uncommitted edits stay here, and a
+        stale copy on the target is never used). An ssh target gets a fresh ``<stage>/resources/`` of links, the
+        package repos to their snapshots and every other repo to the target workspace's copy (so RESOURCES_DIR
         resolves); nothing is ever synced through a link.
 
         Args:
@@ -613,37 +653,43 @@ class Stage:
         """
         if self.t.kind == "local":
             return list(code.values()), [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
+        main = os.path.join(local_workspace(), "resources")
+        worktree = {
+            repo: src
+            for repo, src in code.items()
+            if os.path.realpath(src) != os.path.realpath(os.path.join(main, repo))
+        }
+        heads = {}  # a main-checkout repo ships at its HEAD commit; one that is not a git checkout cannot
+        for repo, src in code.items():
+            if repo not in worktree:
+                with contextlib.suppress(subprocess.CalledProcessError):
+                    heads[repo] = _head(src)
+        kept = f"{self.t.workspace}/resources"
         if self.t.kind == "slurm":
-            # only worktree-set repos are staged; the rest run from the cluster's shared checkout (`develop sync`)
-            main = os.path.join(local_workspace(), "resources")
-            staged = {
-                repo: src
-                for repo, src in code.items()
-                if os.path.realpath(src) != os.path.realpath(os.path.join(main, repo))
-            }
-            self.tree = stage_tree(self.t, staged) if staged else ""
-            shared = f"{self.t.workspace}/resources"
-            q = shlex.quote
-            heads = self._ssh(
-                " ".join(
-                    f"echo {q(r)} $(git -C {q(f'{shared}/{r}')} rev-parse --short HEAD 2>/dev/null);" for r in code
-                ),
-                capture_output=True,
-                text=True,
-            ).stdout
-            commit = dict(line.split()[:2] for line in heads.splitlines() if len(line.split()) >= 2)
-            lines = [
-                f"{repo} {src} {_describe(src)} -> tree {self.tree}"
-                if repo in staged
-                else f"{repo} {shared}/{repo} {commit.get(repo, '(no git metadata: as develop sync left it)')} (shared checkout)"
-                for repo, src in code.items()
-            ]
+            # develop stage checks a commit out clean
+            ship = {**worktree, **heads}
+            self.tree = stage_tree(self.t, ship) if ship else ""
+            lines = []
+            for repo, src in code.items():
+                if repo in worktree:
+                    lines.append(f"{repo} {src} {_describe(src)} -> tree {self.tree}")
+                elif repo in heads:
+                    lines.append(f"{repo} {src} {heads[repo][:12]} (main checkout HEAD) -> tree {self.tree}")
+                else:
+                    lines.append(f"{repo} {kept}/{repo} (not a git checkout here: the cluster's copy)")
             return [f"/workspace/ext/{repo}" for repo in code], lines
         q = shlex.quote
         res = f"{self.dir}/resources"
         snaps, lines = {}, []
         for repo, src in code.items():
-            snaps[repo], line = self.snapshot(repo, src)
+            if repo in worktree:
+                snaps[repo], line = self.snapshot(repo, src)
+            elif repo in heads:
+                with clean_head(src) as head:
+                    snaps[repo], line = self.snapshot(repo, head)
+                line = f"{line} (main checkout {src} HEAD)"
+            else:
+                line = f"{repo} {kept}/{repo} (not a git checkout here: the box's copy)"
             lines.append(line)
         links = " ".join(f"ln -s {q(s)} {q(res)}/{repo};" for repo, s in snaps.items())
         assets = f'for d in {q(self.t.workspace)}/resources/*/; do n=$(basename "$d"); '
