@@ -21,7 +21,13 @@ EOF
 cat > "$T/ws/ilab/bin/python" <<EOF
 #!/usr/bin/env bash
 { printf 'ARG<%s>\n' "\$@"; echo "CVD=\${CUDA_VISIBLE_DEVICES:-unset}"; echo "TMPDIR=\$TMPDIR"; echo "OMNI=\$OMNI_CACHE_DIR"
-  echo "PWD=\$PWD"; echo "PP=\${PYTHONPATH:-}"; echo "INUSE=\$(ls "\$PWD/.in-use" 2>/dev/null | tr '\n' ' ')"; } > "$T/ran"
+  echo "PWD=\$PWD"; echo "PP=\${PYTHONPATH:-}"; echo "INUSE=\$(ls "\$PWD/.in-use" 2>/dev/null | tr '\n' ' ')"
+  echo "SELF=\$\$"; } > "$T/ran"
+# a long run (the "long" flag): on TERM it notes whether its tree is still marked, then takes a moment to exit
+if [ -f "$T/long" ]; then
+    trap 'echo "TERMED inuse=\$(ls "\$PWD/.in-use" 2>/dev/null | tr "\n" " ")" >> "$T/ran"; sleep 0.5; exit 143' TERM
+    sleep 30 & wait
+fi
 EOF
 chmod +x "$T/bin/ssh" "$T/ws/ilab/bin/python"
 launch() { env PATH="$T/bin:$PATH" LARG_REMOTE_DIR="$T/ws" LARG_SCRATCH="$T/scratch" "$@"; }
@@ -57,6 +63,7 @@ rm -f "$T/ran"
 launch CUDA_VISIBLE_DEVICES=3 bash "$REPO/scripts/larg/train.sh" hazard hhlm/T1-CubeLift-v0 r > "$T/out3" 2>&1
 wait_ran
 check "an A100 host passes --video async" "sed -n '/^ARG<--video>$/{n;p}' '$T/ran' | grep -qx 'ARG<async>'"
+check "a run without a tree reports python's own pid" "grep -qx \"SELF=\$(sed -n 's/^started pid //p' '$T/out3')\" '$T/ran'"
 
 # LARG_HOLDER leases the pinned cards through `just res claim` first; a refused claim launches nothing
 printf '#!/usr/bin/env bash\necho "$@" > "%s/claimed"\nexit "${CLAIM_RC:-0}"\n' "$T" > "$T/bin/python3"
@@ -86,6 +93,20 @@ check "the tree's staged repos lead PYTHONPATH, linked ones are left to the venv
 check "the tree is marked in use while the run lasts" "grep -q '^INUSE=larg\.[0-9]' '$T/ran'"
 for _ in $(seq 30); do [ -z "$(ls "$TR/.in-use" 2>/dev/null)" ] && break; sleep 0.1; done
 check "and unmarked when it ends" "[ -z \"\$(ls '$TR/.in-use' 2>/dev/null)\" ]"
+# stopping a tree run by its reported pid ends python, and the tree stays marked until python has exited
+rm -f "$T/ran"; touch "$T/long"
+launch CUDA_VISIBLE_DEVICES=0 bash "$REPO/scripts/larg/train.sh" --tree kick hazard hhlm/T1-Kick-v0 r > "$T/out8" 2>&1
+wait_ran
+pid="$(sed -n 's/^started pid //p' "$T/out8")"
+check "a tree run prints a group stop line" "grep -qx \"stop: kill -- -$pid\" '$T/out8'"
+check "while it runs, the tree is marked" "[ -n \"\$(ls '$TR/.in-use' 2>/dev/null)\" ]"
+kill -TERM "$pid"
+for _ in $(seq 50); do [ -z "$(ls "$TR/.in-use" 2>/dev/null)" ] && break; sleep 0.1; done
+check "TERM to the reported pid reaches python" "grep -q '^TERMED' '$T/ran'"
+check "which still finds the tree marked while it exits" "grep -q '^TERMED inuse=larg\.$pid' '$T/ran'"
+check "and the mark goes once python has exited" "[ -z \"\$(ls '$TR/.in-use' 2>/dev/null)\" ] && ! kill -0 '$pid' 2>/dev/null"
+rm -f "$T/long"
+
 rm -f "$T/ran"
 launch bash "$REPO/scripts/larg/train.sh" --tree nosuch hazard hhlm/T1-Kick-v0 r > "$T/out7" 2>&1
 sleep 1

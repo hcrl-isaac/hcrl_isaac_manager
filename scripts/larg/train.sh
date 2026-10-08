@@ -65,6 +65,12 @@ run_dir="$RUNS/$tag"
 # per run: TMPDIR and the log. Kit caches are per GPU set when the cards are leased (one run per card), else per run
 if [ -n "${LARG_HOLDER:-}" ]; then cache="${RUNS%/*}/kit-cache/gpu${gpus}"; else cache="$run_dir/kit-cache"; fi
 q() { printf '%q ' "$@"; }
+# A tree run holds the tree's in-use mark (larg.<pid>, which trees.sh rm checks on the box) for as long as the run
+# lasts: the command runs as a child, a TERM/INT/HUP to this group leader is passed on, and the mark goes only once the
+# child has exited. A run without a tree is the command itself, so its pid is python's.
+# shellcheck disable=SC2016
+tree_wrap='m="$1.$$"; shift; touch "$m"; "$@" & c=$!; trap '"'"'kill -TERM "$c" 2>/dev/null'"'"' TERM INT HUP
+while kill -0 "$c" 2>/dev/null; do wait "$c"; rc=$?; done; rm -f "$m"; exit "${rc:-1}"'
 # the launch line keeps $WS unexpanded: the box's workspace path is only known there
 cmd_line="$(q "${launch[@]}" "${args[@]}" | sed 's/\\\$WS/$WS/g')"
 remote="set -u
@@ -94,10 +100,14 @@ if [ -n $(printf %q "${tree:-}") ]; then
   mkdir -p \"\$T/.in-use\" && marker=\"\$T/.in-use/larg\"
   echo \"tree: \$T\"; echo \"PYTHONPATH: \$pp\"
 fi
-# the tree stays marked in use while the run lasts (larg.<pid>, which trees.sh rm checks on the box)
-setsid nohup bash -c '[ \"\$1\" = /dev/null ] || { m=\"\$1.\$\$\"; touch \"\$m\"; trap \"rm -f \\\"\$m\\\"\" EXIT; }; shift; \"\$@\"' \
-  _ \"\$marker\" $cmd_line > $(q "$run_dir/train.log") 2>&1 < /dev/null &
-echo started pid \$!; echo log: $(q "$run_dir/train.log")"
+if [ \"\$marker\" = /dev/null ]; then
+  setsid nohup $cmd_line > $(q "$run_dir/train.log") 2>&1 < /dev/null &
+  echo started pid \$!
+else
+  setsid nohup bash -c $(q "$tree_wrap") _ \"\$marker\" $cmd_line > $(q "$run_dir/train.log") 2>&1 < /dev/null &
+  echo started pid \$!; echo \"stop: kill -- -\$!\"
+fi
+echo log: $(q "$run_dir/train.log")"
 
 echo "=== train $task ($run_name) on $host: ${NPROC} GPU(s)${gpus:+ [$gpus]} ==="
 larg_ssh "$host" "bash -lc $(printf %q "$remote")"

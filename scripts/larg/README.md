@@ -79,8 +79,8 @@ scripts/larg/trees.sh rm hazard kick-<fingerprint>    # refused while a run from
 ```
 
 `--tree <name>` runs from the newest complete tree of that name: its staged repos lead `PYTHONPATH` over the
-workspace's `ilab` venv, and the tree is marked in use for as long as the run lasts. Trees are per box, so stage on the
-box you launch on.
+workspace's `ilab` venv, and the tree is marked in use for as long as the run lasts. Stop a tree run with the
+`kill -- -<pid>` it prints (its process group). Trees are per box, so stage on the box you launch on.
 
 ## Rendering on LARG: the Vulkan clamp layer
 
