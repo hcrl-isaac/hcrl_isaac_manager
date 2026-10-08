@@ -56,62 +56,11 @@ env_cfg.episode_length_s = sum(s for s, *_ in SCHEDULE) + 5.0
 env_cfg.seed = 0
 physics = type(env_cfg.sim.physics).__name__
 if args.rtx_video:
-    from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
-    from isaaclab_visualizers.kit import KitVisualizerCfg
+    from hcrl_isaaclab.utils.rtx_recording import configure_rtx_recording
 
+    # the task's own viewer in RTX, as Isaac Lab 2.x placed it, over the whole schedule
     steps = sum(round(s / (env_cfg.sim.dt * env_cfg.decimation)) for s, *_ in SCHEDULE)
-    # the task's own viewer, as Isaac Lab 2.x placed it: following env 0's robot at any env count
-    viewer = env_cfg.viewer
-    camera = dict(eye=tuple(viewer.eye), lookat=tuple(viewer.lookat), origin_env_index=viewer.env_index)
-    if viewer.origin_type == "asset_root":
-        camera.update(origin_type="asset", origin_track_path=viewer.asset_name)
-    else:
-        camera.update(origin_type=viewer.origin_type)
-    env_cfg.sim.visualizer_cfgs = [
-        KitVisualizerCfg(
-            headless=True, window_width=1280, window_height=720, enable_markers=False, background_color=None, **camera
-        )
-    ]
-    # Isaac Lab 2.x's grey grid floor rather than 3.0's checker ground
-    import isaaclab.sim as sim_utils
-    from isaaclab.utils import configclass
-    from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-
-    @configclass
-    class GridGroundPlaneCfg(sim_utils.GroundPlaneCfg):
-        usd_path: str = f"{ISAAC_NUCLEUS_DIR}/Environments/Grid/default_environment.usd"
-
-    sim_utils.GroundPlaneCfg = GridGroundPlaneCfg
-    # the T1 URDF's visual colours carry alpha 0.2-0.3, which Isaac Lab 3.0's importer honours (2.x ignored it):
-    # render from a copy with opaque colours, meshes still read from the original asset dir
-    import os
-    import re
-    import tempfile
-
-    def _opaque(m: re.Match) -> str:
-        # one dark grey for shell and limbs, as the real T1 (the URDF has a light shell and darker limbs)
-        grey = {0.76: 0.3, 0.4: 0.3}.get(float(m[1]), float(m[1]))
-        return f'rgba="{grey} {grey} {grey} {1 if float(m[4]) > 0 else 0}"'
-
-    spawn = env_cfg.scene.robot.spawn
-    if str(spawn.asset_path).endswith(".urdf"):
-        with open(spawn.asset_path) as f:
-            text = f.read()
-        text = re.sub(
-            r'rgba="([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+)"',
-            _opaque,
-            text,
-        )
-        text = text.replace('filename="', f'filename="{os.path.dirname(os.path.abspath(spawn.asset_path))}/')
-        opaque = os.path.join(tempfile.mkdtemp(), os.path.basename(spawn.asset_path))
-        with open(opaque, "w") as f:
-            f.write(text)
-        spawn.asset_path = opaque
-    # a clean shot: no command arrows or gait markers drawn into the scene
-    for term in vars(env_cfg.commands).values():
-        if hasattr(term, "debug_vis"):
-            term.debug_vis = False
-    env_cfg.video_recorders = [VideoRecorderCfg(source="visualizer:kit", output_dir=args.rtx_video, video_length=steps)]
+    configure_rtx_recording(env_cfg, args.rtx_video, steps)
 if args.gl_video:
     from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
     from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
