@@ -195,6 +195,8 @@ rsync_code() {
         [ "$dest" = "$REMOTE_ISAACLAB_DIR" ] || [ "$(basename "$cfg")" = "$CLUSTER" ] || continue
         [ -f "${cfg}.rsync-exclude" ] && extra_excludes+=(--exclude-from="${cfg}.rsync-exclude")
     done
+    # the API key: owner-only here, which -p carries to the cluster
+    [ ! -f "${LOCAL_ISAACLAB_DIR}/scripts/.env.wandb" ] || chmod go-rwx "${LOCAL_ISAACLAB_DIR}/scripts/.env.wandb"
     # A fresh profile's workspace may not exist yet, nor its parent (rsync creates only the last level). A dry run
     # leaves the remote alone, and a created directory is named, so a mistyped path shows.
     if [[ " $* " != *" -n "* ]]; then

@@ -1,0 +1,5 @@
+[compute.larg-a100]
+user = "sturman"
+
+[compute.larg-a40]
+user = "sturman"

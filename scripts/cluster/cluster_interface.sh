@@ -129,6 +129,8 @@ cmd_job() {
             "scripts/tools/.env.wandb.template." >&2
         exit 1
     }
+    # the API key: owner-only here, which both copies below carry to the cluster
+    chmod go-rwx "$SCRIPT_DIR/../.env.wandb"
     # Sync to a timestamped dir so concurrent jobs don't clobber each other's code copy.
     CLUSTER_ISAACLAB_DIR="${CLUSTER_ISAACLAB_DIR}_$(date +"%Y%m%d_%H%M%S")"
     ensure_ssh_master
