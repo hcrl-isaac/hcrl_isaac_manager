@@ -12,9 +12,13 @@ STAMP=$ROOT/venv/.setup-done
         bash "$D/remote_setup.sh" "$ROOT" && touch "$STAMP"
     fi
 ) 9>"$ROOT/venv.lock"
-RUN=$ROOT/tmp/job-${SLURM_JOB_ID:-local}
+# per-job scratch on the node's own disk (/tmp is the host's): temp files, kernel caches and W&B's run dir are written
+# often and must not wait on NFS (a slow /scratch kept wandb-core's port file from appearing, and rank 0 died).
+# Checkpoints and logs still go to $ROOT/train, which outlives the node.
+RUN=/tmp/isaac3-job-${SLURM_JOB_ID:-$$}
 mkdir -p "$RUN" "$ROOT/train"
-export TMPDIR=$RUN XDG_CACHE_HOME=$RUN/cache WARP_CACHE_PATH=$RUN/warp
+export TMPDIR=$RUN XDG_CACHE_HOME=$RUN/cache WARP_CACHE_PATH=$RUN/warp TORCHINDUCTOR_CACHE_DIR=$RUN/inductor \
+    WANDB_DIR=$RUN
 set -a; [ -f "$ROOT/.env.wandb" ] && source "$ROOT/.env.wandb"; set +a
 cd "$ROOT/train"
 TRAIN=$ROOT/resources/hcrl_isaaclab/scripts/train.py

@@ -19,4 +19,6 @@ mkdir -p $ROOT/home
 # an empty CUDA_VISIBLE_DEVICES hides every GPU, so forward it only when set. It goes through APPTAINERENV_, as --env
 # splits its value on the commas of a multi-GPU list; HOME goes through --home, which --env cannot set.
 [ -n "${CUDA_VISIBLE_DEVICES:-}" ] && export APPTAINERENV_CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES
+# --cleanenv drops it, and a job's per-job dirs are named by it
+[ -n "${SLURM_JOB_ID:-}" ] && export APPTAINERENV_SLURM_JOB_ID=$SLURM_JOB_ID
 exec apptainer exec --nv --cleanenv --home $ROOT/home -B $ROOT -B /dev/shm --env PYTHONUNBUFFERED=1 $SIF bash "$@"
