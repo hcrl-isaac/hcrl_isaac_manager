@@ -119,7 +119,7 @@ shift
 
 # Every job-submitting subcommand belongs in this list: it re-renders the job configs and syncs resources.
 case "$command" in
-    job|job_distributed|bench)
+    job|job_distributed|run|bench)
         prepare_submit; sync_resources
         # every dir the job leaves to W&B artifacts must have one, or the job would only fail on the cluster
         venv_py="$( cd "$SCRIPT_DIR/../.." && pwd )/ilab/bin/python"
@@ -166,6 +166,27 @@ case $command in
             --aggregate_jobs ray/wrap_resources.py \
                 --gpu_per_worker 1 \
                 "${job_args[@]}"
+        ;;
+    run)
+        # A one-off script (eval, render, census) instead of train.py: `run <repo>/<path>.py [args]`, shipped and
+        # queued like a job (Ray holds it until a GPU frees), WT=<name> routing the worktree set as for `job`.
+        script="${1:-}"; shift || true
+        worker="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from job_args import ext_script
+print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
+        repo="${script%%/*}"; rest="${script#*/}"
+        mgr="$( cd "$SCRIPT_DIR/../.." && pwd )"
+        local_copy="$mgr/resources/$repo/$rest"
+        wt="${HCRL_WT:-${WT:-}}"  # as render_job_configs reads it
+        [ -n "$wt" ] && [ -d "$mgr/resources/$repo/worktrees/$wt" ] && local_copy="$mgr/resources/$repo/worktrees/$wt/$rest"
+        [ -f "$local_copy" ] || { echo "[ERROR] no $local_copy to ship" >&2; exit 1; }
+        echo "[INFO] Running $script on the Ray cluster ($worker)"
+        RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
+            --config_file $SCRIPT_DIR/ray.cfg \
+            --job_config $SCRIPT_DIR/job_config.yaml \
+            --python_script "$worker" \
+            --aggregate_jobs ray/wrap_resources.py \
+                --gpu_per_worker 1 \
+                "$@"
         ;;
     job_distributed)
         # One Ray submission spawning a sub-job per GPU node (torchrun_wrapper.py -> train.py --distributed).

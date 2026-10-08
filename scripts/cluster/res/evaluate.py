@@ -103,7 +103,7 @@ def make_target(pool: Pool, host: str, gpu: int, job: str = "", uuid: str = "") 
         The target, with workspace, scratch and pin from the pool settings or their defaults.
     """
     if pool.kind not in SUPPORTED:
-        hint = {"ray": "use `just ray job`"}
+        hint = {"ray": "use `just ray run <repo>/<script>.py` (Ray queues it until a GPU frees)"}
         sys.exit(f"[res] eval does not run on {pool.kind} pools yet; {hint.get(pool.kind, 'pick another card')}")
     s = pool.settings
     if pool.kind == "slurm":
