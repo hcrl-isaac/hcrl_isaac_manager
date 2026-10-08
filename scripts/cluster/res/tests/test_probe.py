@@ -310,3 +310,22 @@ class HelpersTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProfileAccountsTest(unittest.TestCase):
+    def test_squeue_accounts_map_back_to_the_profiles_spelling(self) -> None:
+        """squeue lowercases the account (cda26011); the overlap step needs the profile's (CDA26011)."""
+        import tempfile
+        from unittest import mock
+
+        cfg = Path(tempfile.mkdtemp())
+        (cfg / "horizon").mkdir()
+        (cfg / "horizon" / "submit_job_slurm.sh").write_text("#!/bin/bash\n#SBATCH -p debug\n#SBATCH -A CDA26011\n")
+        (cfg / "delta").mkdir()
+        (cfg / "delta" / "submit_job_slurm.sh").write_text("#SBATCH --account=bggq-delta-gpu\n")
+        pools = [Pool("horizon", "slurm", {}), Pool("delta", "slurm", {}), Pool("noprofile", "slurm", {})]
+        with mock.patch.object(probe, "CLUSTER_CONFIG_DIR", cfg):
+            spelling = probe.profile_accounts(pools)
+        self.assertEqual(spelling.get("cda26011"), "CDA26011")
+        self.assertEqual(spelling.get("bggq-delta-gpu"), "bggq-delta-gpu")
+        self.assertNotIn("otherproj", spelling)

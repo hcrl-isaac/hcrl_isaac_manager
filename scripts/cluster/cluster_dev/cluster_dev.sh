@@ -12,16 +12,17 @@
 # Cluster-agnostic: all site specifics (login host, account, partition, resources) come from
 # config/<cluster>/.env.cluster, selected with CLUSTER=<name>. Nothing here is Delta-specific.
 #
-# Open master only:         ./cluster_dev.sh open             (approve ONE 2FA prompt; no sync)
-# Queue a job:              ./cluster_dev.sh start [--no-sync]   (approve ONE 2FA prompt)
+# Open master only:         ./cluster_dev.sh open             (approve ONE 2FA prompt; no staging)
+# Queue a job:              ./cluster_dev.sh start [--no-stage]   (approve ONE 2FA prompt; stages `default` first)
 # Then it self-tracks the (possibly multi-hour) queue wait in the background.
 # Check anytime:            ./cluster_dev.sh status
-# Mirror code:              ./cluster_dev.sh sync [--dry-run] (--dry-run lists what would change or be deleted)
-# Stage a code tree:        ./cluster_dev.sh stage <name> <repo>=<ref|/path/to/worktree> ...  (no --delete)
-#                           ./cluster_dev.sh exec --tree <name>[-<fp>] -- <cmd>   (run against that tree)
+# Ship code (a tree):       ./cluster_dev.sh stage            (the workspace as on disk -> tree `default`)
+#                           ./cluster_dev.sh stage <name> <repo>=<ref|/path/to/worktree> ...  (those repos; the
+#                                                                      rest from the newest `default`)
 #                           ./cluster_dev.sh trees [rm <name>-<fp> | rm --partials]   (list / remove trees)
 # Use it:                   ./cluster_dev.sh attach           (interactive shell on the node)
-#                           ./cluster_dev.sh exec -- <cmd>    (run in container, SSH-tethered)
+#                           ./cluster_dev.sh exec [--tree <name>[-<fp>]] -- <cmd>   (run in container against the
+#                                                                      newest `default`, or that tree; SSH-tethered)
 #                           ./cluster_dev.sh exec --detach -- <cmd>   (run in container, detached
 #                                                                      from SSH master; survives
 #                                                                      master drops; log on login
@@ -162,15 +163,6 @@ refresh_job_state() {
     [ -n "$state" ] && state_set JOB_STATE "$state"
 }
 
-# node_exec.sh must live inside the synced workspace so it rides the rsync to the cluster.
-stage_node_exec() {
-    local dst_file="${LOCAL_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh"
-    [ -e "$dst_file" ] && [ "${SCRIPT_DIR}/node_exec.sh" -ef "$dst_file" ] && return 0
-    mkdir -p "$(dirname "$dst_file")"
-    cp "${SCRIPT_DIR}/node_exec.sh" "$dst_file"
-    chmod +x "$dst_file"
-}
-
 # The selected config's env goes straight to its remote config dir, where node_exec.sh reads it
 # (NODE_EXEC_ENV); no local or remote slot is shared between configs.
 REMOTE_ENV_FILE="${REMOTE_ISAACLAB_DIR}/scripts/cluster/config/${CLUSTER}/.env.cluster"
@@ -178,77 +170,6 @@ push_env_cluster() {
     [ -f "$ENV_FILE" ] || { err "Cluster env file not found: $ENV_FILE"; return 1; }
     on_login "mkdir -p '$(dirname "$REMOTE_ENV_FILE")'"
     rsync -t -e "ssh ${SSH_OPTS[*]}" "$ENV_FILE" "${CLUSTER_LOGIN}:${REMOTE_ENV_FILE}"
-}
-
-rsync_code() {
-    # Honor .dockerignore + prune git/venv/logs/wandb/exports/sif. No -z (assets are incompressible);
-    # -t preserves mtimes so re-syncs skip unchanged assets; --info=progress2 shows overall progress.
-    # A per-cluster config/<name>/.rsync-exclude (rsync exclude patterns, one per line) prunes repos that
-    # must not deploy to THIS cluster (e.g. another session's *_pbfm forks, which shadow package names).
-    local extra_excludes=() cfg dest remote_only name
-    # Every config that syncs to this destination contributes its .rsync-exclude, so a sync through one
-    # config cannot delete what a sibling config protects. Destinations compare as expanded values.
-    for cfg in "${SCRIPT_DIR}"/../config/*/; do
-        dest=""
-        [ -f "${cfg}.env.cluster" ] && \
-            dest="$(bash -c 'source "$1" >/dev/null 2>&1; printf %s "${CLUSTER_ISAACLAB_DIR:-}"' _ "${cfg}.env.cluster")"
-        [ "$dest" = "$REMOTE_ISAACLAB_DIR" ] || [ "$(basename "$cfg")" = "$CLUSTER" ] || continue
-        [ -f "${cfg}.rsync-exclude" ] && extra_excludes+=(--exclude-from="${cfg}.rsync-exclude")
-    done
-    # the API key: owner-only here, which -p carries to the cluster
-    [ ! -f "${LOCAL_ISAACLAB_DIR}/scripts/.env.wandb" ] || chmod go-rwx "${LOCAL_ISAACLAB_DIR}/scripts/.env.wandb"
-    # A fresh profile's workspace may not exist yet, nor its parent (rsync creates only the last level). A dry run
-    # leaves the remote alone, and a created directory is named, so a mistyped path shows.
-    if [[ " $* " != *" -n "* ]]; then
-        on_login "[ -d '${REMOTE_ISAACLAB_DIR}' ] || { mkdir -p '${REMOTE_ISAACLAB_DIR}' && \
-            echo '[cluster_dev] created ${REMOTE_ISAACLAB_DIR}'; }" || {
-            err "cannot create ${REMOTE_ISAACLAB_DIR} on the remote"; return 1; }
-    fi
-    # resources/* repos that exist only on the remote (cluster-only forks, or retired here with only
-    # worktrees/ left) are never deleted.
-    remote_only="$(on_login "[ ! -d '${REMOTE_ISAACLAB_DIR}/resources' ] || ls -1 '${REMOTE_ISAACLAB_DIR}/resources'")" || {
-        err "cannot list ${REMOTE_ISAACLAB_DIR}/resources on the remote; refusing to sync with --delete"; return 1; }
-    while IFS= read -r name; do
-        [ -n "$name" ] || continue
-        if [ ! -e "${LOCAL_ISAACLAB_DIR}/resources/${name}" ] || \
-           [ -z "$(ls -A "${LOCAL_ISAACLAB_DIR}/resources/${name}" 2>/dev/null | grep -vx worktrees)" ]; then
-            extra_excludes+=(--exclude="/resources/${name}")
-        fi
-    done <<< "$remote_only"
-    # extra rsync args from the caller, e.g. `sync --dry-run` -> -n --itemize-changes
-    rsync -rlptvh --delete --info=progress2 "$@" \
-        `# worktrees are per-session state: local ones never ship, remote ones are never deleted` \
-        --exclude='**/worktrees/' \
-        `# hydra run dirs are run output, like logs/` \
-        --exclude='/outputs/' --exclude='/resources/*/outputs/' \
-        `# local working docs and session worktrees never ship` \
-        --exclude='/.claude/' --exclude='/resources/*/.claude/' \
-        `# the selected config's env is read from config/<name>/ on the node, not from a shared slot` \
-        --exclude='/scripts/cluster/.env.cluster' \
-        `# legacy pre-reorg tree: un-protect it so --delete can clear it despite excluded contents` \
-        --filter='R /source/***' \
-        `# artifacts/ is the out-of-sync tree both ways: local exports never ship, and cluster-only data` \
-        `# lives under the remote artifacts/ where --delete cannot touch it -- put new excludable data there` \
-        --exclude='/artifacts' \
-        `# staged code trees live only on the remote` \
-        --exclude='/trees/' \
-        `# FIRST match wins, so per-cluster protection must precede the allowlist below -- an include` \
-        `# that matched first would mark cluster-only state as syncable and --delete would erase it` \
-        "${extra_excludes[@]}" \
-        --filter=':- .dockerignore' \
-        --exclude='*.git*' --exclude='ilab/' --exclude='.venv/' \
-        --exclude='wandb/' --exclude='logs/' --exclude='.vscode/' \
-        --filter='-p **/__pycache__/' --exclude='scripts/cluster/exports/' --exclude='*.sif' --exclude='*.tar' --exclude='.backup/' \
-        `# motion_datasets ALLOWLIST: sync only training .pt + sidecars; any new intermediate type is dropped by default` \
-        `# remote-only bundles are protected: P is receiver-side, so the allowlist still decides what ships` \
-        --filter='P /resources/motion_datasets/**' \
-        --include='resources/motion_datasets/**/' \
-        --include='resources/motion_datasets/**.pt' \
-        --include='resources/motion_datasets/**.arena.json' --include='resources/motion_datasets/**.courts.json' \
-        --include='resources/motion_datasets/**.manifest.json' \
-        --exclude='resources/motion_datasets/**' \
-        -e "ssh ${SSH_OPTS[*]}" \
-        "${LOCAL_ISAACLAB_DIR}/" "${CLUSTER_LOGIN}:${REMOTE_ISAACLAB_DIR}/"
 }
 
 # Resolve the node of the current sentinel job from squeue (authoritative).
@@ -261,25 +182,19 @@ job_state() { on_login "squeue -j $1 -h -o '%T'" 2>/dev/null | tr -d '[:space:]'
 # Subcommands
 #============================================================================
 cmd_start() {
-    local sync=1
+    local stage=1
     while [ $# -gt 0 ]; do
         case "$1" in
-            --no-sync) sync=""; shift ;;
-            *) err "start: unknown argument '$1' (usage: start [--no-sync])"; exit 1 ;;
+            --no-stage) stage=""; shift ;;
+            *) err "start: unknown argument '$1' (usage: start [--no-stage])"; exit 1 ;;
         esac
     done
     ensure_master
-    # 1) mirror local code up first so the node has the latest on attach.
-    if [ -z "$sync" ]; then
-        log "Skipping the code sync: run from staged trees (develop stage / exec --tree) or 'develop sync' later."
-        local remote_sha
-        remote_sha="$(on_login "sha256sum '${REMOTE_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh' 2>/dev/null" | cut -c1-64 || true)"
-        [ "$remote_sha" = "$(sha256sum "${SCRIPT_DIR}/node_exec.sh" | cut -c1-64)" ] ||
-            log "WARNING: the remote shared node_exec.sh differs from this one; shared-mode exec runs the remote copy."
-    elif [ -d "$LOCAL_ISAACLAB_DIR" ]; then
-        log "Syncing code -> ${REMOTE_ISAACLAB_DIR} (excludes git/venv/logs/wandb)..."
-        stage_node_exec
-        rsync_code || err "rsync failed (continuing; you can re-run './cluster_dev.sh sync')."
+    # 1) stage the workspace as `default` first, so the node runs the latest on attach.
+    if [ -z "$stage" ]; then
+        log "Skipping the stage: exec runs the newest staged \`default\` (or --tree); stage one with 'develop stage'."
+    else
+        ( cmd_stage default ) || err "staging failed (continuing; re-run './cluster_dev.sh stage')."
     fi
     push_env_cluster || err "could not push ${ENV_FILE} (exec falls back to scripts/cluster/.env.cluster)."
     # 2) render + submit the sentinel sbatch from the template. Only $SBATCH_DIRECTIVES is substituted;
@@ -413,6 +328,9 @@ require_running() {
         part="$(echo "$row" | awk '{print $3}')"; acct="$(echo "$row" | awk '{print $4}')"
         gpus="$(echo "$row" | awk '{print $5}' | grep -oE 'gpu(:[A-Za-z0-9_-]+)?:[0-9]+' | grep -oE '[0-9]+$' | head -1 || true)"
         [ -n "$part" ] && SRUN_PART_OPT="-p ${part}"
+        # squeue reports the account lowercased (cda26011), which TACC's submit filter refuses: the profile's own
+        # spelling wins when it names the same account
+        [ -n "$DEV_ACCOUNT" ] && [ "${acct,,}" = "${DEV_ACCOUNT,,}" ] && acct="$DEV_ACCOUNT"
         [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A ${acct}"
         [ -n "$gpus" ] && SRUN_GRES_OPT="--gres=gpu:${gpus}"
         _srun_opts
@@ -480,17 +398,15 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     done
     require_running
     [ -n "$space_check" ] && check_space "${CLUSTER_LOGS_DIR:-${REMOTE_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs}" "run logs"
-    # exec always runs with the current local config, even on a destination that hasn't been synced
+    # exec always runs with the current local config, pushed before every run
     push_env_cluster || { err "could not push ${ENV_FILE} to ${REMOTE_ENV_FILE}"; exit 1; }
     # every hop re-parses the command, so each one gets its own %q layer and the argv arrives intact
     local args; args="$(printf '%q ' "$@")"
-    local nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} bash ${REMOTE_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
-    if [ -n "$tree" ]; then
-        tree="$(resolve_tree "$tree")" || exit 1
-        log "Using tree ${tree}"
-        nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} NODE_EXEC_RESOURCES=${tree}/resources"
-        nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
-    fi
+    # resolved once, here: the step runs this tree for its whole life, whatever is staged after it starts
+    tree="$(resolve_tree "${tree:-default}")" || exit 1
+    log "Using tree ${tree}"
+    local nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} NODE_EXEC_RESOURCES=${tree}/resources"
+    nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
     if [ -z "$detach" ]; then
         log "[${DD_MODE}] container exec on job ${DD_JOBID}: ${args}"
         if [ "$DD_MODE" = "ssh" ]; then
@@ -540,20 +456,7 @@ cmd_tail() {  # cluster_dev.sh tail [LOGFILE]  : follow a detached --detach log 
     ssh "${SSH_OPTS[@]}" -t "$CLUSTER_LOGIN" "tail -F ${logfile}"
 }
 
-cmd_sync() {  # sync [--dry-run] : re-mirror local code -> cluster isaaclab dir (and onto the live node workspace)
-    ensure_master
-    if [ "${1:-}" = "--dry-run" ]; then
-        rsync_code -n --itemize-changes
-        log "Dry run: nothing was transferred or deleted (lines starting '*deleting' would be removed)."
-        return
-    fi
-    stage_node_exec
-    rsync_code
-    push_env_cluster
-    log "Synced to ${REMOTE_ISAACLAB_DIR}."
-}
-
-cmd_open() {  # open (or confirm) the SSH control master only -- no sync, no job actions
+cmd_open() {  # open (or confirm) the SSH control master only -- no staging, no job actions
     ensure_master
 }
 
@@ -601,7 +504,7 @@ cmd_stop() {
 }
 
 usage() {
-    sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 source "${SCRIPT_DIR}/trees.sh"
@@ -609,7 +512,7 @@ source "${SCRIPT_DIR}/trees.sh"
 case "${1:-}" in
     stage)    shift; cmd_stage "$@" ;;
     trees)    shift; cmd_trees "$@" ;;
-    __resolve_tree) shift; ensure_master; resolve_tree "$@" ;;   # internal (tests)
+    __resolve_tree) shift; ensure_master >&2; resolve_tree "$@" ;;   # internal: tests, `cluster job`
     __free_gb) shift; ensure_master >/dev/null; remote_free_gb "$1" ;;   # internal (tests)
     start)    shift; cmd_start "$@" ;;
     open)     shift; cmd_open "$@" ;;
@@ -617,7 +520,6 @@ case "${1:-}" in
     attach)   shift; cmd_attach "$@" ;;
     exec)     shift; cmd_exec "$@" ;;
     tail)     shift; cmd_tail "$@" ;;
-    sync)     shift; cmd_sync "$@" ;;
     kill)     shift; cmd_kill "$@" ;;
     stop)     shift; cmd_stop "$@" ;;
     __watch)  shift; cmd_watch_loop "$@" ;;   # internal (used by nohup)

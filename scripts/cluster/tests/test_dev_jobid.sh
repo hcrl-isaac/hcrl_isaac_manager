@@ -6,7 +6,8 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 M="$T/main"
-mkdir -p "$T/bin" "$M/scripts/cluster" "$T/remote/scripts/cluster/cluster_dev" "$T/.cluster_dev"
+mkdir -p "$T/bin" "$M/scripts/cluster" "$T/remote/trees/default-0123456789/scripts/cluster/cluster_dev" "$T/.cluster_dev"
+touch "$T/remote/trees/default-0123456789/.complete"  # exec runs the newest `default` tree
 cp -r "$REPO/scripts/cluster/cluster_dev" "$REPO/scripts/cluster/tools" "$M/scripts/cluster/"
 (cd "$M" && git init -q -b main . && git config user.email t@t && git config user.name t &&
     git add -A && git commit -qm init)
@@ -14,7 +15,7 @@ cp -r "$REPO/scripts/cluster/cluster_dev" "$REPO/scripts/cluster/tools" "$M/scri
 mkdir -p "$M/scripts/cluster/config/zz"
 printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nCLUSTER_MIN_FREE_GB=0\n' "$T/remote" \
     > "$M/scripts/cluster/config/zz/.env.cluster"
-printf '#!/usr/bin/env bash\n#SBATCH -p test\n' > "$M/scripts/cluster/config/zz/submit_job_slurm.sh"
+printf '#!/usr/bin/env bash\n#SBATCH -p test\n#SBATCH -A IRI26004\n' > "$M/scripts/cluster/config/zz/submit_job_slurm.sh"
 git -C "$M" worktree add -q "$T/wt"
 cat > "$T/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
@@ -35,7 +36,7 @@ printf '%s ' "\$@" > "$T/srun_args"
 while [ \$# -gt 0 ] && [ "\$1" != bash ]; do shift; done
 exec "\$@"
 EOF
-printf '#!/usr/bin/env bash\nprintf "ARG<%%s>\\n" "$@"\n' > "$T/remote/scripts/cluster/cluster_dev/node_exec.sh"
+printf '#!/usr/bin/env bash\nprintf "ARG<%%s>\\n" "$@"\n' > "$T/remote/trees/default-0123456789/scripts/cluster/cluster_dev/node_exec.sh"
 chmod +x "$T/bin/"*
 dev() {  # dev CHECKOUT ARGS... : cluster_dev.sh of that checkout, aimed at job 900
     local co="$1"; shift
@@ -53,8 +54,14 @@ check "and its account" "grep -q -- '-A IRI26004 ' '$T/srun_args'"
 check "and its GPU request" "grep -q -- '--gres=gpu:4 ' '$T/srun_args'"
 check "the command reaches node_exec" "grep -q '^ARG<hi>' '$T/out1'"
 
+SQ_ROW="RUNNING n1 amd-rtx iri26004 gres/gpu:4" dev "$M" exec -- echo hi > "$T/out5" 2>&1
+check "squeue's lowercased account takes the profile's spelling (TACC refuses cda26011)" "grep -q -- '-A IRI26004 ' '$T/srun_args'"
+SQ_ROW="RUNNING n1 amd-rtx otherproj gres/gpu:4" dev "$M" exec -- echo hi > "$T/out6" 2>&1
+check "a different account is kept as squeue gives it" "grep -q -- '-A otherproj ' '$T/srun_args'"
+
 SQ_ROW="RUNNING n1 skx (null) N/A" dev "$M" exec -- echo hi > "$T/out2" 2>&1
-check "no account and no GPU request add none" "grep -q -- '-p skx ' '$T/srun_args' && ! grep -q -- ' -A ' '$T/srun_args' && ! grep -q -- '--gres' '$T/srun_args'"
+check "a job without an account keeps the profile's, and no GPU request adds none" \
+    "grep -q -- '-p skx ' '$T/srun_args' && grep -q -- '-A IRI26004 ' '$T/srun_args' && ! grep -q -- '--gres' '$T/srun_args'"
 
 SQ_ROW="RUNNING n1 amd-rtx IRI26004 N/A" dev "$T/wt" exec -- echo hi > "$T/out3" 2>&1
 check "a worktree's exec uses the main checkout's profile" "grep -q '^ARG<hi>' '$T/out3' && grep -q \"main checkout's profile\" '$T/out3'"

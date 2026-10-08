@@ -5,7 +5,8 @@ set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
-mkdir -p "$T/bin" "$T/scripts/cluster/config/zz" "$T/remote" "$T/.cluster_dev/zz"
+mkdir -p "$T/bin" "$T/scripts/cluster/config/zz" "$T/remote/trees/default-0123456789" "$T/.cluster_dev/zz"
+touch "$T/remote/trees/default-0123456789/.complete"  # exec runs the newest `default` tree
 cp -r "$REPO/scripts/cluster/cluster_dev" "$REPO/scripts/cluster/tools" "$T/scripts/cluster/"
 cat > "$T/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
