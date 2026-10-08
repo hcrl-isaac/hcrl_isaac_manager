@@ -65,10 +65,12 @@ _prune_trees() {  # _prune_trees NAME
 
 _tree_valid() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$1" != "." ] && [ "$1" != ".." ]; }
 
-# The files a tree carries: tracked and untracked, not ignored, present on disk (NUL-separated, relative).
+# The files a tree carries: tracked and untracked, not ignored, present on disk (NUL-separated, relative). A checkout's
+# session state (worktrees/, .claude/) and run output (the TREE_RW_DIRS, mounted over in a tree) never ship.
 _tree_files() {
     local f
     git -C "$1" ls-files -z --cached --others --exclude-standard | while IFS= read -r -d '' f; do
+        case "$f" in worktrees/* | .claude/* | logs/* | outputs/* | wandb/*) continue ;; esac
         [ -e "$1/$f" ] && printf './%s\0' "$f"
     done
 }
