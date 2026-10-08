@@ -149,8 +149,11 @@ def parse_env(pairs: list[str]) -> dict[str, str]:
 
 
 def fill_checkpoints(script_args: list[str], paths: dict[str, str]) -> list[str]:
-    """``{NAME}`` in the script's arguments becomes checkpoint NAME's path on the target (the value ``$NAME`` holds),
-    for a script that takes the path as an argument; braces naming no checkpoint stay as written."""
+    """The script's arguments with each ``{NAME}`` replaced by checkpoint NAME's path on the target.
+
+    The path is the value ``$NAME`` holds, for a script that takes it as an argument; braces naming no checkpoint
+    stay as written.
+    """
     filled = []
     for arg in script_args:
         for name, path in paths.items():
