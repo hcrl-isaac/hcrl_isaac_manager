@@ -6,7 +6,12 @@ ROOT=$(readlink -f "$1"); shift
 command -v apptainer >/dev/null || export PATH=/opt/apps/tacc-apptainer/1.4.1/bin:$PATH
 SIF=$ROOT/bookworm.sif
 if [ ! -f $SIF ]; then
-  APPTAINER_CACHEDIR=$ROOT/apptainer-cache APPTAINER_TMPDIR=$ROOT/tmp apptainer pull $SIF docker://python:3.12-bookworm || exit 1
+  # a fresh root has neither dir, and the pull needs both. It lands under a per-process name and is renamed, so a
+  # concurrent job never sees a half-written image
+  mkdir -p $ROOT/tmp $ROOT/apptainer-cache
+  APPTAINER_CACHEDIR=$ROOT/apptainer-cache APPTAINER_TMPDIR=$ROOT/tmp \
+    apptainer pull $SIF.partial.$$ docker://python:3.12-bookworm || { rm -f $SIF.partial.$$; exit 1; }
+  mv -f $SIF.partial.$$ $SIF
 fi
 # TACC's XALT preloads a library through these that needs glibc 2.38 (bookworm has 2.36), so every exec would die
 unset LD_PRELOAD SINGULARITYENV_LD_PRELOAD APPTAINERENV_LD_PRELOAD SINGULARITY_BINDPATH APPTAINER_BINDPATH
