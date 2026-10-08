@@ -483,12 +483,8 @@ class SlurmEvalTest(Isolated):
             return res.claim(args, pools)
 
     def _eval(self, *argv: str) -> tuple[int, str]:
-        parser = argparse.ArgumentParser()
-        ev.add_parser(parser.add_subparsers(dest="cmd"))
-        base = ["eval", str(self.script), "--holder", "me", "--on", "c571-003:3"]
-        head, tail = ev.split_script_args([*base, "--checkpoint", f"CKPT_A={self.ckpt}", *argv])
-        args = parser.parse_args(head)
-        args.script_args = tail
+        base = [str(self.script), "--holder", "me", "--on", "c571-003:3"]
+        args = ev.parse_args([*base, "--checkpoint", f"CKPT_A={self.ckpt}", *argv])
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as cm:
             ev.cmd_eval(args, [self.pool], self._claim)
@@ -649,11 +645,7 @@ class EvalRunTest(Isolated):
             return res.claim(args, pools)
 
     def _eval(self, *argv: str) -> tuple[int, str]:
-        parser = argparse.ArgumentParser()
-        ev.add_parser(parser.add_subparsers(dest="cmd"))
-        head, tail = ev.split_script_args(["eval", str(self.script), "--holder", "me", *argv])
-        args = parser.parse_args(head)
-        args.script_args = tail
+        args = ev.parse_args([str(self.script), "--holder", "me", *argv])
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as cm:
             ev.cmd_eval(args, [self.pool], self._claim)
@@ -733,10 +725,7 @@ class EvalRunTest(Isolated):
             pids.append(int(next(x for x in proc.stdout if x.startswith("PID ")).split()[1]))
             raise BrokenPipeError
 
-        parser = argparse.ArgumentParser()
-        ev.add_parser(parser.add_subparsers(dest="cmd"))
-        args = parser.parse_args(["eval", str(self.script), "--holder", "me", "--any"])
-        args.script_args = []
+        args = ev.parse_args([str(self.script), "--holder", "me", "--any"])
         with (
             mock.patch.object(ev, "run", side_effect=broken),
             mock.patch.dict(os.environ, {"MODE": "hang"}),

@@ -13,7 +13,6 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-import evaluate
 import leases as ls
 from inventory import Pool, load_config, load_pools
 from probe import HELD_UTIL, Card, Report, probe_local, probe_ray, probe_slurm_login, probe_ssh_host
@@ -422,10 +421,7 @@ def main() -> None:
     tr.add_argument("--force", action="store_true", help="transfer someone else's lease")
     sub.add_parser("leases", help="list leases (no probe)")
     sub.add_parser("pools", help="list the configured pools")
-    evaluate.add_parser(sub)
-    argv, script_args = evaluate.split_script_args(sys.argv[1:] or ["status"])
-    args = parser.parse_args(argv)
-    args.script_args = script_args
+    args = parser.parse_args(sys.argv[1:] or ["status"])
 
     try:
         pools = load_pools()
@@ -435,9 +431,6 @@ def main() -> None:
         for p in pools:
             detail = p.settings.get("hosts") or p.settings.get("login") or p.settings.get("address") or ""
             print(f"{p.name:<16} {p.kind:<6} {detail}")
-        return
-    if args.cmd == "eval":
-        evaluate.cmd_eval(args, pools, claim)
         return
     commands = {
         "status": cmd_status,

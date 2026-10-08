@@ -7,7 +7,7 @@ import os
 import sys
 from collections.abc import Callable, Sequence
 
-from hcrl_cli import infra, workspace
+from hcrl_cli import infra, launch, workspace
 from hcrl_cli.proc import ROOT
 from hcrl_cli.sim2real import sim2real
 
@@ -46,10 +46,10 @@ VERBS: dict[str, tuple[str, str, Callable[[list[str]], None]]] = {
     "setup": ("", "full local install: deps + Isaac Lab / Isaac Sim + every workspace package", _no_args(workspace.setup)),
     "deps": ("", "manager base env: the ilab venv (with pls), uv, gitman, git-lfs, W&B creds", _no_args(workspace.deps)),
     "resolve": ("[args]", "merge selection + defaults -> gitman.yaml, fetch every repo under resources/", workspace.resolve),
-    "run": ("<script> [args]", "run hcrl_isaaclab/scripts/<script>.py with the ilab venv (WT=<name>: worktree set)", _first("script", infra.run_script)),
-    "res": ("[args]", "compute: probe every GPU, claim/release leases, eval on a leased card", infra.res),
+    "run": ("[--on T] [--wt S] -- <script> [args]", "run a script here, on a leased GPU or on Ray (pls run --help)", launch.main),
+    "res": ("[args]", "compute: probe every GPU, claim/release/transfer leases", infra.res),
     "cluster": ("[<name>] [args]", "cluster interface: add/setup/job/develop/repush/build", infra.cluster),
-    "ray": ("[args]", "Ray interface: setup/job/run/bench/push/list/logs/stop", infra.ray),
+    "ray": ("[args]", "Ray interface: setup/bench/push/list/logs/stop (runs: pls run --on ray)", infra.ray),
     "sync": ("<host> [args]", "push this workspace + Claude sessions to a peer box", _first("host", infra.sync)),
     "sim2real": ("<cmd> [args]", "hcrl_sim2real: MuJoCo sim/sysid, replay, fits, measure, fetch-model/policy", sim2real),
     "upload-artifacts": ("[args]", "upload managed large-file resources to W&B as artifacts", infra.upload_artifacts),

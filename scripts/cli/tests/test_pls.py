@@ -18,7 +18,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
 
-from hcrl_cli import cli, infra, workspace
+from hcrl_cli import cli, infra, launch, workspace
 from hcrl_cli.proc import VENV_PY
 
 
@@ -50,7 +50,7 @@ class PassThroughTest(unittest.TestCase):
         return ctx.exception, chdir
 
     def test_verb_args_reach_the_script_verbatim_including_a_literal_double_dash(self) -> None:
-        for argv in (["--json"], ["--help"], ["eval", "--wt", "x", "--", "train", "--task", "T"]):
+        for argv in (["--json"], ["--help"], ["claim", "--any", "--holder", "me", "--", "x"]):
             h, chdir = self._pls("res", *argv)
             self.assertEqual(h.cmd, ["python3", "scripts/cluster/res/res.py", *argv])
             chdir.assert_called_once_with(cli.ROOT)
@@ -123,10 +123,10 @@ class PickerTest(unittest.TestCase):
         self.assertEqual((h.cmd[1:], h.env), (["job"], {"CLUSTER": "horizon"}))
         self.assertEqual(asked, ["Cluster subcommand:", "Target cluster:"])
 
-    def test_a_set_cluster_or_untargeted_verb_asks_nothing(self) -> None:
+    def test_an_exported_cluster_is_ignored_and_untargeted_verbs_ask_nothing(self) -> None:
         os.environ["CLUSTER"] = "delta"
-        self.assertEqual(self._cluster(["job"])[1], [])
-        del os.environ["CLUSTER"]
+        h, asked = self._cluster(["job"], picks=["horizon"])
+        self.assertEqual((h.env, asked), ({"CLUSTER": "horizon"}, ["Target cluster:"]))
         h, asked = self._cluster(["add", "x"])
         self.assertEqual((h.cmd[1:], h.env, asked), (["add", "x"], {}, []))
 
@@ -141,39 +141,107 @@ class PickerTest(unittest.TestCase):
 
 
 class RunTest(unittest.TestCase):
-    def _run(self, wt: str, selected: Callable, pythonpath: str = "") -> HandoffError:
+    """`pls run`: local runs, --wt, and the card and Ray targets."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        Path(self.tmp.name, "resources", "robot_rl").mkdir(parents=True)
+        root = mock.patch.object(launch, "ROOT", Path(self.tmp.name))
+        root.start()
+        self.addCleanup(root.stop)
+        self.select = mock.Mock(return_value=("", "/m/resources/hcrl_isaaclab", []))
         fake = types.ModuleType("worktree_env")
-        fake.select = mock.Mock(side_effect=selected)
-        env = {"PYTHONPATH": pythonpath} | ({"WT": wt} if wt else {})
-        with (
+        fake.select = self.select
+        for patch in (
             mock.patch.dict(sys.modules, {"worktree_env": fake}),
-            mock.patch.dict(os.environ, env, clear=False),
+            mock.patch.dict(os.environ, {"PYTHONPATH": "/x", "WT": "stale"}),
             mock.patch.object(infra, "handoff", _handoff),
+            mock.patch.object(launch, "handoff", _handoff),
+            mock.patch("os.chdir"),
             mock.patch("sys.stderr"),
-            self.assertRaises(HandoffError) as ctx,
         ):
-            if not wt:
-                os.environ.pop("WT", None)
-            infra.run_script("train", ["--task", "T"])
-        fake.select.assert_called_once_with(wt)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def _pls(self, *argv: str) -> HandoffError:
+        with self.assertRaises(HandoffError) as ctx:
+            cli.main(["run", *argv])
         return ctx.exception
 
-    def test_main_checkouts_without_wt(self) -> None:
-        h = self._run("", lambda n: ("", "/m/resources/hcrl_isaaclab", []), pythonpath="/x")
-        self.assertEqual(h.cmd, [VENV_PY, "/m/resources/hcrl_isaaclab/scripts/train.py", "--task", "T"])
-        self.assertEqual((h.env["PYTHONPATH"], h.env["OMNI_KIT_ACCEPT_EULA"]), ("/x", "YES"))
+    def _refused(self, *argv: str) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            cli.main(["run", *argv])
+        self.assertNotEqual(ctx.exception.code, 0)
 
-    def test_a_worktree_set_precedes_the_existing_pythonpath(self) -> None:
-        h = self._run("feat", lambda n: ("/w/a:/w/b", "/w/core", ["a", "b"]), pythonpath="/x")
-        self.assertEqual(h.env["PYTHONPATH"], "/w/a:/w/b:/x")
-        self.assertTrue(h.cmd[1].startswith("/w/core/scripts/"))
+    def test_a_bare_script_runs_here_on_the_main_checkouts(self) -> None:
+        h = self._pls("train", "--task", "T", "--", "x")
+        self.assertEqual(h.cmd, [VENV_PY, "/m/resources/hcrl_isaaclab/scripts/train.py", "--task", "T", "--", "x"])
+        self.assertEqual((h.env["PYTHONPATH"], h.env["OMNI_KIT_ACCEPT_EULA"]), ("/x", "YES"))
+        self.select.assert_called_once_with("")  # an exported WT selects nothing
+
+    def test_wt_flag_selects_the_set_ahead_of_the_existing_pythonpath(self) -> None:
+        self.select.return_value = ("/w/a:/w/b", "/w/core", ["a", "b"])
+        h = self._pls("--wt", "feat", "--", "train")
+        self.select.assert_called_once_with("feat")
+        self.assertEqual((h.env["PYTHONPATH"], h.cmd[1]), ("/w/a:/w/b:/x", "/w/core/scripts/train.py"))
 
     def test_an_unknown_set_stops_before_launch(self) -> None:
-        def refuse(name: str) -> None:
-            raise SystemExit(f"[worktree] no repo has worktrees/{name}; nothing to select")
+        self.select.side_effect = SystemExit("[worktree] no repo has worktrees/nope; nothing to select")
+        self._refused("--wt", "nope", "--", "train")
 
-        with self.assertRaises(SystemExit):
-            self._run("nope", refuse)
+    def test_options_need_the_double_dash_and_card_options_need_a_card(self) -> None:
+        self._refused("--wt", "feat", "train")
+        self._refused("--holder", "me", "--", "train")
+        self._refused("--on", "ray", "--holder", "me", "--", "train")
+        self._refused("--on", "any", "--")
+
+    def test_card_targets_become_the_card_backends_selectors(self) -> None:
+        for on, flags in (
+            ("c571-003:3", ["--on", "c571-003:3"]),
+            ("local:0", ["--on", "local:0"]),
+            ("any", ["--any"]),
+            ("lease:ab12cd", ["--lease", "ab12cd"]),
+            ("delta", ["--any", "--pool", "delta"]),
+        ):
+            with self.subTest(on=on):
+                h = self._pls("--on", on, "--holder", "me", "--checkpoint", "A=x", "--", "train", "--task", "T")
+                expect = [*launch.CARD_CMD, "--holder", "me", "--checkpoint", "A=x", *flags]
+                self.assertEqual(h.cmd, [*expect, "hcrl_isaaclab:scripts/train.py", "--", "--task", "T"])
+
+    def test_card_scripts_name_a_repo_file_or_a_local_one(self) -> None:
+        for script, shipped in (
+            ("robot_rl/scripts/census.py", "robot_rl:scripts/census.py"),
+            ("robot_rl:scripts/census.py", "robot_rl:scripts/census.py"),
+            ("./probe.py", "./probe.py"),
+            ("probe.py", "probe.py"),
+        ):
+            with self.subTest(script=script):
+                h = self._pls("--on", "any", "--holder", "me", "--wt", "feat", "--", script)
+                self.assertEqual(h.cmd[-4:], ["--wt", "feat", shipped, "--"])
+
+    def test_ray_trains_through_job_and_ships_other_scripts_through_run(self) -> None:
+        h = self._pls("--on", "ray", "--", "train", "--task", "T")
+        self.assertEqual((h.cmd, h.env), ([launch.RAY_BACKEND, "job", "--task", "T"], {}))
+        h = self._pls("--on", "ray", "--wt", "feat", "--", "census", "--n", "2")
+        self.assertEqual(h.cmd, [launch.RAY_BACKEND, "run", "hcrl_isaaclab/scripts/census.py", "--n", "2"])
+        self.assertEqual(h.env, {"WT": "feat"})
+        h = self._pls("--on", "ray", "--", "robot_rl:scripts/census.py")
+        self.assertEqual(h.cmd[1:3], ["run", "robot_rl/scripts/census.py"])
+        self._refused("--on", "ray", "--", "./probe.py")
+
+    def test_help_before_the_double_dash_is_ours_after_it_the_scripts(self) -> None:
+        self.assertEqual(self._pls("--on", "any", "--help").cmd, [*launch.CARD_CMD, "--help"])
+        with mock.patch("sys.stdout"), self.assertRaises(SystemExit) as ctx:
+            cli.main(["run", "--help"])
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertEqual(self._pls("train", "--help").cmd[-1], "--help")
+
+    def test_ray_job_and_run_are_refused(self) -> None:
+        for verb in ("job", "run"):
+            with self.subTest(verb=verb), self.assertRaises(SystemExit) as ctx:
+                cli.main(["ray", verb, "--task", "T"])
+            self.assertIn("pls run --on ray", str(ctx.exception.code))
 
 
 class WorkspaceTest(unittest.TestCase):

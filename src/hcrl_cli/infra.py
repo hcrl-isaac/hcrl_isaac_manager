@@ -11,17 +11,19 @@ from hcrl_cli.proc import ROOT, VENV_PY, ask_select, handoff
 CLUSTER_CONFIGS = Path("scripts/cluster/config")
 CLUSTER_VERBS = ("setup", "job", "develop", "repush", "build", "add")
 CLUSTER_TARGETED = ("setup", "job", "develop", "repush")  # verbs that ask for a target when several clusters exist
-RAY_VERBS = ("setup", "job", "run", "bench", "push", "list", "logs", "stop")
+RAY_VERBS = ("setup", "bench", "push", "list", "logs", "stop")
+RAY_RUNS = ("job", "run")  # `pls run --on ray` submits these
 
 
 def cluster(args: list[str]) -> None:
     """Cluster interface (scripts/cluster/); a leading config name selects config/<name>, bare args show a picker."""
+    os.environ.pop("CLUSTER", None)  # the leading name (or the picker) is the only cluster selector
     name = ""
     if args and args[0] and (CLUSTER_CONFIGS / args[0]).is_dir():
         name, args = args[0], args[1:]
     if not args or not args[0]:
         args = [ask_select("Cluster subcommand:", CLUSTER_VERBS)]
-    if not name and not os.environ.get("CLUSTER") and args[0] in CLUSTER_TARGETED:
+    if not name and args[0] in CLUSTER_TARGETED:
         configs = sorted(p.name for p in CLUSTER_CONFIGS.iterdir() if p.is_dir()) if CLUSTER_CONFIGS.is_dir() else []
         if len(configs) > 1:
             name = ask_select("Target cluster:", configs)
@@ -29,14 +31,18 @@ def cluster(args: list[str]) -> None:
 
 
 def res(args: list[str]) -> None:
-    """Compute resources (scripts/cluster/res/): `status` probes every GPU on every pool; claims, leases, eval."""
+    """Compute resources (scripts/cluster/res/): `status` probes every GPU on every pool; claims and leases."""
     handoff(["python3", "scripts/cluster/res/res.py", *args])
 
 
 def ray(args: list[str]) -> None:
-    """Ray interface (scripts/ray/): setup, job, run (a one-off script), bench, push, list, logs, stop; bare picks."""
+    """Ray interface (scripts/ray/): setup, bench, push, list, logs, stop; bare picks. Runs go through `pls run --on ray`."""
     if not args or not args[0]:
         args = [ask_select("Ray subcommand:", RAY_VERBS)]
+    if args[0] in RAY_RUNS:
+        sys.exit(
+            f"[pls] Ray runs and training jobs go through `pls run --on ray -- <script|train> [args]`, not ray {args[0]}"
+        )
     handoff(["scripts/ray/ray_interface.sh", *args])
 
 
@@ -53,15 +59,14 @@ def upload_artifacts(args: list[str]) -> None:
     handoff(["bash", "-c", 'set -a; source scripts/.env.wandb; set +a; exec "$0" "$@"', VENV_PY, upload, *args])
 
 
-def run_script(script: str, args: list[str]) -> None:
-    """Run hcrl_isaaclab/scripts/<script>.py with the ilab venv; WT=<name> selects a worktree set."""
+def run_script(script: str, args: list[str], wt: str = "") -> None:
+    """Run hcrl_isaaclab/scripts/<script>.py here with the ilab venv; ``wt`` names a worktree set."""
     sys.path.insert(0, str(ROOT / "scripts"))
     from worktree_env import select
 
-    name = os.environ.get("WT", "")
-    pythonpath, core, overridden = select(name)
+    pythonpath, core, overridden = select(wt)
     if overridden:
-        print(f"[worktree] {name}: {', '.join(overridden)} (others from main checkouts)", file=sys.stderr)
+        print(f"[worktree] {wt}: {', '.join(overridden)} (others from main checkouts)", file=sys.stderr)
     # The worktree'd roots precede the editable installs of the main checkouts, so only diverging repos change.
     pythonpath = ":".join(p for p in (pythonpath, os.environ.get("PYTHONPATH", "")) if p)
     env = {"PYTHONPATH": pythonpath, "OMNI_KIT_ACCEPT_EULA": "YES"}

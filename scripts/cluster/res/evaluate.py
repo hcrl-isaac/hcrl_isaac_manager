@@ -1,4 +1,4 @@
-"""`just res eval`: run a one-off script on a leased GPU, with its checkpoints and code.
+"""`pls run --on <card>`: run a one-off script on a leased GPU, with its checkpoints and code.
 
 Local and ssh pools run the workspace's ilab python on the box. A SLURM card is one of a held dev sentinel's: the
 script runs in the container through a `develop exec` step on that job, against the cluster's shared checkout with
@@ -982,7 +982,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
     """Run a script on one leased card, then kill what is left of it, clean up and release the lease it took.
 
     Args:
-        args: The parsed `just res eval` arguments (with ``script_args``).
+        args: The parsed `pls run --on <card>` arguments (with ``script_args``).
         pools: Configured pools.
         claim: ``res.claim``, which leases the card.
     """
@@ -1102,19 +1102,21 @@ def _duration(text: str) -> float:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
-def add_parser(sub: argparse._SubParsersAction) -> None:
-    """Register `eval` on the `just res` subparsers."""
-    ev = sub.add_parser("eval", help="run a one-off script on a leased GPU (local, ssh, or a held SLURM sentinel)")
+def parser() -> argparse.ArgumentParser:
+    """The card backend's arguments; `pls run` builds them from its own ``--on``/``--wt`` and passes the rest."""
+    ev = argparse.ArgumentParser(
+        prog="pls run --on <card>",
+        description="run a one-off script on a leased GPU (local, ssh, or a held SLURM sentinel)",
+    )
     ev.add_argument(
         "script", help="script on this machine, or <repo>:<path> inside a shipped repo; its arguments follow --"
     )
     ev.add_argument("--detach", action="store_true", help="start the run and return; the lease stays held")
-    ev.add_argument(
-        "--on", help="card as host:gpu (local:<gpu> for this machine; host:job:gpu when a SLURM node runs several jobs)"
-    )
-    ev.add_argument("--any", action="store_true", help="take any free card")
-    ev.add_argument("--lease", help="run on a card you already lease (left leased afterwards)")
-    ev.add_argument("--pool", action="append", help="with --any/--on: only these pools (prefix match)")
+    # the card selectors and --wt come from `pls run --on/--wt` (see `pls run --help`), so they are not listed here
+    ev.add_argument("--on", help=argparse.SUPPRESS)  # host:gpu, host:job:gpu, or local:<gpu>
+    ev.add_argument("--any", action="store_true", help=argparse.SUPPRESS)
+    ev.add_argument("--lease", help=argparse.SUPPRESS)  # a card already leased, left leased afterwards
+    ev.add_argument("--pool", action="append", help="only these pools (repeatable; prefix match)")
     ev.add_argument("--min-free-gb", type=float, default=0, help="with --any: free memory the card needs")
     ev.add_argument("--holder", required=True, help="your session name")
     ev.add_argument("--note", default="", help="lease note")
@@ -1124,18 +1126,35 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         help="[NAME=]<W&B run URL | entity/project/run[@iter] | path>, exported as NAME",
     )
     ev.add_argument("--env", action="append", help="KEY=VALUE for the script (repeatable)")
-    ev.add_argument("--wt", default="", help="run this machine's worktree set (resources/<repo>/worktrees/<name>)")
+    ev.add_argument("--wt", default="", help=argparse.SUPPRESS)  # this machine's resources/<repo>/worktrees/<name>
     ev.add_argument(
         "--timeout", type=_duration, default=0.0, help="kill the run after this long, e.g. 2h (default: none)"
     )
     ev.add_argument(
         "--stall", type=_duration, default=900.0, help="kill the run after this long with no output (15m; 0 = off)"
     )
+    return ev
 
 
-def split_script_args(argv: list[str]) -> tuple[list[str], list[str]]:
-    """Split an `eval` command line at its first ``--``: res's own arguments, then the script's (verbatim)."""
-    if argv[:1] == ["eval"] and "--" in argv:
-        i = argv.index("--")
-        return argv[:i], argv[i + 1 :]
-    return argv, []
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse at the first ``--``: the backend's own arguments, then the script's (verbatim) as ``script_args``."""
+    i = argv.index("--") if "--" in argv else len(argv)
+    args = parser().parse_args(argv[:i])
+    args.script_args = argv[i + 1 :]
+    return args
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Entry point of `pls run --on <card>`: claim the card through res, run the script, release."""
+    import res
+
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        pools = res.load_pools()
+    except Exception as exc:  # a broken inventory must say so, not print a traceback
+        sys.exit(f"[res] cannot read the compute inventory: {type(exc).__name__}: {exc}")
+    cmd_eval(args, pools, res.claim)
+
+
+if __name__ == "__main__":
+    main()

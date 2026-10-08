@@ -157,6 +157,24 @@ This installs a cron job that runs `hcrl_isaaclab/scripts/utils/log_evals_async.
 the `ilab` venv, sources your W&B credentials, skips the pass if GPU 0 is >50% busy, and invokes
 `video_logger.py --mode async`. See `scripts/video_listener.sh --help` for all options.
 
+## pls
+
+`pls` is the workspace command line (`src/hcrl_cli`), installed into the `ilab` venv by `uv sync`; `pls --help`
+lists its verbs. On a fresh machine `./bootstrap.sh` installs uv and runs `pls setup` before `pls` exists.
+
+`pls run` runs a script here, on a leased GPU, or on Ray — `pls run --help` has the full grammar:
+
+```bash
+pls run train --task <id>                                     # this machine
+pls run --wt my-feature -- train --task <id>                  # this machine, a worktree set
+pls run --on larg-a40 --holder <you> -- video_logger --run <url>   # any free card of a pool
+pls run --on hazard:2 --holder <you> --detach -- robot_rl/scripts/census.py   # that card
+pls run --on ray -- train --task <id>                         # a Ray training job (queued)
+```
+
+The shared `ilab`'s `pls` runs the main checkout's `src/hcrl_cli`; to try `pls` changes from a worktree, run
+`PYTHONPATH=<worktree>/src python -m hcrl_cli <verb> ...` from anywhere.
+
 ## Justfile Targets
 
 `just --list` shows all targets. The project uses [just](https://just.systems/man/en/introduction.html)
