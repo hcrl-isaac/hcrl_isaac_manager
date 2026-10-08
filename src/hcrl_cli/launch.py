@@ -1,13 +1,14 @@
-"""`pls run`: run a script here, on a leased card (local, ssh, a cluster's held job) or on the Ray cluster."""
+"""`pls run`: run a script or a command here, on a leased card (local, ssh, a cluster's held job) or on Ray."""
 
 from __future__ import annotations
 
 import argparse
 import os
 import sys
+from pathlib import Path
 
-from hcrl_cli import infra
-from hcrl_cli.proc import ROOT, handoff
+from hcrl_cli import proc
+from hcrl_cli.proc import ROOT, VENV, VENV_PY, handoff
 
 CARD_CMD = ("python3", "scripts/cluster/res/evaluate.py")  # leases the card, ships code + checkpoints, runs
 RAY_BACKEND = "scripts/ray/ray_interface.sh"
@@ -15,7 +16,8 @@ CORE = "hcrl_isaaclab"
 HELP = ("-h", "--help")
 
 USAGE = """pls run <script> [args]
-       pls run [--on TARGET] [--wt NAME] [card options] -- <script> [args]"""
+       pls run [--on TARGET] [--wt NAME] [card options] -- <script> [args]
+       pls run [--on TARGET] [--wt NAME] [card options] --cmd -- <command> [args]"""
 EPILOG = """targets (--on):
   (none)           this machine, with the ilab venv
   host:gpu         that card (host:job:gpu on a SLURM node running several jobs; local:<gpu> = this machine)
@@ -24,10 +26,15 @@ EPILOG = """targets (--on):
   lease:<id>       a card you already lease (left leased afterwards)
   ray              the Ray cluster (queued until a GPU frees); `train` submits a training job
 
-scripts:
+scripts (the same on every target):
   <name>           hcrl_isaaclab/scripts/<name>.py
-  <repo>/<path>.py a file of a workspace repo (shipped with the run; --wt picks its worktree)
-  <repo>:<path>    the same, as res names it; any other path is a local file (cards only)
+  <repo>/<path>    a file of a workspace repo; --wt picks its worktree, and a card or Ray ships it with the run
+  <repo>:<path>    the same
+  <path>           any other path is a local file, relative to where you are (not on Ray)
+
+--cmd runs the words after -- as a command instead (e.g. `--cmd -- nvidia-smi`, `--cmd -- python -m pkg`): here from
+where you are, on a card from the box workspace (a SLURM card: the run's work dir), with the ilab venv first on PATH
+(the container's python on SLURM). Ray runs python scripts only.
 
 card options (--holder is required): --holder, --note, --pool, --min-free-gb, --checkpoint, --env, --timeout,
 --stall, --detach; `pls run --on any --help` describes them."""
@@ -38,7 +45,7 @@ def parser() -> argparse.ArgumentParser:
         prog="pls run",
         usage=USAGE,
         add_help=False,  # -h is handled before parsing: a card target shows the card backend's options
-        description="Run a script here, on a leased GPU, or on the Ray cluster.",
+        description="Run a script or a command here, on a leased GPU, or on the Ray cluster.",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -47,6 +54,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--wt", default="", metavar="NAME", help="run this machine's worktree set resources/<repo>/worktrees/<NAME>"
     )
+    p.add_argument("--cmd", action="store_true", help="the words after -- are a command, not a script")
     return p
 
 
@@ -77,6 +85,10 @@ def _split(argv: list[str]) -> tuple[list[str], list[str]]:
     return argv[:i], argv[i + 1 :]
 
 
+def _is_name(script: str) -> bool:
+    return "/" not in script and ":" not in script and not script.endswith(".py")
+
+
 def _repo_path(script: str) -> tuple[str, str] | None:
     """``(repo, path)`` for ``<repo>/<path>`` or ``<repo>:<path>`` naming a workspace repo, else None."""
     repo, sep, path = script.partition(":") if ":" in script else script.partition("/")
@@ -85,15 +97,52 @@ def _repo_path(script: str) -> tuple[str, str] | None:
     return None
 
 
+def _local_file(script: str) -> str:
+    """A local script file, relative to where `pls` was started, as an absolute path."""
+    path = Path(proc.CALLER_CWD, script)
+    if not path.is_file():
+        sys.exit(f"[pls] run: no script {script} (not a <name>, a <repo>/<path> or a local file)")
+    return str(path.resolve())
+
+
+def _here(argv: list[str], wt: str, command: bool) -> None:
+    """This machine, with the ilab venv; ``wt`` routes PYTHONPATH (and repo files) to a worktree set."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from worktree_env import resolve, select
+
+    pythonpath, core, overridden = select(wt)
+    if overridden:
+        print(f"[worktree] {wt}: {', '.join(overridden)} (others from main checkouts)", file=sys.stderr)
+    # The worktree'd roots precede the editable installs of the main checkouts, so only diverging repos change.
+    env = {
+        "PYTHONPATH": ":".join(p for p in (pythonpath, os.environ.get("PYTHONPATH", "")) if p),
+        "OMNI_KIT_ACCEPT_EULA": "YES",
+    }
+    if command:
+        env["PATH"] = f"{ROOT / VENV}/bin{os.pathsep}{os.environ.get('PATH', '')}"
+        os.chdir(proc.CALLER_CWD)
+        handoff(argv, env=env)
+        return
+    script, *args = argv
+    if _is_name(script):
+        path = f"{core}/scripts/{script}.py"
+    elif named := _repo_path(script):
+        repo, rel = named
+        path = f"{resolve(wt)[0].get(repo, str(ROOT / 'resources' / repo))}/{rel}"
+    else:
+        path = _local_file(script)
+    handoff([VENV_PY, path, *args], env=env)
+
+
 def _card_script(script: str) -> str:
-    if "/" not in script and ":" not in script and not script.endswith(".py"):
+    if _is_name(script):
         return f"{CORE}:scripts/{script}.py"
     named = _repo_path(script)
-    return f"{named[0]}:{named[1]}" if named else script
+    return f"{named[0]}:{named[1]}" if named else _local_file(script)
 
 
 def _ray_script(script: str) -> str:
-    if "/" not in script and ":" not in script and not script.endswith(".py"):
+    if _is_name(script):
         return f"{CORE}/scripts/{script}.py"
     named = _repo_path(script)
     if not named:
@@ -112,21 +161,24 @@ def _card_flags(on: str) -> list[str]:
 
 
 def main(argv: list[str]) -> None:
-    opts, (script, *args) = _split(argv)
+    opts, run = _split(argv)
     ns, extra = parser().parse_known_args(opts)
     os.environ.pop("WT", None)  # --wt is the only worktree selector
     if not ns.on:
         if extra:
             sys.exit(f"[pls] run: {' '.join(extra)} only apply with --on")
-        infra.run_script(script, args, ns.wt)
+        _here(run, ns.wt, ns.cmd)
     elif ns.on == "ray":
-        if extra:
-            sys.exit(f"[pls] run --on ray: {' '.join(extra)} only apply on a card")
+        if extra or ns.cmd:
+            sys.exit(f"[pls] run --on ray: {' '.join([*extra, *(['--cmd'] if ns.cmd else [])])} only apply on a card")
+        script, *args = run
         env = {"WT": ns.wt} if ns.wt else None
         if script == "train":  # a training job: wrap_resources runs train.py (sweeps, aggregate jobs)
             handoff([RAY_BACKEND, "job", *args], env=env)
         else:
             handoff([RAY_BACKEND, "run", _ray_script(script), *args], env=env)
     else:
+        script, *args = run
         wt = ["--wt", ns.wt] if ns.wt else []
-        handoff([*CARD_CMD, *extra, *_card_flags(ns.on), *wt, _card_script(script), "--", *args])
+        target = ["--cmd", script] if ns.cmd else [_card_script(script)]
+        handoff([*CARD_CMD, *extra, *_card_flags(ns.on), *wt, *target, "--", *args])

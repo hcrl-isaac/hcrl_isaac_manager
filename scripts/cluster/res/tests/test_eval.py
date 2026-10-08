@@ -676,6 +676,31 @@ class EvalRunTest(Isolated):
         self.assertEqual(self._leases(), [])
         self.assertEqual(self._stages(), [], "stage dir not removed")
 
+    def test_a_command_runs_as_given_from_the_workspace_with_the_venv_first_on_path(self) -> None:
+        line = 'echo "CMD [$1] $MODE $(command -v python)"; pwd'
+        args = ev.parse_args([
+            "--cmd",
+            "bash",
+            "--holder",
+            "me",
+            "--any",
+            "--env",
+            "MODE=ok",
+            "--",
+            "-c",
+            line,
+            "x",
+            "a b",
+        ])
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+            ev.cmd_eval(args, [self.pool], self._claim)
+        text = out.getvalue() + err.getvalue()
+        self.assertEqual(cm.exception.code, 0, text)
+        self.assertIn(f"CMD [a b] ok {self.tmp / 'ws' / 'ilab' / 'bin' / 'python'}", text)
+        self.assertIn(f"\n{self.tmp / 'ws'}\n", text)
+        self.assertEqual(self._leases(), [])
+
     def test_failure_status_propagates_keeps_the_log_and_releases(self) -> None:
         rc, out = self._eval("--any", "--env", "MODE=fail")
         self.assertEqual(rc, 3, out)

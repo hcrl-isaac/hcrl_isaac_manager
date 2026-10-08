@@ -153,16 +153,22 @@ class RunTest(unittest.TestCase):
         self.select = mock.Mock(return_value=("", "/m/resources/hcrl_isaaclab", []))
         fake = types.ModuleType("worktree_env")
         fake.select = self.select
+        fake.resolve = mock.Mock(return_value=({"robot_rl": "/w/robot_rl"}, ["robot_rl"]))
+        Path(self.tmp.name, "probe.py").touch()
+        cwd = os.getcwd()
+        os.chdir(self.tmp.name)  # where `pls` is started: local files resolve against it
+        self.addCleanup(os.chdir, cwd)
         for patch in (
             mock.patch.dict(sys.modules, {"worktree_env": fake}),
             mock.patch.dict(os.environ, {"PYTHONPATH": "/x", "WT": "stale"}),
             mock.patch.object(infra, "handoff", _handoff),
             mock.patch.object(launch, "handoff", _handoff),
-            mock.patch("os.chdir"),
             mock.patch("sys.stderr"),
         ):
             patch.start()
             self.addCleanup(patch.stop)
+        self.chdir = mock.patch("os.chdir").start()
+        self.addCleanup(mock.patch.stopall)
 
     def _pls(self, *argv: str) -> HandoffError:
         with self.assertRaises(HandoffError) as ctx:
@@ -194,7 +200,30 @@ class RunTest(unittest.TestCase):
         self._refused("--wt", "feat", "train")
         self._refused("--holder", "me", "--", "train")
         self._refused("--on", "ray", "--holder", "me", "--", "train")
+        self._refused("--on", "ray", "--cmd", "--", "nvidia-smi")
         self._refused("--on", "any", "--")
+
+    def test_repo_and_local_files_run_here_as_on_a_card(self) -> None:
+        h = self._pls("--wt", "feat", "--", "robot_rl/scripts/census.py", "--n", "1")
+        self.assertEqual(h.cmd, [VENV_PY, "/w/robot_rl/scripts/census.py", "--n", "1"])
+        self.assertEqual(self._pls("--", "robot_rl:scripts/x.py").cmd[1], "/w/robot_rl/scripts/x.py")
+        self.assertEqual(
+            self._pls("./probe.py", "a").cmd, [VENV_PY, str(Path(self.tmp.name, "probe.py").resolve()), "a"]
+        )
+        self._refused("missing.py")
+
+    def test_a_command_runs_here_from_the_callers_cwd_with_the_venv_first(self) -> None:
+        h = self._pls("--wt", "feat", "--cmd", "--", "nvidia-smi", "-L")
+        self.assertEqual(h.cmd, ["nvidia-smi", "-L"])
+        self.assertTrue(h.env["PATH"].startswith(f"{launch.ROOT / 'ilab'}/bin:"))
+        self.chdir.assert_called_with(os.getcwd())
+        self.select.assert_called_once_with("feat")
+
+    def test_a_command_on_a_card_is_marked_for_the_backend(self) -> None:
+        h = self._pls("--on", "any", "--holder", "me", "--cmd", "--", "bash", "-c", "nvidia-smi")
+        self.assertEqual(
+            h.cmd, [*launch.CARD_CMD, "--holder", "me", "--any", "--cmd", "bash", "--", "-c", "nvidia-smi"]
+        )
 
     def test_card_targets_become_the_card_backends_selectors(self) -> None:
         for on, flags in (
@@ -213,8 +242,8 @@ class RunTest(unittest.TestCase):
         for script, shipped in (
             ("robot_rl/scripts/census.py", "robot_rl:scripts/census.py"),
             ("robot_rl:scripts/census.py", "robot_rl:scripts/census.py"),
-            ("./probe.py", "./probe.py"),
-            ("probe.py", "probe.py"),
+            ("./probe.py", str(Path(self.tmp.name, "probe.py").resolve())),
+            ("probe.py", str(Path(self.tmp.name, "probe.py").resolve())),
         ):
             with self.subTest(script=script):
                 h = self._pls("--on", "any", "--holder", "me", "--wt", "feat", "--", script)

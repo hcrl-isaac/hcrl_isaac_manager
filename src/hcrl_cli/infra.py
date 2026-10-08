@@ -1,4 +1,4 @@
-"""Compute commands: cluster, res, ray, sync, upload-artifacts and run. The scripts they call are unchanged."""
+"""Compute commands: cluster, res, ray, sync and upload-artifacts. The scripts they call are unchanged."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from hcrl_cli.proc import ROOT, VENV_PY, ask_select, handoff
+from hcrl_cli.proc import VENV_PY, ask_select, handoff
 
 CLUSTER_CONFIGS = Path("scripts/cluster/config")
 CLUSTER_VERBS = ("setup", "job", "develop", "repush", "build", "add")
@@ -57,17 +57,3 @@ def upload_artifacts(args: list[str]) -> None:
         sys.exit("[ERROR] scripts/.env.wandb not found; run 'pls deps' first.")
     upload = "resources/hcrl_isaaclab/scripts/tools/upload_artifacts.py"
     handoff(["bash", "-c", 'set -a; source scripts/.env.wandb; set +a; exec "$0" "$@"', VENV_PY, upload, *args])
-
-
-def run_script(script: str, args: list[str], wt: str = "") -> None:
-    """Run hcrl_isaaclab/scripts/<script>.py here with the ilab venv; ``wt`` names a worktree set."""
-    sys.path.insert(0, str(ROOT / "scripts"))
-    from worktree_env import select
-
-    pythonpath, core, overridden = select(wt)
-    if overridden:
-        print(f"[worktree] {wt}: {', '.join(overridden)} (others from main checkouts)", file=sys.stderr)
-    # The worktree'd roots precede the editable installs of the main checkouts, so only diverging repos change.
-    pythonpath = ":".join(p for p in (pythonpath, os.environ.get("PYTHONPATH", "")) if p)
-    env = {"PYTHONPATH": pythonpath, "OMNI_KIT_ACCEPT_EULA": "YES"}
-    handoff([VENV_PY, f"{core}/scripts/{script}.py", *args], env=env)
