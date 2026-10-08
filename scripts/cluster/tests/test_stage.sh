@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# `develop stage` / `trees` through an ssh stub: named repos at named refs land in a new tree, everything
-# else links to the shared checkout, bad input touches nothing, and trees resolve and are removed safely.
+# `develop stage` / `trees` through an ssh stub: named repos at named refs land in a new tree, a bare `stage` ships the
+# workspace as on disk as `default` (the base of later partial trees), bad input touches nothing, and trees resolve,
+# prune and are removed safely.
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 T="$(mktemp -d)"
@@ -93,7 +94,7 @@ check "earlier trees serve as hardlink sources too" \
 # names are validated before anything is touched
 mkdir -p "$L/resources/hcrl_robots" "$L/resources/IsaacLab"
 for spec in "../../../resources/hcrl_isaaclab=feat" "=feat" "hcrl_isaacla=feat" "hcrl_isaaclab=feat hcrl_isaaclab=main" \
-    "IsaacLab=main" "hcrl_isaaclab=$G/sub"; do
+    "motion_datasets=main" "hcrl_isaaclab=$G/sub"; do
     # shellcheck disable=SC2086
     dev stage bad $spec > "$T/out_b1" 2>&1
     check "rejects spec '$spec'" "[ $? -ne 0 ] && [ \$(ntrees bad) -eq 0 ]"
@@ -124,12 +125,12 @@ dev stage sl "hcrl_isaaclab=$G" > /dev/null 2>&1
 check "a mode change is a new tree" "[ \$(ntrees sl) -eq 3 ]"
 rm -rf "$G/new_mod.py" "$G/pkg_a" "$G/pkg_b" "$G/link_dir" "$G/sub"
 
-# resolution is exact and refuses ambiguity
+# resolution is exact, and a bare name means its newest tree
 dev stage r hcrl_isaaclab=main > /dev/null 2>&1
 dev stage r-x hcrl_isaaclab=main > /dev/null 2>&1
 check "one tree named r resolves" "dev __resolve_tree r 2>/dev/null | grep -q '/trees/r-[0-9a-f]\{10\}$'"
 dev stage r hcrl_isaaclab=feat > /dev/null 2>&1
-check "two trees named r are refused" "! dev __resolve_tree r > /dev/null 2>&1"
+check "of two trees named r the newest resolves" "grep -qx feat \"\$(dev __resolve_tree r 2>/dev/null)/resources/hcrl_isaaclab/code.py\""
 check "the full id still resolves" "dev __resolve_tree \"\$(basename \"\$(ls -d '$R'/trees/r-* | grep -v r-x | head -1)\")\" > /dev/null 2>&1"
 check "a prefix-sharing name is not matched" "dev __resolve_tree r-x 2>/dev/null | grep -q '/trees/r-x-'"
 
@@ -190,9 +191,6 @@ dev trees rm --partials > /dev/null 2>&1
 check "rm --partials removes only partials idle for an hour" \
     "[ ! -e '$R/trees/old.partial.1' ] && [ -e '$R/trees/new.partial.2' ] && [ -e '$R/trees/busy.partial.3' ]"
 
-dev sync --dry-run > "$T/out7" 2>&1
-check "develop sync leaves trees alone" "! grep -q '^\*deleting *trees/' '$T/out7'"
-
 # an asset repo stages at a ref like a code repo, but writable and with files of its own: the run's URDF -> USD
 # conversion rewrites files beside the URDF, which must touch neither another tree nor the shared checkout
 A="$L/resources/ssti_robots"
@@ -216,6 +214,62 @@ check "and no file is shared with another tree" \
 echo "usd" > "$at/resources/ssti_robots/shank.usd" && echo "mass 9" > "$at/resources/ssti_robots/shank.urdf"
 check "so a write in one tree stays there" \
     "grep -qx 'mass 1.82' '$at2/resources/ssti_robots/shank.urdf' && grep -qx 'mass 1.0' '$R/resources/ssti_robots/shank.urdf'"
+
+# a bare `stage` is the whole workspace as on disk -> `default`: every git repo under resources/ but the shared data
+# and the repos this cluster excludes; the data repos' training files are added to the shared copy
+mkr() {  # mkr NAME FILE CONTENT: a one-commit git repo under the local resources/
+    mkdir -p "$L/resources/$1" && (cd "$L/resources/$1" && git init -q -b main . && git config user.email t@t && \
+        git config user.name t && echo "$3" > "$2" && git add -A && git commit -qm init)
+}
+mkr robot_rl r.py rl
+mkr ssti_tasks t.py excluded
+echo ssti_tasks > "$T/scripts/cluster/config/zz/.rsync-exclude"
+mkr motion_datasets README.md data
+mkdir -p "$L/resources/motion_datasets/clips" "$R/resources/motion_datasets"
+echo pt > "$L/resources/motion_datasets/clips/walk.pt" && echo m > "$L/resources/motion_datasets/clips/walk.manifest.json"
+echo raw > "$L/resources/motion_datasets/clips/walk.npz" && echo keep > "$R/resources/motion_datasets/remote_only.pt"
+echo uncommitted > "$G/whole_new.py"
+dev stage > "$T/out_w1" 2>&1
+check "a bare stage exits 0" "[ $? -eq 0 ]"
+dt="$(ls -d "$R"/trees/default-* 2>/dev/null | head -1)"
+check "as the tree default" "[ -n '$dt' ] && [ -f '$dt/.complete' ]"
+check "with uncommitted work" "grep -qx uncommitted '$dt/resources/hcrl_isaaclab/whole_new.py'"
+check "every git repo staged" "[ -f '$dt/resources/robot_rl/r.py' ] && [ ! -L '$dt/resources/ssti_robots' ]"
+check "but an excluded repo" "[ ! -e '$dt/resources/ssti_tasks' ]"
+check "a non-repo dir stays a shared link" "[ -L '$dt/resources/hcrl_robots' ]"
+check "the data repo is a link to the shared copy" "[ \"\$(readlink '$dt/resources/motion_datasets')\" = '$R/resources/motion_datasets' ]"
+check "its training files are added there" "[ -f '$R/resources/motion_datasets/clips/walk.pt' ] && [ -f '$R/resources/motion_datasets/clips/walk.manifest.json' ]"
+check "other files are not" "[ ! -e '$R/resources/motion_datasets/clips/walk.npz' ] && [ ! -e '$R/resources/motion_datasets/README.md' ]"
+check "and nothing there is deleted" "[ -f '$R/resources/motion_datasets/remote_only.pt' ]"
+check "nothing lands on the shared workspace's code" "[ ! -e '$R/resources/robot_rl' ]"
+
+# a partial tree takes its other repos from the newest default, never the shared checkout
+dev stage p1 hcrl_isaaclab=feat > "$T/out_p1" 2>&1
+pt="$(ls -d "$R"/trees/p1-* 2>/dev/null | head -1)"
+check "a partial stage exits 0" "[ -n '$pt' ] && [ -f '$pt/.complete' ]"
+check "its named repo is at the ref" "grep -qx feat '$pt/resources/hcrl_isaaclab/code.py'"
+check "a code repo of the base is hardlinked" "[ \"\$(stat -c %i '$pt/resources/robot_rl/r.py')\" = \"\$(stat -c %i '$dt/resources/robot_rl/r.py')\" ]"
+check "an asset repo of the base is its own writable copy" \
+    "[ \"\$(stat -c %i '$pt/resources/ssti_robots/shank.urdf')\" != \"\$(stat -c %i '$dt/resources/ssti_robots/shank.urdf')\" ] && [ -w '$pt/resources/ssti_robots/shank.urdf' ]"
+check "the data stays a shared link" "[ -L '$pt/resources/motion_datasets' ]"
+check "the manifest names the base" "grep -q \"^robot_rl base \$(basename '$dt')\" '$pt/MANIFEST' && grep -q \"^base \$(basename '$dt')\" '$pt/MANIFEST'"
+
+# a nearly full Lustre metadata target refuses the stage
+printf '#!/usr/bin/env bash\ncase "$1" in getstripe) echo 0 ;; df) echo "fs-MDT0000_UUID 100 99 1 99%% /fs[MDT:0]" ;; esac\n' > "$T/bin/lfs"
+chmod +x "$T/bin/lfs"
+dev stage full hcrl_isaaclab=feat > "$T/out_i1" 2>&1
+check "99% inodes refuses" "[ $? -ne 0 ] && grep -q 'out of inodes' '$T/out_i1' && [ \$(ntrees full) -eq 0 ]"
+dev stage --no-space-check full hcrl_isaaclab=feat > /dev/null 2>&1
+check "--no-space-check stages anyway" "[ \$(ntrees full) -eq 1 ]"
+rm "$T/bin/lfs"
+
+# each stage keeps the newest 5 trees of its name, and any a run still uses
+mkdir -p "$dt/.in-use" && touch "$dt/.in-use/node7.99"
+for i in 1 2 3 4 5 6; do echo "v$i" > "$G/whole_new.py"; dev stage > /dev/null 2>&1; done
+check "older trees are pruned" "[ \$(ntrees default) -eq 6 ]"
+check "the one in use is kept" "[ -d '$dt' ]"
+check "the newest is what default resolves to" "grep -qx v6 \"\$(dev __resolve_tree default 2>/dev/null)/resources/hcrl_isaaclab/whole_new.py\""
+rm -f "$G/whole_new.py"
 
 if [ "$fails" -ne 0 ]; then
     ls -la "$R/trees"

@@ -122,35 +122,49 @@ submit_job() {
         "cd $CLUSTER_ISAACLAB_DIR && bash scripts/cluster/config/${CLUSTER}/${job_script} \"$CLUSTER_ISAACLAB_DIR\" hcrl-isaac ${*}"
 }
 
-cmd_job() {
+cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: the workspace, staged as `default`)
     source_cluster_env
     [ -f "$SCRIPT_DIR/../.env.wandb" ] || {
         echo "[ERROR] scripts/.env.wandb not found: a job without W&B credentials cannot log. Create it from" \
             "scripts/tools/.env.wandb.template." >&2
         exit 1
     }
-    # the API key: owner-only here, which both copies below carry to the cluster
+    # the API key: owner-only here, which the copy below carries to the cluster
     chmod go-rwx "$SCRIPT_DIR/../.env.wandb"
-    # Sync to a timestamped dir so concurrent jobs don't clobber each other's code copy.
-    CLUSTER_ISAACLAB_DIR="${CLUSTER_ISAACLAB_DIR}_$(date +"%Y%m%d_%H%M%S")"
+    local tree_name="" dev="$SCRIPT_DIR/cluster_dev/cluster_dev.sh"
+    if [ "${1:-}" = --tree ]; then
+        [ -n "${2:-}" ] || { echo "[ERROR] --tree needs a tree name or <name>-<fingerprint>" >&2; exit 1; }
+        tree_name="$2"; shift 2
+    fi
     ensure_ssh_master
-    echo "[INFO] Syncing workspace to ${CLUSTER_ISAACLAB_DIR}..."
-    # Keep the source package .git dirs so W&B captures the commit + uncommitted diff.
-    rsync -rvh -e "ssh ${SSH_OPTS[*]}" --rsync-path="mkdir -p $CLUSTER_ISAACLAB_DIR && rsync" \
-        --include="resources/IsaacLab/source/*/.git/***" --exclude="*.git*" \
-        --exclude="ilab/" --exclude="wandb/" --exclude="logs/" --exclude=".vscode/" --exclude="__pycache__" \
-        --exclude="artifacts/" --exclude="**/worktrees/" \
-        --exclude="scripts/cluster/exports/" --exclude="*.sif" --exclude=".backup/" \
-        "$SCRIPT_DIR/../.." "$CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR"
-    # Stage THIS cluster's env over the synced workspace-level copy -- run_singularity.sh on the compute
-    # node sources scripts/cluster/.env.cluster, which otherwise holds whatever cluster was set up last.
-    echo "[INFO] Staging ${CLUSTER} env + W&B creds into the synced workspace..."
-    rsync -vh -e "ssh ${SSH_OPTS[*]}" "$CLUSTER_ENV_FILE" \
-        "$CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR/scripts/cluster/.env.cluster"
-    rsync -vh -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/../.env.wandb" \
-        "$CLUSTER_LOGIN:$CLUSTER_ISAACLAB_DIR/scripts/cluster/.env.wandb"
+    if [ -z "$tree_name" ]; then
+        CLUSTER="$CLUSTER" bash "$dev" stage || { echo "[ERROR] could not stage the workspace" >&2; exit 1; }
+        tree_name=default
+    fi
+    # resolved once: the job runs this tree even if it waits in the queue while newer ones are staged
+    local tree; tree="$(CLUSTER="$CLUSTER" bash "$dev" __resolve_tree "$tree_name")" || exit 1
+    # one dir per submission: the tree's repos, this cluster's job scripts and the credentials run_singularity.sh reads
+    local job_dir="${CLUSTER_ISAACLAB_DIR}/jobs/${CLUSTER}-$(date +"%Y%m%d_%H%M%S")-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+    echo "[INFO] Job dir ${job_dir} on tree ${tree}"
+    # a plain mkdir of the leaf: two submissions never share a dir (ln -s into an existing one would nest the link)
+    ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "mkdir -p '${job_dir%/*}' && mkdir '${job_dir}' && \
+        mkdir -p '${job_dir}/scripts/cluster/config/${CLUSTER}' && ln -s '${tree}/resources' '${job_dir}/resources'" < /dev/null || exit 1
+    local f
+    rsync -t -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/run_singularity.sh" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/" || exit 1
+    for f in "$SCRIPT_DIR/config/${CLUSTER}"/submit_job_*.sh; do
+        [ -f "$f" ] && { rsync -t -e "ssh ${SSH_OPTS[*]}" "$f" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/config/${CLUSTER}/" || exit 1; }
+    done
+    rsync -t -e "ssh ${SSH_OPTS[*]}" "$CLUSTER_ENV_FILE" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/.env.cluster" || exit 1
+    rsync -tp -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/../.env.wandb" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/.env.wandb" || exit 1
+    [ ! -f "$SCRIPT_DIR/../.env.base" ] || {
+        rsync -t -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/../.env.base" "$CLUSTER_LOGIN:${job_dir}/scripts/.env.base" || exit 1; }
     echo "[INFO] Submitting job..."
-    submit_job "$@"
+    local out id
+    out="$(CLUSTER_ISAACLAB_DIR="$job_dir" submit_job "$@")" || { printf '%s\n' "$out"; exit 1; }
+    printf '%s\n' "$out"
+    # the tree stays while the job is queued or running: `trees rm` and pruning check squeue for this marker
+    id="$(grep -oE 'Submitted batch job [0-9]+' <<< "$out" | grep -oE '[0-9]+$' | tail -1)"
+    [ -z "$id" ] || ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "mkdir -p '${tree}/.in-use' && touch '${tree}/.in-use/${id}.nostep'" < /dev/null
 }
 
 cmd="${1:-help}"
@@ -186,7 +200,7 @@ case "$cmd" in
         echo "  build         build the .sif from the shared docker image (no push)"
         echo "  push/repush   rsync the built .sif to the cluster (reuses the SSH master; no 2FA)"
         echo "  add [--update] [name]  create or regenerate your profile (scripts/cluster/config/<name>, gitignored)"
-        echo "  job [args]    rsync the workspace + submit a batch job"
+        echo "  job [--tree N] [args]  stage the workspace (or use tree N) + submit a batch job on it"
         echo "  develop ...   manage a persistent dev node (start/status/attach/exec/sync/kill/stop)"
         ;;
     *) echo "[ERROR] unknown command '$cmd' (try: help)" >&2; exit 1 ;;

@@ -96,8 +96,8 @@ just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --d
 - On a SLURM card (a running job of yours, normally a held dev sentinel) the script runs in the container through a
   `develop exec` step on that job, with the job's own partition, account and GPU request. The stage dir is
   `<cluster checkout>/artifacts/res-eval/<id>`, which the container sees as `/workspace/artifacts/res-eval/<id>`; the
-  `--wt` repos are staged over the cluster's shared checkout as a code tree (`develop stage`), and the rest run from
-  that shared checkout as `develop sync` left it (the MANIFEST gives each one's commit). The card is pinned by its GPU
+  run uses the cluster's newest `default` tree (`develop stage`), or with `--wt` a tree of those repos whose others come
+  from that `default` (each tree's MANIFEST gives every repo's commit). The card is pinned by its GPU
   UUID, and a step that cannot see it fails with status 98 (on Delta a step holding the job's GPUs can starve
   another). The container's `/tmp` is the job's node-local dir, which every step of the sentinel shares, so the run
   gets its own `TMPDIR` there (removed when it ends) and per-card Kit caches beside it (gone with the job). A script

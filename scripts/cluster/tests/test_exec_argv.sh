@@ -5,7 +5,8 @@ set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
-mkdir -p "$T/bin" "$T/scripts/cluster/config/zz" "$T/remote/scripts/cluster/cluster_dev" "$T/.cluster_dev/zz" "$T/tmp"
+mkdir -p "$T/bin" "$T/scripts/cluster/config/zz" "$T/remote/trees/default-0123456789/scripts/cluster/cluster_dev" "$T/.cluster_dev/zz" "$T/tmp"
+touch "$T/remote/trees/default-0123456789/.complete"  # exec runs the newest `default` tree
 cp -r "$REPO/scripts/cluster/cluster_dev" "$REPO/scripts/cluster/tools" "$T/scripts/cluster/"
 cat > "$T/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
@@ -25,8 +26,8 @@ cat > "$T/bin/srun" <<'EOF'
 while [ $# -gt 0 ] && [ "$1" != bash ]; do shift; done
 exec "$@"
 EOF
-# the remote node_exec.sh records the argv it was handed
-printf '#!/usr/bin/env bash\nprintf "ARG<%%s>\\n" "$@"\n' > "$T/remote/scripts/cluster/cluster_dev/node_exec.sh"
+# the tree's node_exec.sh records the argv it was handed
+printf '#!/usr/bin/env bash\nprintf "ARG<%%s>\\n" "$@"\n' > "$T/remote/trees/default-0123456789/scripts/cluster/cluster_dev/node_exec.sh"
 chmod +x "$T/bin/"*
 printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nCLUSTER_MIN_FREE_GB=0\n' "$T/remote" > "$T/scripts/cluster/config/zz/.env.cluster"
 printf '#!/usr/bin/env bash\n#SBATCH -p test\n' > "$T/scripts/cluster/config/zz/submit_job_slurm.sh"

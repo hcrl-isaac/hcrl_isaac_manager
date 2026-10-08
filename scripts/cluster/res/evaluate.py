@@ -1,8 +1,8 @@
 """`pls run --on <card>`: run a one-off script on a leased GPU, with its checkpoints and code.
 
 Local and ssh pools run the workspace's ilab python on the box. A SLURM card is one of a held dev sentinel's: the
-script runs in the container through a `develop exec` step on that job, against the cluster's shared checkout with
-the ``--wt`` repos staged over it as a code tree.
+script runs in the container through a `develop exec` step on that job, against the cluster's newest `default` tree,
+or a tree of the ``--wt`` repos over it.
 """
 
 from __future__ import annotations
@@ -626,7 +626,7 @@ class Stage:
         if self.t.kind == "local":
             return list(code.values()), [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
         if self.t.kind == "slurm":
-            # only worktree-set repos are staged; the rest run from the cluster's shared checkout (`develop sync`)
+            # only worktree-set repos are staged; the tree takes the rest from the cluster's newest `default` tree
             main = os.path.join(local_workspace(), "resources")
             staged = {
                 repo: src
@@ -634,20 +634,10 @@ class Stage:
                 if os.path.realpath(src) != os.path.realpath(os.path.join(main, repo))
             }
             self.tree = stage_tree(self.t, staged) if staged else ""
-            shared = f"{self.t.workspace}/resources"
-            q = shlex.quote
-            heads = self._ssh(
-                " ".join(
-                    f"echo {q(r)} $(git -C {q(f'{shared}/{r}')} rev-parse --short HEAD 2>/dev/null);" for r in code
-                ),
-                capture_output=True,
-                text=True,
-            ).stdout
-            commit = dict(line.split()[:2] for line in heads.splitlines() if len(line.split()) >= 2)
             lines = [
                 f"{repo} {src} {_describe(src)} -> tree {self.tree}"
                 if repo in staged
-                else f"{repo} {shared}/{repo} {commit.get(repo, '(no git metadata: as develop sync left it)')} (shared checkout)"
+                else f"{repo} (not shipped: the cluster's newest default tree, whose MANIFEST gives its commit)"
                 for repo, src in code.items()
             ]
             return [f"/workspace/ext/{repo}" for repo in code], lines

@@ -530,14 +530,16 @@ class SlurmEvalTest(Isolated):
         ev.stage_tree.assert_called_once()
         self.assertEqual(ev.stage_tree.call_args.args[1], {"robot_rl": str(self.src)}, "only the --wt repo is staged")
 
-    def test_without_worktrees_the_run_uses_the_shared_checkout(self) -> None:
+    def test_without_worktrees_the_run_uses_the_default_tree(self) -> None:
         self.code = {"hcrl_isaaclab": str(self.main_repo)}
         rc, out = self._eval("--detach")
         self.assertEqual(rc, 0, out)
         self._status(self._stage())
         ev.stage_tree.assert_not_called()
-        self.assertNotIn("--tree", self.calls.read_text().splitlines())
-        self.assertIn("(shared checkout)", (self._stage() / "MANIFEST").read_text())
+        self.assertNotIn(
+            "--tree", self.calls.read_text().splitlines(), "develop exec's own default: the newest default"
+        )
+        self.assertIn("newest default tree", (self._stage() / "MANIFEST").read_text())
 
     def test_foreground_run_streams_releases_and_cleans_up(self) -> None:
         rc, out = self._eval("--env", "N=7")
