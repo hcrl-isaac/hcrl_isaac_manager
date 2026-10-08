@@ -119,7 +119,7 @@ shift
 
 # Every job-submitting subcommand belongs in this list: it re-renders the job configs and syncs resources.
 case "$command" in
-    job|job_distributed|bench)
+    job|job_distributed|run|bench)
         prepare_submit; sync_resources
         # every dir the job leaves to W&B artifacts must have one, or the job would only fail on the cluster
         venv_py="$( cd "$SCRIPT_DIR/../.." && pwd )/ilab/bin/python"
