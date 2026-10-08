@@ -25,6 +25,15 @@ WAIT_POLL_S = 60.0  # how often --wait probes again for a card to free
 class Busy(SystemExit):
     """A claim refused only because the cards it wants are taken right now, which --wait retries."""
 
+    reports: list[Report] = []  # the probe that refused it
+
+
+def _report_pools(label: str) -> set[str]:
+    """The pool names behind a report label: ``pool/host``, or ``site (pool, pool)`` for a SLURM login."""
+    if "(" in label:
+        return {name.strip() for name in label.split("(", 1)[1].split(")", 1)[0].split(",")}
+    return {label.split("/", 1)[0]}
+
 
 def _guarded(fn: Callable[..., list[Report]], label: str, kind: str, *args: Any) -> list[Report]:
     """Run one probe; an unexpected exception becomes that probe's UNKNOWN report instead of ending the run."""
@@ -286,6 +295,13 @@ def claim(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple[ls.Le
         except Busy as exc:
             if wait is None:
                 raise
+            if args.cards and not announced:
+                # named cards: later probes need only the pools they were found in, not every login and box
+                hosts = {spec.split(":")[0] for spec in args.cards}
+                found = set().union(
+                    *(_report_pools(r.pool) for r in exc.reports if any(c.host in hosts for c in r.cards))
+                )
+                pools = [p for p in pools if p.name in found] or pools
             if deadline is not None and time.monotonic() + WAIT_POLL_S > deadline:
                 raise SystemExit(f"{exc.code}; gave up waiting after {wait / 60:g} min") from None
             if not announced:
@@ -314,6 +330,8 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
     except ls.LeaseStoreError as exc:
         sys.exit(f"[res] nothing claimed: {exc}")
     if refused is not None:
+        if isinstance(refused, Busy):
+            refused.reports = reports
         raise refused
     return [(lease, c, r) for lease, (c, r) in zip(new, chosen, strict=True)], windows
 
