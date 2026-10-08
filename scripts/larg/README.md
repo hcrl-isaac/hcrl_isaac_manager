@@ -65,6 +65,23 @@ Example — a 2-GPU run on physical GPUs 0,1 of `pepi`:
 LARG_NPROC=2 CUDA_VISIBLE_DEVICES=0,1 scripts/larg/train.sh pepi <task> my-run my-group 8192
 ```
 
+### Feature branches: staged code trees
+
+A run on branches other than what the box's workspace has synced goes through a code tree, as on a cluster
+(`develop stage`): named repos at named refs (or local worktrees) land read-only in `<workspace>/trees/<name>-<fingerprint>/`
+on that box, every other repo links to the workspace, and the workspace itself is never touched.
+
+```bash
+scripts/larg/trees.sh stage hazard kick hhlm_tasks=feat/t1-kick-masked-ball hcrl_isaaclab=feat/train-agent-arg
+CUDA_VISIBLE_DEVICES=0 LARG_HOLDER=<you> scripts/larg/train.sh --tree kick hazard hhlm/T1-Kick-v0 kick-s1
+scripts/larg/trees.sh list hazard
+scripts/larg/trees.sh rm hazard kick-<fingerprint>    # refused while a run from it is alive
+```
+
+`--tree <name>` runs from the newest complete tree of that name: its staged repos lead `PYTHONPATH` over the
+workspace's `ilab` venv, and the tree is marked in use for as long as the run lasts. Trees are per box, so stage on the
+box you launch on.
+
 ## Rendering on LARG: the Vulkan clamp layer
 
 Since the 2026-06-12 upgrade every box runs driver **595.71.05**, which reports `maxMemoryAllocationSize` as

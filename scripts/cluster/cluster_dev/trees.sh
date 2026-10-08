@@ -154,7 +154,7 @@ cmd_stage() {  # stage [--no-space-check] NAME REPO=REF|REPO=PATH ... : upload t
         log "Staged ${tree}"
     fi
     printf '%s' "$manifest" | sed 's/^/  /'
-    echo "Run with: just cluster ${CLUSTER} develop exec --tree $(basename "$tree") -- <cmd>"
+    echo "Run with: ${TREE_RUN_HINT:-just cluster ${CLUSTER:-} develop exec --tree} $(basename "$tree") -- <cmd>"
 }
 
 _stage_cleanup() {  # trap: drop this run's temporary checkouts and any partial upload
@@ -221,6 +221,9 @@ _trees_rm() {
                 else
                     grep -qx "$marker" <<< "$sq" && live+="${marker} "
                 fi
+            elif [[ "$marker" =~ ^larg\.([0-9]+)$ ]]; then
+                # a LARG run (scripts/larg/train.sh --tree): live while its process is
+                on_login "kill -0 ${BASH_REMATCH[1]} 2>/dev/null" && live+="${marker} "
             else
                 live+="${marker} "
             fi

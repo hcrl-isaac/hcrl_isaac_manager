@@ -20,7 +20,8 @@ EOF
 # the box's python records what it was asked to run and the environment it got
 cat > "$T/ws/ilab/bin/python" <<EOF
 #!/usr/bin/env bash
-{ printf 'ARG<%s>\n' "\$@"; echo "CVD=\${CUDA_VISIBLE_DEVICES:-unset}"; echo "TMPDIR=\$TMPDIR"; echo "OMNI=\$OMNI_CACHE_DIR"; } > "$T/ran"
+{ printf 'ARG<%s>\n' "\$@"; echo "CVD=\${CUDA_VISIBLE_DEVICES:-unset}"; echo "TMPDIR=\$TMPDIR"; echo "OMNI=\$OMNI_CACHE_DIR"
+  echo "PWD=\$PWD"; echo "PP=\${PYTHONPATH:-}"; echo "INUSE=\$(ls "\$PWD/.in-use" 2>/dev/null | tr '\n' ' ')"; } > "$T/ran"
 EOF
 chmod +x "$T/bin/ssh" "$T/ws/ilab/bin/python"
 launch() { env PATH="$T/bin:$PATH" LARG_REMOTE_DIR="$T/ws" LARG_SCRATCH="$T/scratch" "$@"; }
@@ -69,6 +70,26 @@ rm -f "$T/ran"
 launch CLAIM_RC=1 LARG_HOLDER=me CUDA_VISIBLE_DEVICES=1 bash "$REPO/scripts/larg/train.sh" pogba hhlm/T1-CubeLift-v0 r > "$T/out5" 2>&1
 sleep 1
 check "a refused claim launches nothing" "[ ! -e '$T/ran' ]"
+
+# --tree: a staged tree's own repos first on PYTHONPATH, run from the tree, marked in use while it lasts
+TR="$T/ws/trees/kick-0123456789"
+mkdir -p "$TR/resources/hcrl_isaaclab/scripts" "$TR/resources/hhlm_tasks" "$T/ws/resources/robot_rl"
+touch "$TR/.complete" "$TR/resources/hcrl_isaaclab/setup.py" "$TR/resources/hhlm_tasks/pyproject.toml" "$T/ws/resources/robot_rl/setup.py"
+ln -s "$T/ws/resources/robot_rl" "$TR/resources/robot_rl"
+mkdir -p "$T/ws/trees/kick-9999999999.partial.1"
+rm -f "$T/ran"
+launch CUDA_VISIBLE_DEVICES=0 bash "$REPO/scripts/larg/train.sh" --tree kick hazard hhlm/T1-Kick-v0 r > "$T/out6" 2>&1
+wait_ran
+check "a tree run starts in the newest complete tree" "grep -qx 'PWD=$TR' '$T/ran'"
+check "the tree's staged repos lead PYTHONPATH, linked ones are left to the venv" \
+    "grep -q '^PP=.*$TR/resources/hcrl_isaaclab' '$T/ran' && grep -q '^PP=.*$TR/resources/hhlm_tasks' '$T/ran' && ! grep -q '^PP=.*robot_rl' '$T/ran'"
+check "the tree is marked in use while the run lasts" "grep -q '^INUSE=larg\.[0-9]' '$T/ran'"
+for _ in $(seq 30); do [ -z "$(ls "$TR/.in-use" 2>/dev/null)" ] && break; sleep 0.1; done
+check "and unmarked when it ends" "[ -z \"\$(ls '$TR/.in-use' 2>/dev/null)\" ]"
+rm -f "$T/ran"
+launch bash "$REPO/scripts/larg/train.sh" --tree nosuch hazard hhlm/T1-Kick-v0 r > "$T/out7" 2>&1
+sleep 1
+check "an unknown tree launches nothing and says so" "[ ! -e '$T/ran' ] && grep -q 'no staged tree nosuch' '$T/out7'"
 
 if [ "$fails" -ne 0 ]; then
     for f in "$T"/out* "$T/ran"; do echo "--- $f"; cat "$f" 2>/dev/null | tail -20; done
