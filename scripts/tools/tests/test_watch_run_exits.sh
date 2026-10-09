@@ -65,6 +65,22 @@ printf '%s\n%s\n' "$pipapi" "$real" > "$T/real_tb.log"
 out="$(watch "$T/real_tb.log")"; rc=$?
 check "a real traceback beside the pipapi one is FAILED" '[ "$rc" = 1 ] && case $out in *FAILED*) true ;; *) false ;; esac'
 check "and the report shows the real one, not the boot noise" 'case $out in *illegal\ memory*) true ;; *) false ;; esac && case $out in *pip3-envs*) false ;; *) true ;; esac'
+# a benign segment chained into a real failure is still a failure: each segment is judged by its exception line
+chained='Traceback (most recent call last):
+  File "/isaac-sim/extscache/omni.kit.pipapi-0.0.0/omni/kit/pipapi/pipapi.py", line 412, in _ensure_env
+FileExistsError: [Errno 17] File exists: '"'"'/isaac-sim/kit/data/Kit/Isaac-Sim/5.1/pip3-envs/default'"'"'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/ext/hcrl_isaaclab/scripts/train.py", line 88, in main
+RuntimeError: CUDA error: device-side assert triggered'
+printf 'Learning iteration 40/4000\n%s\n' "$chained" > "$T/chained.log"
+out="$(watch "$T/chained.log")"; rc=$?
+check "a pipapi segment chained into a real error is FAILED" '[ "$rc" = 1 ] && case $out in *device-side*) true ;; *) false ;; esac'
+printf 'Learning iteration 40/4000\nTraceback (most recent call last):\n  File "x.py", line 3, in f  # no current CUDA context\nValueError: bad shape\n' > "$T/benign_frame.log"
+out="$(watch "$T/benign_frame.log")"; rc=$?
+check "a benign phrase in a frame does not hide a real exception" '[ "$rc" = 1 ] && case $out in *ValueError*) true ;; *) false ;; esac'
 printf 'Learning iteration 40/4000\nTraceback (most recent call last):\n  File "train.py", line 3, in <module>\nKeyError: '"'"'x'"'"'\n' > "$T/plain_tb.log"
 out="$(watch "$T/plain_tb.log")"; rc=$?
 check "an unprefixed traceback after progress is FAILED" '[ "$rc" = 1 ] && case $out in *KeyError*) true ;; *) false ;; esac'

@@ -19,25 +19,34 @@ ERRPAT='Traceback|error running python|Error executing|CUDA out of memory|Could 
 BENIGNPAT='omni/kit/pipapi|pip3-envs|no current CUDA context|ignore_import_check|_process_ext_pipapi_config|http_parser'
 BENIGNPAT+='|Incompatible versions of client and server code|protocol_version [0-9]+ not supported|destroy_forward: no init'
 
-# A Python traceback is judged whole (header, frames, exception, chained "During handling ..." tracebacks): noise when
-# any of its lines is benign (Kit's pipapi pip-env race at boot, on every rank), else a failure. Lines outside a
-# traceback count when they match ERRPAT and not BENIGNPAT. mode=count prints the count, mode=lines the offending lines.
-# Rank prefixes such as "[default3]:" are ignored. (No single quotes: the program is passed in quotes.)
+# A Python traceback is judged per segment (each header with its frames and exception line; chained "During handling
+# ..." tracebacks are further segments): noise only when every segment's exception line is benign (Kit's pipapi
+# pip-env race at boot, on every rank), so a benign segment chained into a real error still fails. A segment that
+# ends without an exception line counts as a failure. Lines outside a traceback count when they match ERRPAT and not
+# BENIGNPAT. mode=count prints the count, mode=lines the offending lines. Rank prefixes such as "[default3]:" are
+# ignored. (No single quotes: the program is passed in quotes.)
 ERRAWK='
 function strip(s) { sub(/^\[[^]]*\]:[ ]?/, "", s); return s }
-function close_tb() { if (intb && !ok_tb) { bad++; if (mode == "lines") print tb } intb = 0; after = 0 }
+function close_tb() {
+    if (intb && !after) all_ok = 0
+    if (intb && !all_ok) { bad++; if (mode == "lines") print tb }
+    intb = 0; after = 0
+}
 {
     s = strip($0)
     if (s ~ /Traceback \(most recent call last\)/) {
-        if (!intb) { intb = 1; ok_tb = 0; tb = $0 }
+        if (!intb) { intb = 1; all_ok = 1; tb = $0 }
+        else if (!after) all_ok = 0
         after = 0; next
     }
     if (intb) {
-        if (s ~ benign) ok_tb = 1
         if (s ~ /^[[:space:]]/ || s == "" || s ~ /During handling of the above exception|direct cause of the following exception/) {
             if (s ~ /^[[:space:]]/ && after) close_tb(); else next
-        } else if (!after) { after = 1; tb = tb " / " $0; next }
-        else close_tb()
+        } else if (!after) {
+            after = 1; tb = tb " / " $0
+            if (s !~ benign) all_ok = 0
+            next
+        } else close_tb()
     }
     if (!intb && s ~ err && s !~ benign) { bad++; if (mode == "lines") print $0 }
 }
