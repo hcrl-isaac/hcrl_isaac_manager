@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Single cluster entrypoint (used directly by `just cluster`). Builds/pushes the shared Isaac .sif,
-# submits batch jobs, and drives the persistent dev node. CLUSTER=<name> selects config/<name>/.
+# SLURM backend of `pls cluster <name>` and `pls run --on <name> --batch`: builds/pushes the shared Isaac .sif,
+# lists, tails and stops this profile's jobs, submits batch jobs and drives the dev node. CLUSTER=<name> selects
+# config/<name>/.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
@@ -9,7 +10,14 @@ CLUSTER="${CLUSTER:-default}"
 IMAGE_NAME="${HCRL_IMAGE_NAME:-hcrl-isaac}"
 SIF_DIR="${HCRL_SIF_DIR:-${SCRIPT_DIR}/exports}"
 SIF_PATH="${SIF_DIR}/${IMAGE_NAME}.sif"
-CLUSTER_ENV_FILE="${SCRIPT_DIR}/config/${CLUSTER}/.env.cluster"
+# profiles are gitignored and per user, so a manager worktree has none: it uses the main checkout's (as res does)
+CONFIG_DIR="${SCRIPT_DIR}/config"
+if [ ! -f "${CONFIG_DIR}/${CLUSTER}/.env.cluster" ]; then
+    _common="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    _main="$(dirname "${_common:-/nonexistent}")/scripts/cluster/config"
+    if [ -n "$_common" ] && [ -f "${_main}/${CLUSTER}/.env.cluster" ]; then CONFIG_DIR="$_main"; fi
+fi
+CLUSTER_ENV_FILE="${CONFIG_DIR}/${CLUSTER}/.env.cluster"
 
 # Reuse the persistent SSH control master (opened by `cluster_dev.sh start`) so push/job need no 2FA.
 SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${HOME}/.ssh/cm/%C" -o ControlPersist=48h -o ConnectTimeout=60)
@@ -18,8 +26,8 @@ source "${SCRIPT_DIR}/tools/restore_profiles.sh"
 
 source_cluster_env() {
     if [ ! -f "$CLUSTER_ENV_FILE" ]; then
-        echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'just cluster add'). Available:" \
-            "$(ls "$SCRIPT_DIR/config" 2>/dev/null | paste -sd, -)." >&2
+        echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'pls cluster add'). Available:" \
+            "$(ls "$CONFIG_DIR" 2>/dev/null | paste -sd, -)." >&2
         exit 1
     fi
     # shellcheck disable=SC1090
@@ -44,7 +52,7 @@ build_sif() {
 # rsync the built .sif to the cluster (single compressed SquashFS file -- no tar/extract; resumable).
 push_sif() {
     source_cluster_env
-    [ -f "$SIF_PATH" ] || { echo "[ERROR] $SIF_PATH not built -- run 'build' first." >&2; exit 1; }
+    [ -f "$SIF_PATH" ] || { echo "[ERROR] $SIF_PATH not built -- run 'setup --build-only' first." >&2; exit 1; }
     echo "[cluster] pushing ${SIF_PATH} -> ${CLUSTER_LOGIN}:${CLUSTER_SIF_PATH}/"
     ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "mkdir -p '${CLUSTER_SIF_PATH}'"
     rsync -rlptvh --info=progress2 -e "ssh ${SSH_OPTS[*]}" "$SIF_PATH" "${CLUSTER_LOGIN}:${CLUSTER_SIF_PATH}/"
@@ -54,7 +62,7 @@ push_sif() {
 # `apptainer build --fakeroot` in a batch job with the profile's resources, replacing the .sif only once built.
 build_remote_sif() {
     source_cluster_env
-    local build="${CLUSTER_SIF_PATH}/build-${IMAGE_NAME}" submit="${SCRIPT_DIR}/config/${CLUSTER}/submit_job_slurm.sh"
+    local build="${CLUSTER_SIF_PATH}/build-${IMAGE_NAME}" submit="${CONFIG_DIR}/${CLUSTER}/submit_job_slurm.sh"
     local dockerfile="${SCRIPT_DIR}/../docker/Dockerfile" base flags="" flag value free min="${CLUSTER_BUILD_MIN_FREE_GB:-40}"
     # the same base image as the docker build, from its ARGs
     base="$(sed -nE 's/^ARG ISAACSIM_BASE_IMAGE=(.+)/\1/p' "$dockerfile"):$(sed -nE 's/^ARG ISAACSIM_VERSION=(.+)/\1/p' "$dockerfile")"
@@ -151,7 +159,7 @@ cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: 
         mkdir -p '${job_dir}/scripts/cluster/config/${CLUSTER}' && ln -s '${tree}/resources' '${job_dir}/resources'" < /dev/null || exit 1
     local f
     rsync -t -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/run_singularity.sh" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/" || exit 1
-    for f in "$SCRIPT_DIR/config/${CLUSTER}"/submit_job_*.sh; do
+    for f in "$CONFIG_DIR/${CLUSTER}"/submit_job_*.sh; do
         [ -f "$f" ] && { rsync -t -e "ssh ${SSH_OPTS[*]}" "$f" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/config/${CLUSTER}/" || exit 1; }
     done
     rsync -t -e "ssh ${SSH_OPTS[*]}" "$CLUSTER_ENV_FILE" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/.env.cluster" || exit 1
@@ -167,6 +175,48 @@ cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: 
     [ -z "$id" ] || ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "mkdir -p '${tree}/.in-use' && touch '${tree}/.in-use/${id}.nostep'" < /dev/null
 }
 
+# this profile's own sbatch flags (e.g. its partition), from submit_job_slurm.sh
+profile_flag() {
+    python3 "${SCRIPT_DIR}/tools/merge_profile.py" get "${CONFIG_DIR}/${CLUSTER}/submit_job_slurm.sh" "$1" 2>/dev/null
+}
+
+check_job_id() {
+    [[ "${1:-}" =~ ^[0-9]+(_[0-9]+)?(\.[0-9a-z]+)?$ ]] || { echo "[ERROR] expected a job id, not '${1:-}' (see: list)" >&2; exit 1; }
+}
+
+cmd_list() {  # list [squeue args]: this profile's jobs (ours, on its partition)
+    source_cluster_env; ensure_ssh_master >&2
+    local part; part="$(profile_flag -p)"
+    ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
+        "squeue --me ${part:+-p ${part}} -o '%.12i %.28j %.9T %.11M %.11l %.5D %R' $*" < /dev/null
+}
+
+cmd_logs() {  # logs <job> [tail args]: the job's output file; a finished job's from its work dir and the -o pattern
+    source_cluster_env; check_job_id "${1:-}"; ensure_ssh_master >&2
+    local job="$1"; shift
+    local pattern; pattern="$(profile_flag -o)"; pattern="${pattern:-slurm-%j.out}"
+    local tail_args="${*:--n 100}"
+    # shellcheck disable=SC2016
+    ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "job=${job}; pattern='${pattern}'; tail_args='${tail_args}'"'
+        f="$(scontrol show job "$job" 2>/dev/null | sed -n "s/^ *StdOut=//p")"
+        if [ -z "$f" ]; then
+            dir="$(sacct -X -n -P -j "$job" -o WorkDir 2>/dev/null | head -1)"
+            f="${pattern//%j/${job%%_*}}"; f="${f//%x/*}"; case "$f" in /*) ;; *) f="$dir/$f" ;; esac
+            f="$(ls -1 $f 2>/dev/null | head -1)"
+        fi
+        [ -n "$f" ] && [ -f "$f" ] || { echo "[ERROR] no output file for job $job" >&2; exit 1; }
+        echo "[cluster] $f" >&2
+        exec tail $tail_args "$f"' < /dev/null
+}
+
+cmd_stop() {  # stop <job>...: scancel these jobs
+    source_cluster_env
+    [ $# -gt 0 ] || { echo "[ERROR] stop needs job ids (see: list)" >&2; exit 1; }
+    local j; for j in "$@"; do check_job_id "$j"; done
+    ensure_ssh_master >&2
+    ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "scancel $* && echo '[cluster] cancelled $*'" < /dev/null
+}
+
 cmd="${1:-help}"
 [ $# -gt 0 ] && shift || true
 
@@ -177,31 +227,39 @@ case "${ARCH:-amd64}" in
     amd64 | arm64) ;;
     *) echo "[ERROR] ${CLUSTER}: CLUSTER_ARCH must be amd64 or arm64, not '${ARCH}'" >&2; exit 1 ;;
 esac
-case "${cmd}:${ARCH:-amd64}" in
-    *:amd64) ;;
-    setup:arm64) build_remote_sif; exit ;;
-    build:arm64 | push:arm64 | repush:arm64)
-        echo "[ERROR] ${CLUSTER} is arm64: its .sif is built on the cluster by 'setup', not here" >&2; exit 1 ;;
+case "${cmd}:${ARCH:-amd64}:${1:-}" in
+    *:amd64:*) ;;
+    setup:arm64:) build_remote_sif; exit ;;
+    setup:arm64:*)
+        echo "[ERROR] ${CLUSTER} is arm64: its .sif is built on the cluster by 'setup', with no flags" >&2; exit 1 ;;
 esac
 
 case "$cmd" in
     add)         "${SCRIPT_DIR}/add_cluster.sh" "$@" ;;
-    build)       build_sif ;;
-    push | repush)
-        [ -f "$SIF_PATH" ] || build_sif
-        push_sif
+    setup)
+        case "${1:-}" in
+            "")           build_sif; push_sif ;;
+            --build-only) build_sif ;;
+            --push-only)  [ -f "$SIF_PATH" ] || build_sif; push_sif ;;
+            *) echo "[ERROR] setup takes --build-only or --push-only, not '$1'" >&2; exit 1 ;;
+        esac
         ;;
-    setup)       build_sif; push_sif ;;
-    job)         cmd_job "$@" ;;
+    list)        cmd_list "$@" ;;
+    logs)        cmd_logs "$@" ;;
+    stop)        cmd_stop "$@" ;;
+    job)         cmd_job "$@" ;;   # `pls run --on <name> --batch`
     develop)     exec env CLUSTER="$CLUSTER" "${SCRIPT_DIR}/cluster_dev/cluster_dev.sh" "$@" ;;
     -h | --help | help)
-        echo "usage: CLUSTER=<name> just cluster [<name>] <command> [args]"
-        echo "  setup         build the shared .sif and rsync it to the cluster (CLUSTER_ARCH=arm64: build it there)"
-        echo "  build         build the .sif from the shared docker image (no push)"
-        echo "  push/repush   rsync the built .sif to the cluster (reuses the SSH master; no 2FA)"
-        echo "  add [--update] [name]  create or regenerate your profile (scripts/cluster/config/<name>, gitignored)"
-        echo "  job [--tree N] [args]  stage the workspace (or use tree N) + submit a batch job on it"
-        echo "  develop ...   manage a persistent dev node (start/status/attach/exec/sync/kill/stop)"
+        echo "usage: pls cluster <name> <command> [args]"
+        echo "  setup [--build-only|--push-only]  build the shared .sif and rsync it to the cluster (CLUSTER_ARCH=arm64:"
+        echo "                         build it there); --push-only reuses a built .sif"
+        echo "  list [squeue args]     this profile's queued and running jobs"
+        echo "  logs <job> [tail args] the job's output (default: its last 100 lines; -f follows)"
+        echo "  stop <job>...          cancel jobs"
+        echo "  status                 this cluster's cards and leases"
+        echo "  add [--update]         create or regenerate the profile (scripts/cluster/config/<name>, gitignored)"
+        echo "  develop ...            manage a persistent dev node (start/status/attach/exec/stage/trees/kill/stop)"
+        echo "batch jobs: pls run --on <name> --batch [--tree N] -- train [args]"
         ;;
     *) echo "[ERROR] unknown command '$cmd' (try: help)" >&2; exit 1 ;;
 esac

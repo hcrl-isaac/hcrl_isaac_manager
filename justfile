@@ -127,37 +127,15 @@ docker *args:
 sync host *args:
     python3 scripts/sync_machine.py {{host}} {{args}}
 
-# Cluster interface (scripts/cluster/): `add`/`setup`/`job`/`develop`/...; bare picks; leading name -> config/<name>.
+# Clusters (SLURM profiles and ray): `pls cluster <name> <verb>`; batch jobs: `pls run --on <name> --batch`.
 [positional-arguments]
 cluster *args:
-    @name=""; \
-    if [ -n "${1:-}" ] && [ -d "scripts/cluster/config/${1}" ]; then name="$1"; shift; fi; \
-    if [ -z "${1:-}" ]; then \
-        set -- "$( {{venv_py}} scripts/tools/ask.py select 'Cluster subcommand:' setup job develop repush build add )"; \
-    fi; \
-    if [ -z "$name" ] && [ -z "${CLUSTER:-}" ]; then \
-        case "${1:-}" in setup|job|develop|repush) \
-            cfgs=$(ls -d scripts/cluster/config/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null); \
-            if [ "$(printf '%s\n' $cfgs | grep -c .)" -gt 1 ]; then \
-                name="$( {{venv_py}} scripts/tools/ask.py select 'Target cluster:' $cfgs )"; \
-            fi ;; \
-        esac; \
-    fi; \
-    if [ -n "$name" ]; then CLUSTER="$name" scripts/cluster/cluster_interface.sh "$@"; \
-    else scripts/cluster/cluster_interface.sh "$@"; fi
+    @{{venv_py}} -m hcrl_cli cluster "$@"
 
 # Compute resources (scripts/cluster/res/): `status` (default) probes every GPU on every pool, `pools` lists them.
 [positional-arguments]
 res *args:
     @python3 scripts/cluster/res/res.py "$@"
-
-# Ray interface (scripts/ray/): `setup`, `job`, `run` (a one-off script), `bench`, `push`, `list`, `logs`, `stop`; bare shows a picker.
-[positional-arguments]
-ray *args:
-    @if [ -z "${1:-}" ]; then \
-        set -- "$( {{venv_py}} scripts/tools/ask.py select 'Ray subcommand:' setup job run bench push list logs stop )"; \
-    fi; \
-    scripts/ray/ray_interface.sh "$@"
 
 # Upload managed large-file resources to W&B as artifacts; args: --list, or <path> [--rel-path/--name/--tier].
 upload-artifacts *args:

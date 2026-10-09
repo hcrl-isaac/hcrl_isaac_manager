@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# `cluster job` runs on a staged tree: it stages the workspace as `default` (or takes --tree), submits from a per-job
-# dir holding the tree's repos, this cluster's job scripts and the credentials, and marks the tree in use by the job.
+# A batch job (`pls run --batch`, cluster_interface.sh job) runs on a staged tree: it stages the workspace as `default`
+# (or takes --tree), submits from a per-job dir holding the tree's repos, this cluster's job scripts and the
+# credentials, and marks the tree in use by the job.
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 T="$(mktemp -d)"

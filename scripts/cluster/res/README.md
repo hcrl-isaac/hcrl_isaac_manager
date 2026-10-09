@@ -92,7 +92,7 @@ just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --d
   several jobs), `--any` or `--lease <id>`. A busy card is refused; `just res claim --adopt` takes over the run on it.
   A lease `eval` takes is released when the script ends, success or failure; a `--lease` you pass stays yours.
   `--any` stays on the local and ssh pools unless `--pool` names a cluster. `ray` pools are refused (use
-  `just ray job`).
+  `pls run --on ray -- train`).
 - On a SLURM card (a running job of yours, normally a held dev sentinel) the script runs in the container through a
   `develop exec` step on that job, with the job's own partition, account and GPU request. The stage dir is
   `<cluster checkout>/artifacts/res-eval/<id>`, which the container sees as `/workspace/artifacts/res-eval/<id>`; the

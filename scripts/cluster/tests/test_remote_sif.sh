@@ -72,9 +72,9 @@ rm -f "$T/sbatch_args"
 CLUSTER_BUILD_MIN_FREE_GB=99999999 ci setup > "$T/out4" 2>&1; rc=$?
 check "too little free space refuses before submitting" "[ $rc != 0 ] && grep -q 'GB free' '$T/out4' && [ ! -e '$T/sbatch_args' ]"
 
-for cmd in build push; do
-    ci "$cmd" > "$T/out5" 2>&1; rc=$?
-    check "an arm64 profile refuses $cmd" "[ $rc != 0 ] && grep -q 'built on the cluster' '$T/out5'"
+for flag in --build-only --push-only; do
+    ci setup "$flag" > "$T/out5" 2>&1; rc=$?
+    check "an arm64 profile refuses setup $flag" "[ $rc != 0 ] && grep -q 'built on the cluster' '$T/out5'"
 done
 
 sed -i 's/^CLUSTER_ARCH=.*/CLUSTER_ARCH=aarch64/' "$T/scripts/cluster/config/zz/.env.cluster"

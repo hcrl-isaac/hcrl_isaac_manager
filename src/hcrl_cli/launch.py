@@ -1,4 +1,5 @@
-"""`pls run`: run a script or a command here, on a leased card (local, ssh, a cluster's held job) or on Ray."""
+"""`pls run`: run a script or a command here, on a leased card (local, ssh, a cluster's held job), as a cluster
+batch job, or on Ray."""
 
 from __future__ import annotations
 
@@ -12,19 +13,26 @@ from hcrl_cli.proc import ROOT, VENV, VENV_PY, handoff
 
 CARD_CMD = ("python3", "scripts/cluster/res/evaluate.py")  # leases the card, ships code + checkpoints, runs
 RAY_BACKEND = "scripts/ray/ray_interface.sh"
+SLURM_BACKEND = "scripts/cluster/cluster_interface.sh"
+DEV_BACKEND = "scripts/cluster/cluster_dev/cluster_dev.sh"
 CORE = "hcrl_isaaclab"
 HELP = ("-h", "--help")
 
 USAGE = """pls run <script> [args]
        pls run [--on TARGET] [--wt NAME] [card options] -- <script> [args]
-       pls run [--on TARGET] [--wt NAME] [card options] --cmd -- <command> [args]"""
+       pls run [--on TARGET] [--wt NAME] [card options] --cmd -- <command> [args]
+       pls run --on CLUSTER --batch [--tree N | --wt NAME] -- train [args]"""
 EPILOG = """targets (--on):
   (none)           this machine, with the ilab venv
   host:gpu         that card (host:job:gpu on a SLURM node running several jobs; local:<gpu> = this machine)
   any              any free card on the boxes
   <pool>           any free card of that pool (`pls res pools`)
   lease:<id>       a card you already lease (left leased afterwards)
-  ray              the Ray cluster (queued until a GPU frees); `train` submits a training job
+  ray              the Ray cluster (queued until a GPU frees); `train` submits a training job, `--distributed`
+                   one spanning a sub-job per GPU node
+  <cluster> --batch  a batch job on that SLURM profile (`pls cluster`), running train: the workspace is staged
+                   as tree `default` (or --wt NAME's worktree set as tree NAME) and the job runs that tree as
+                   resolved now, even if newer trees are staged while it queues; --tree N runs a staged tree as is
 
 scripts (the same on every target):
   <name>           hcrl_isaaclab/scripts/<name>.py
@@ -55,13 +63,16 @@ def parser() -> argparse.ArgumentParser:
         "--wt", default="", metavar="NAME", help="run this machine's worktree set resources/<repo>/worktrees/<NAME>"
     )
     p.add_argument("--cmd", action="store_true", help="the words after -- are a command, not a script")
+    p.add_argument("--batch", action="store_true", help="submit a batch job on SLURM cluster TARGET (train only)")
+    p.add_argument("--tree", default="", metavar="N", help="(--batch) run staged tree N instead of staging")
+    p.add_argument("--distributed", action="store_true", help="(--on ray, train) a sub-job per GPU node")
     return p
 
 
 def _help(opts: list[str]) -> None:
     """`pls run [--on <card>] --help`: the card backend's options for a card target, else this command's."""
     ns, _ = parser().parse_known_args([o for o in opts if o not in HELP])
-    if ns.on and ns.on != "ray":
+    if ns.on and ns.on != "ray" and not ns.batch:
         handoff([*CARD_CMD, "--help"])
     parser().print_help()
     sys.exit(0)
@@ -160,10 +171,44 @@ def _card_flags(on: str) -> list[str]:
     return ["--any", "--pool", on]
 
 
+def _batch(on: str, wt: str, tree: str, run: list[str]) -> None:
+    """A batch job on a SLURM profile: stage the code (the workspace, or the worktree set ``wt``), then submit."""
+    from hcrl_cli.infra import profiles
+
+    if on not in profiles():
+        sys.exit(f"[pls] run --batch: --on names a SLURM cluster profile ({', '.join(profiles()) or 'none'}), not {on}")
+    script, *args = run
+    if script != "train":
+        sys.exit(f"[pls] run --batch runs train; run {script} on a card instead (pls run --on {on} -- {script} ...)")
+    if tree and wt:
+        sys.exit("[pls] run --batch: --tree runs a staged tree as is; --wt stages a worktree set, so pass one")
+    if wt:  # the worktree set's repos over the newest `default`, as tree <wt>
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from worktree_env import resolve
+
+        paths, overridden = resolve(wt)
+        if not overridden:
+            sys.exit(f"[pls] run --batch: no repo has a worktree set {wt}")
+        proc.run(
+            ["bash", DEV_BACKEND, "stage", wt, *(f"{repo}={paths[repo]}" for repo in overridden)], env={"CLUSTER": on}
+        )
+        tree = wt
+    handoff([SLURM_BACKEND, "job", *(["--tree", tree] if tree else []), *args], env={"CLUSTER": on})
+
+
 def main(argv: list[str]) -> None:
     opts, run = _split(argv)
     ns, extra = parser().parse_known_args(opts)
     os.environ.pop("WT", None)  # --wt is the only worktree selector
+    if ns.batch:
+        if extra or ns.cmd:
+            sys.exit(f"[pls] run --batch: {' '.join([*extra, *(['--cmd'] if ns.cmd else [])])} only apply on a card")
+        _batch(ns.on, ns.wt, ns.tree, run)
+        return
+    if ns.tree:
+        sys.exit("[pls] run: --tree only applies with --batch")
+    if ns.distributed and (ns.on != "ray" or run[0] != "train"):
+        sys.exit("[pls] run: --distributed only applies to train on Ray (--on ray -- train)")
     if not ns.on:
         if extra:
             sys.exit(f"[pls] run: {' '.join(extra)} only apply with --on")
@@ -174,7 +219,7 @@ def main(argv: list[str]) -> None:
         script, *args = run
         env = {"WT": ns.wt} if ns.wt else None
         if script == "train":  # a training job: wrap_resources runs train.py (sweeps, aggregate jobs)
-            handoff([RAY_BACKEND, "job", *args], env=env)
+            handoff([RAY_BACKEND, "job_distributed" if ns.distributed else "job", *args], env=env)
         else:
             handoff([RAY_BACKEND, "run", _ray_script(script), *args], env=env)
     else:
