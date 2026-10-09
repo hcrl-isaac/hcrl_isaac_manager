@@ -14,6 +14,7 @@ VENV = "ilab"
 VENV_PY = f"{VENV}/bin/python"  # relative to ROOT, the cwd of every command
 BASH_UTILS = ROOT / "scripts" / "utils.sh"
 RC_FILE = Path.home() / ".bashrc"
+CALLER_CWD = os.getcwd()  # where `pls` was started; set again by main() before it moves to ROOT
 # The single uv venv at ./ilab (`uv sync`/`uv run` read the first); a profile-activated venv must not leak in.
 BASE_ENV = {"UV_PROJECT_ENVIRONMENT": VENV, "VIRTUAL_ENV": ""}
 

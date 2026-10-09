@@ -1,4 +1,4 @@
-"""`just res eval`: run a one-off script on a leased GPU, with its checkpoints and code.
+"""`pls run --on <card>`: run a one-off script on a leased GPU, with its checkpoints and code.
 
 Local and ssh pools run the workspace's ilab python on the box. A SLURM card is one of a held dev sentinel's: the
 script runs in the container through a `develop exec` step on that job, against the cluster's shared checkout with
@@ -274,7 +274,13 @@ def _describe(src: str) -> str:
 
 
 def runner_script(
-    t: Target, stage: str, script: str, env_names: list[str], pythonpath: list[str], cwd: str = ""
+    t: Target,
+    stage: str,
+    script: str,
+    env_names: list[str],
+    pythonpath: list[str],
+    cwd: str = "",
+    command: bool = False,
 ) -> str:
     """The bash that runs on the target: a stage log, isolated caches, the given PYTHONPATH, the script's status.
 
@@ -285,11 +291,13 @@ def runner_script(
         env_names: Names of the exported variables, for the log.
         pythonpath: PYTHONPATH entries on the target.
         cwd: Directory to run the script from (default: the target workspace).
+        command: Run the arguments as a command line, the ilab venv first on PATH, instead of the script.
 
     Returns:
         The run.sh text.
     """
     q = shlex.quote
+    launch = 'export PATH="${py%/*}:$PATH"; "$@"' if command else f'"$py" {q(script)} "$@"'
     cache = f"{t.scratch}/res-eval/cache/{t.host}-gpu{t.gpu}"  # one lease per card, so per-card caches never race
     pin = (
         f"export CUDA_VISIBLE_DEVICES={t.gpu} RES_EVAL_DEVICE=cuda:0"
@@ -314,7 +322,7 @@ cat {q(stage + "/MANIFEST")}
 py="$PWD/ilab/bin/python"
 echo "[res] {t.host}:gpu{t.gpu} ({t.pin}) python=$py env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
-"$py" {q(script)} "$@"
+{launch}
 """
 
 
@@ -384,7 +392,9 @@ START_S = 1200  # how long a detached SLURM run may take to reach its runner (a 
 STOP_WAIT_S = 90  # how long a stop waits for the runner's status: its TERM/KILL (~10 s) plus the drain
 
 
-def slurm_runner_script(t: Target, stage: str, script: str, env_names: list[str], cwd: str, python: str = "") -> str:
+def slurm_runner_script(
+    t: Target, stage: str, script: str, env_names: list[str], cwd: str, python: str = "", command: bool = False
+) -> str:
     """The bash that runs inside the container on a SLURM node: pin by UUID, run, stop on request, record status.
 
     Args:
@@ -394,6 +404,7 @@ def slurm_runner_script(t: Target, stage: str, script: str, env_names: list[str]
         env_names: Names of the exported variables, for the log.
         cwd: Directory to run the script from, in the container.
         python: The interpreter (default: ``CONTAINER_PYTHON``).
+        command: Run the arguments as a command line instead of the script.
 
     Returns:
         The run.sh text. The container hides its processes from the node, so ``<stage>/heartbeat`` shows the run
@@ -401,6 +412,7 @@ def slurm_runner_script(t: Target, stage: str, script: str, env_names: list[str]
     """
     q = shlex.quote
     python = python or CONTAINER_PYTHON
+    launch = '"$@"' if command else f'{q(python)} {q(script)} "$@"'
     s = {k: q(f"{stage}/{k}") for k in ("log", "env", "status", "stop", "heartbeat", "MANIFEST")}
     # node-local: the container's /tmp is the job's per-node dir, shared by every step of the sentinel, so the run
     # takes its own TMPDIR and per-card Kit caches inside it (one lease per card)
@@ -428,7 +440,7 @@ cat {s["MANIFEST"]}
 echo "[res] {t.host}:gpu{t.gpu} job {t.job} (uuid) env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd)} && cd {q(cwd)} || {{ echo 97 > {s["status"]}; exit 97; }}
 script_from=$(( $(stat -c %s {s["log"]}) + 1 ))  # the traceback check reads only the script's own output
-setsid {q(python)} {q(script)} "$@" &
+setsid {launch} &
 child=$!
 stop_child() {{
     kill -TERM -- -"$child" 2>/dev/null
@@ -982,14 +994,18 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
     """Run a script on one leased card, then kill what is left of it, clean up and release the lease it took.
 
     Args:
-        args: The parsed `just res eval` arguments (with ``script_args``).
+        args: The parsed `pls run --on <card>` arguments (with ``script_args``).
         pools: Configured pools.
         claim: ``res.claim``, which leases the card.
     """
-    repo, rel = _repo_script(args.script, args.wt)
-    script = os.path.abspath(args.script) if not repo else rel
-    if not repo and not os.path.isfile(script):
-        sys.exit(f"[res] no script {args.script}")
+    if args.cmd:  # a command line, run as given on the card: nothing to check or ship but the code
+        repo, rel, script = "", "", args.script
+    else:
+        repo, rel = _repo_script(args.script, args.wt)
+        script = os.path.abspath(args.script) if not repo else rel
+        if not repo and not os.path.isfile(script):
+            sys.exit(f"[res] no script {args.script}")
+    run_args = [args.script, *args.script_args] if args.cmd else args.script_args
     if sum(map(bool, (args.on, args.any, args.lease))) != 1:
         sys.exit("[res] pick the card with exactly one of --on host:gpu, --any or --lease <id>")
     env = parse_env(args.env or [])
@@ -1037,7 +1053,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         # snapshots are read-only, runs may be concurrent and a stage is removed after a success, so relative outputs
         # (train.py's logs/, a census's tables) go to a writable working dir of this run's own, kept afterwards
         work = container_path(t, f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}")
-        if repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
+        if args.cmd:  # from the box workspace (its manager root), or the run's work dir in a SLURM container
+            target_script, cwd = "", work if t.kind == "slurm" else ""
+        elif repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
             root = dict(zip(code, pythonpath, strict=True))[repo]
             target_script, cwd = f"{root}/{rel}", work
         else:
@@ -1047,14 +1065,14 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         stage.write("\n".join(lines) + "\n", "env")
         names = sorted({**env, **paths})
         if t.kind == "slurm":
-            runner = slurm_runner_script(t, container_path(t, stage.dir), target_script, names, cwd)
+            runner = slurm_runner_script(t, container_path(t, stage.dir), target_script, names, cwd, command=args.cmd)
         else:
-            runner = runner_script(t, stage.dir, target_script, names, pythonpath, cwd)
+            runner = runner_script(t, stage.dir, target_script, names, pythonpath, cwd, command=args.cmd)
         stage.write(runner, "run.sh", mode=0o700)
         if taken is not None:
             _touch_lease(taken.id)
         if args.detach:
-            stage.start_detached(args.script_args)
+            stage.start_detached(run_args)
             detached = True
             _print_detached(stage, taken)
             rc = 0
@@ -1062,7 +1080,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             print(
                 f"[res] running {os.path.basename(script)} on {t.host}:gpu{t.gpu} (stage {stage.dir})", file=sys.stderr
             )
-            rc = run(stage, args.script_args, args.timeout, args.stall)
+            rc = run(stage, run_args, args.timeout, args.stall)
     except KeyboardInterrupt as exc:
         rc = 130
         print(f"[res] interrupted ({exc or 'SIGINT'})", file=sys.stderr)
@@ -1102,19 +1120,22 @@ def _duration(text: str) -> float:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
-def add_parser(sub: argparse._SubParsersAction) -> None:
-    """Register `eval` on the `just res` subparsers."""
-    ev = sub.add_parser("eval", help="run a one-off script on a leased GPU (local, ssh, or a held SLURM sentinel)")
+def parser() -> argparse.ArgumentParser:
+    """The card backend's arguments; `pls run` builds them from its own ``--on``/``--wt`` and passes the rest."""
+    ev = argparse.ArgumentParser(
+        prog="pls run --on <card>",
+        description="run a one-off script on a leased GPU (local, ssh, or a held SLURM sentinel)",
+    )
     ev.add_argument(
         "script", help="script on this machine, or <repo>:<path> inside a shipped repo; its arguments follow --"
     )
     ev.add_argument("--detach", action="store_true", help="start the run and return; the lease stays held")
-    ev.add_argument(
-        "--on", help="card as host:gpu (local:<gpu> for this machine; host:job:gpu when a SLURM node runs several jobs)"
-    )
-    ev.add_argument("--any", action="store_true", help="take any free card")
-    ev.add_argument("--lease", help="run on a card you already lease (left leased afterwards)")
-    ev.add_argument("--pool", action="append", help="with --any/--on: only these pools (prefix match)")
+    ev.add_argument("--cmd", action="store_true", help=argparse.SUPPRESS)  # script + its args are a command line
+    # the card selectors and --wt come from `pls run --on/--wt` (see `pls run --help`), so they are not listed here
+    ev.add_argument("--on", help=argparse.SUPPRESS)  # host:gpu, host:job:gpu, or local:<gpu>
+    ev.add_argument("--any", action="store_true", help=argparse.SUPPRESS)
+    ev.add_argument("--lease", help=argparse.SUPPRESS)  # a card already leased, left leased afterwards
+    ev.add_argument("--pool", action="append", help="only these pools (repeatable; prefix match)")
     ev.add_argument("--min-free-gb", type=float, default=0, help="with --any: free memory the card needs")
     ev.add_argument("--holder", required=True, help="your session name")
     ev.add_argument("--note", default="", help="lease note")
@@ -1124,18 +1145,35 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         help="[NAME=]<W&B run URL | entity/project/run[@iter] | path>, exported as NAME",
     )
     ev.add_argument("--env", action="append", help="KEY=VALUE for the script (repeatable)")
-    ev.add_argument("--wt", default="", help="run this machine's worktree set (resources/<repo>/worktrees/<name>)")
+    ev.add_argument("--wt", default="", help=argparse.SUPPRESS)  # this machine's resources/<repo>/worktrees/<name>
     ev.add_argument(
         "--timeout", type=_duration, default=0.0, help="kill the run after this long, e.g. 2h (default: none)"
     )
     ev.add_argument(
         "--stall", type=_duration, default=900.0, help="kill the run after this long with no output (15m; 0 = off)"
     )
+    return ev
 
 
-def split_script_args(argv: list[str]) -> tuple[list[str], list[str]]:
-    """Split an `eval` command line at its first ``--``: res's own arguments, then the script's (verbatim)."""
-    if argv[:1] == ["eval"] and "--" in argv:
-        i = argv.index("--")
-        return argv[:i], argv[i + 1 :]
-    return argv, []
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse at the first ``--``: the backend's own arguments, then the script's (verbatim) as ``script_args``."""
+    i = argv.index("--") if "--" in argv else len(argv)
+    args = parser().parse_args(argv[:i])
+    args.script_args = argv[i + 1 :]
+    return args
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Entry point of `pls run --on <card>`: claim the card through res, run the script, release."""
+    import res
+
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        pools = res.load_pools()
+    except Exception as exc:  # a broken inventory must say so, not print a traceback
+        sys.exit(f"[res] cannot read the compute inventory: {type(exc).__name__}: {exc}")
+    cmd_eval(args, pools, res.claim)
+
+
+if __name__ == "__main__":
+    main()

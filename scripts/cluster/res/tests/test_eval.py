@@ -483,12 +483,8 @@ class SlurmEvalTest(Isolated):
             return res.claim(args, pools)
 
     def _eval(self, *argv: str) -> tuple[int, str]:
-        parser = argparse.ArgumentParser()
-        ev.add_parser(parser.add_subparsers(dest="cmd"))
-        base = ["eval", str(self.script), "--holder", "me", "--on", "c571-003:3"]
-        head, tail = ev.split_script_args([*base, "--checkpoint", f"CKPT_A={self.ckpt}", *argv])
-        args = parser.parse_args(head)
-        args.script_args = tail
+        base = [str(self.script), "--holder", "me", "--on", "c571-003:3"]
+        args = ev.parse_args([*base, "--checkpoint", f"CKPT_A={self.ckpt}", *argv])
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as cm:
             ev.cmd_eval(args, [self.pool], self._claim)
@@ -649,11 +645,7 @@ class EvalRunTest(Isolated):
             return res.claim(args, pools)
 
     def _eval(self, *argv: str) -> tuple[int, str]:
-        parser = argparse.ArgumentParser()
-        ev.add_parser(parser.add_subparsers(dest="cmd"))
-        head, tail = ev.split_script_args(["eval", str(self.script), "--holder", "me", *argv])
-        args = parser.parse_args(head)
-        args.script_args = tail
+        args = ev.parse_args([str(self.script), "--holder", "me", *argv])
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as cm:
             ev.cmd_eval(args, [self.pool], self._claim)
@@ -683,6 +675,31 @@ class EvalRunTest(Isolated):
         self.assertIn("robot_rl " + str(self.tmp / "ws" / "resources" / "robot_rl"), out, "MANIFEST is printed")
         self.assertEqual(self._leases(), [])
         self.assertEqual(self._stages(), [], "stage dir not removed")
+
+    def test_a_command_runs_as_given_from_the_workspace_with_the_venv_first_on_path(self) -> None:
+        line = 'echo "CMD [$1] $MODE $(command -v python)"; pwd'
+        args = ev.parse_args([
+            "--cmd",
+            "bash",
+            "--holder",
+            "me",
+            "--any",
+            "--env",
+            "MODE=ok",
+            "--",
+            "-c",
+            line,
+            "x",
+            "a b",
+        ])
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+            ev.cmd_eval(args, [self.pool], self._claim)
+        text = out.getvalue() + err.getvalue()
+        self.assertEqual(cm.exception.code, 0, text)
+        self.assertIn(f"CMD [a b] ok {self.tmp / 'ws' / 'ilab' / 'bin' / 'python'}", text)
+        self.assertIn(f"\n{self.tmp / 'ws'}\n", text)
+        self.assertEqual(self._leases(), [])
 
     def test_failure_status_propagates_keeps_the_log_and_releases(self) -> None:
         rc, out = self._eval("--any", "--env", "MODE=fail")
@@ -733,10 +750,7 @@ class EvalRunTest(Isolated):
             pids.append(int(next(x for x in proc.stdout if x.startswith("PID ")).split()[1]))
             raise BrokenPipeError
 
-        parser = argparse.ArgumentParser()
-        ev.add_parser(parser.add_subparsers(dest="cmd"))
-        args = parser.parse_args(["eval", str(self.script), "--holder", "me", "--any"])
-        args.script_args = []
+        args = ev.parse_args([str(self.script), "--holder", "me", "--any"])
         with (
             mock.patch.object(ev, "run", side_effect=broken),
             mock.patch.dict(os.environ, {"MODE": "hang"}),
