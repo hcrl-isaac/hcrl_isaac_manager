@@ -21,7 +21,7 @@ Apptainer image, following the workflow of the [Isaac Lab docs](https://isaac-si
    ```bash
    pls cluster add --update <name>
    ```
-3. Create `scripts/.env.wandb` from `scripts/tools/.env.wandb.template`; `pls cluster job` refuses to run without it.
+3. Create `scripts/.env.wandb` from `scripts/tools/.env.wandb.template`; `pls run --batch` refuses to run without it.
 4. Build the `.sif` from the shared docker image and push it to the cluster (only needed when the image changes):
    ```bash
    pls cluster <name> setup
@@ -29,19 +29,32 @@ Apptainer image, following the workflow of the [Isaac Lab docs](https://isaac-si
 
 ## Commands
 
-`pls cluster <name> <cmd>` selects `config/<name>/`; without a name, a command that needs a cluster asks which.
+`pls cluster <name> <verb>`, where `<name>` is a profile (or `ray`, see [../ray/README.md](../ray/README.md)); bare
+`pls cluster` picks both.
 
-| command | what it does |
+| verb | what it does |
 |---|---|
-| `add [--update] [name]` | create or regenerate your profile |
 | `setup` | build the `.sif` and rsync it to `CLUSTER_SIF_PATH`; with `CLUSTER_ARCH=arm64`, build it on the cluster instead |
-| `build` | build the `.sif` only (into `scripts/cluster/exports/`) |
-| `push` / `repush` | rsync an already built `.sif` (reuses the SSH master) |
-| `job [args]` | copy the workspace to a timestamped dir under `CLUSTER_ISAACLAB_DIR`, then `sbatch` `scripts/train.py [args]` |
+| `setup --build-only` | build the `.sif` only (into `scripts/cluster/exports/`) |
+| `setup --push-only` | rsync an already built `.sif` (reuses the SSH master) |
+| `list [squeue args]` | this profile's queued and running jobs (yours, on its partition) |
+| `logs <job> [tail args]` | the job's output file, also after it left the queue (default: the last 100 lines; `-f` follows) |
+| `stop <job>...` | cancel jobs |
+| `status` | this cluster's cards and leases (`pls res status --pool <name>`) |
+| `add [--update]` | regenerate the profile (`pls cluster add [name]` creates one) |
 | `develop ...` | persistent dev node: see [cluster_dev/README.md](cluster_dev/README.md) |
 
-Code changes ride each job's copy, so the `.sif` only needs a rebuild when dependencies change. The copy is removed
-when the job ends (`REMOVE_CODE_COPY_AFTER_JOB`); training logs and the job's `slurm-<id>.out` end up in `CLUSTER_ISAACLAB_DIR/logs`, outside it.
+Batch jobs launch through `pls run`:
+
+```bash
+pls run --on <name> --batch -- train --task <task-id> [train args]       # stage the workspace as `default`, submit
+pls run --on <name> --batch --wt <set> -- train ...                      # stage that worktree set as tree <set>
+pls run --on <name> --batch --tree <tree> -- train ...                   # a staged tree as is
+```
+
+The job runs the tree as resolved at submission, even if newer trees are staged while it queues, so the `.sif` only
+needs a rebuild when dependencies change. Training logs and the job's `slurm-<id>.out` end up in
+`CLUSTER_ISAACLAB_DIR/logs`.
 
 ## Profile settings (`.env.cluster`)
 

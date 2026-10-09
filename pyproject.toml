@@ -4,8 +4,8 @@ version = "0.1.0"
 description = "Environment for running Ray scripts from HCRL Isaac Manager"
 requires-python = ">=3.11,<3.14"
 
-# Manager-only dependencies (the lightweight base installed by `pls deps`, used by `pls ray`
-# and `pls cluster`). The heavy Isaac Lab / Isaac Sim stack and the editable workspace packages
+# Manager-only dependencies (the lightweight base installed by `pls deps`, used by `pls cluster`
+# and `pls run`). The heavy Isaac Lab / Isaac Sim stack and the editable workspace packages
 # (hcrl_isaaclab, robot_rl, *_tasks, *_robots) are layered on top by `pls setup` into the SAME
 # `ilab` venv -- see src/hcrl_cli/workspace.py.
 dependencies = [

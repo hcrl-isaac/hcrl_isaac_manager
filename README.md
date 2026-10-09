@@ -66,19 +66,20 @@ to cd into the extension): `pls run play --task <id> --checkpoint <path>`, `pls 
 
 **Ray:**
 ```bash
-pls ray setup                 # one-time / when assets change: write Ray configs + upload large assets as W&B artifacts
-ilab
+pls cluster ray setup          # one-time: write the Ray configs; then build + push the image (when deps change)
+pls upload-artifacts --all     # large assets as W&B artifacts (when they change)
 pls run --on ray -- train --task <task-id> [train args]
+pls cluster ray list | logs <job> | stop <job>
 ```
 Large files (robot assets, motions, policies) are excluded from the job upload and fetched at runtime
-as W&B artifacts; `pls ray setup` uploads them (it calls `pls upload-artifacts`) before the first job.
-See the [Ray README](scripts/ray/README.md).
+as W&B artifacts, which `pls upload-artifacts` publishes. See the [Ray README](scripts/ray/README.md).
 
 **HPC:**
 ```bash
-pls cluster add                       # one-time per cluster
-pls cluster <name> setup              # build + push the .sif (when deps change)
-pls cluster <name> job --task <task-id> [train args]   # stages the workspace as a code tree, then submits
+pls cluster add [name]         # one-time per cluster: write its profile
+pls cluster <name> setup       # build + push the .sif (when deps change)
+pls run --on <name> --batch -- train --task <task-id> [train args]
+pls cluster <name> list | logs <job> | stop <job> | status
 ```
 See the [Cluster README](scripts/cluster/README.md).
 
@@ -230,22 +231,19 @@ The shared `ilab`'s `pls` runs the main checkout's `src/hcrl_cli`; to try `pls` 
 - Installs and configures Docker if necessary
 - Builds and starts the Isaac Lab Docker container
 
-### `cluster [name] <subcommand>`
+### `cluster <name> <verb>`
 
-- A subcommand is required: `add` creates a cluster config from template; `setup` builds + pushes the Apptainer `.sif`; plus `job`/`develop`/`repush`/…
-- A leading cluster name selects `config/<name>`; without one, a verb that needs a cluster asks which
-- Bare `pls cluster` (no subcommand) shows an arrow-key picker
-
-### `ray <subcommand>`
-
-- A subcommand is required: `setup` writes the Ray config files **and** uploads large assets (`pls upload-artifacts`)
-- Plus `bench`/`list`/`logs`/`stop`/`push`; jobs go through `pls run --on ray`. Run `pls deps` first so the venv +
-  `.env.wandb` exist.
+- `<name>` is a SLURM profile (`scripts/cluster/config/<name>`) or `ray`; a bare `pls cluster` picks the cluster, then
+  the verb
+- Every cluster: `setup` builds + pushes the image (the Apptainer `.sif`, or Ray's docker image; `--build-only`,
+  `--push-only`), `list`, `logs <job>`, `stop <job>`, and `status` (its cards and leases)
+- SLURM only: `add` (`pls cluster add [name]` creates a profile) and `develop ...` (the dev node); Ray only: `bench`
+- Jobs launch through `pls run`: `--on <name> --batch [--tree N | --wt S] -- train ...` on SLURM, `--on ray -- ...`
+  on Ray. Run `pls deps` first so the venv + `.env.wandb` exist.
 
 ### `upload-artifacts [args]`
 
 - Uploads managed large-file resources (robot assets, motion datasets, exported policies) to W&B as versioned artifacts
-- Also run automatically by `pls ray setup`
 - `--list` shows the registry + local presence; `--all` uploads everything; or pass specific resource keys
 - Dedups unchanged content by hash (cheap to re-run); reads W&B credentials from `scripts/.env.wandb`
 - Fetched back at runtime by the in-script resolver — see [Large-file resources](scripts/ray/README.md#large-file-resources)

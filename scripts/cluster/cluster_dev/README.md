@@ -53,7 +53,7 @@ shared workspace, so a run never sees code change under it:
   `config/<cluster>/.rsync-exclude` (one repo name per line, also honoured from profiles with the same
   `CLUSTER_ISAACLAB_DIR`). It also adds `motion_datasets`' training files (`*.pt` and their
   `.manifest/.arena/.courts.json`) to the shared `resources/motion_datasets`, never deleting there; trees link it.
-- `exec` without `--tree`, `start` and `cluster <name> job` (without `--tree`) use the newest `default`; each resolves
+- `exec` without `--tree`, `start` and `pls run --on <name> --batch` (without `--tree`) use the newest `default`; each resolves
   the tree once, so a step or queued job keeps its code while newer trees are staged.
 - A repo is given at a ref (fetched; `origin/<ref>` preferred) or as a local worktree top
   (`hcrl_isaaclab=./resources/hcrl_isaaclab/worktrees/wt`; `/`, `./` or `../`, relative to the manager dir,
