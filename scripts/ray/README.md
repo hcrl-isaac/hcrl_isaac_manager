@@ -23,9 +23,9 @@ The ray scripts assume that you will be developing on hcrl_isaaclab within manag
 > - Commands below are consistent for Unix-like systems, i.e. Linux and Mac. If running on Windows, some commands may
 > be different.
 
-Set up the Ray configuration with
+Write the Ray configuration (it asks for your UT EID) and push the shared image with
 ```bash
-just ray
+pls cluster ray setup            # --config: only rewrite the config files; --build-only / --push-only: the image
 ```
 
 If you have additional non-standard configurations (e.g. additional file mounts, env variables, etc.), you can edit the config files at `ray/.env.ray` and `ray/job_config.yaml`.
@@ -39,7 +39,7 @@ manager  # or `source .venv/bin/activate`
 Ensure connectivity to the server with
 
 ```bash
-scripts/ray.sh list
+pls cluster ray list
 ```
 
 This should display a blank table, like so:
@@ -54,8 +54,8 @@ This should display a blank table, like so:
 ### Upload large assets (first time)
 
 Robot assets, motion datasets, and exported policies are excluded from the per-job upload (they would
-blow Ray's size limit) and fetched at runtime as W&B artifacts instead. `just ray setup` uploads them
-(it calls `just upload-artifacts`), and every `just ray job` refreshes the ones present locally. Before
+blow Ray's size limit) and fetched at runtime as W&B artifacts instead. `pls upload-artifacts` uploads
+them, and every Ray run refreshes the ones present locally. Before
 submitting, a pre-flight (`scripts/ray/preflight.py`) fails naming any excluded entry (every exported policy,
 `**/policies/<task>/<robot>/<name>` whether a dir or a file, and `**/style_data`) in the mounted sources that has no
 artifact at its path, with the command to publish it. A new export therefore needs publishing before its first Ray
@@ -78,39 +78,39 @@ register a new file.
 You can access the Ray dashboard at `http://<server_ip>:8265`. The dashboard is view-only, i.e. you cannot cancel jobs
 from this interface.
 
-### `scripts/ray.sh job`
+### `pls run --on ray -- train [args]`
 
-- Sends a job to the server.
+- Sends a training job to the server.
     - You can modify the script that runs (e.g. between `train.py` and `play.py`) in the `python_script` field of `job_config.yaml`
 - Can be followed by any arguments you'd like to pass to the script (e.g. `--task reach-v0`)
 
-### `just ray run <repo>/<path>.py [args]`
+### `pls run --on ray [--wt <set>] -- <repo>/<path>.py [args]`
 
 - Runs a one-off script (an eval, a render, a census) on the cluster instead of `train.py`, shipped exactly like a
-  job: the same mounts, artifact fetching and `WT=<name>` worktree routing.
+  job: the same mounts, artifact fetching and `--wt` worktree routing.
 - The script is named inside a shipped repo, e.g.
-  `WT=steady-camera just ray run hcrl_isaaclab/scripts/video_logger.py --wandb_run <run> --task <task> --num_envs 16`.
-- Ray holds the job until a GPU frees, so a busy cluster queues it instead of refusing it. `just res eval` refuses
-  Ray pools and points here.
+  `pls run --on ray --wt steady-camera -- hcrl_isaaclab/scripts/video_logger.py --wandb_run <run> --task <task> --num_envs 16`.
+- Ray holds the job until a GPU frees, so a busy cluster queues it instead of refusing it. A card run refuses Ray pools
+  and points here.
 
-### `scripts/ray.sh stop <job_id>`
+### `pls cluster ray stop <job_id>`
 
 - Stop a running job
 - Can provide additional arguments (see [`ray job stop` docs](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/cli.html#ray-job-stop))
 - You can only stop jobs that have been created by you. If you really want to bypass this, comment out the check in
 `scripts/ray/ray_interface.sh`.
 
-### `scripts/ray.sh list`
+### `pls cluster ray list`
 
 - List your currently running jobs, ascending by start time
 - View all users' runs with `--all_users`
 - View the status of all runs with `--all_statuses`
 
-### `scripts/ray.sh logs <job_id>`
+### `pls cluster ray logs <job_id>`
 
 - Download and print logs for a job
 - Can provide additional arguments (see [`ray job logs` docs](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/cli.html#ray-job-logs))
-- You can redirect the output to a file with the `>` operator: `./ray.sh logs <job_id> > <file_path>`
+- You can redirect the output to a file with the `>` operator: `pls cluster ray logs <job_id> > <file_path>`
 - Generally, you can use W&B to view your run logs and metrics. This function is mainly for when your job fails before it can deploy, or if you aren't using W&B
 
 ## How it works
@@ -181,4 +181,4 @@ There are a couple of limitations on the server setup. They may be fixed over ti
 
 ## Etiquette
 
-Since we only have two server computers, this means that up to two jobs can run at a time. Please be considerate to other users — keep an eye on your jobs, and please cancel them if they aren't getting results. You can see if other users have queued jobs through the Ray dashboard or with `scripts/ray.sh list --all_users`.
+Since we only have two server computers, this means that up to two jobs can run at a time. Please be considerate to other users — keep an eye on your jobs, and please cancel them if they aren't getting results. You can see if other users have queued jobs through the Ray dashboard or with `pls cluster ray list --all_users`.

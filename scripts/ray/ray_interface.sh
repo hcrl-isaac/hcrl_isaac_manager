@@ -63,7 +63,7 @@ render_job_configs() {  # render_job_configs <ut_eid>
 # Re-render the job configs before a submit so the mounts match this job's WT, not the one setup saw.
 prepare_submit() {
     if [ ! -f "$SCRIPT_DIR/.env.ray" ]; then
-        echo "[ERROR] $SCRIPT_DIR/.env.ray not found. Run 'just ray setup' first." >&2
+        echo "[ERROR] $SCRIPT_DIR/.env.ray not found. Run 'pls cluster ray setup' first." >&2
         exit 1
     fi
     local ut_eid
@@ -80,9 +80,11 @@ help() {
     echo -e "\noptions:"
     echo -e "  -h              Display this help message."
     echo -e "\ncommands:"
-    echo -e "  setup                                Generate the Ray config files (.env.ray + job configs)."
-    echo -e "  push                                 Build + push the shared Isaac image to Docker Hub (pulled by the cluster on next startup)."
-    echo -e "  job [<job_args>]                     Submit a job to the cluster."
+    echo -e "  setup [--config|--build-only|--push-only]"
+    echo -e "                                       Build + push the shared Isaac image to Docker Hub (pulled by the cluster on next"
+    echo -e "                                       startup), writing the Ray config files (.env.ray + job configs) first when missing;"
+    echo -e "                                       --config only rewrites the config files."
+    echo -e "  job [<job_args>]                     Submit a job to the cluster (pls run --on ray -- train)."
     echo -e "  bench [<job_args>]                   Submit an FPS-benchmark job (sweeps num_envs)."
     echo -e "  stop [<run_id>] [<script_args>]      Stop a currently running job."
     echo -e "  list [<script_args>]                 View existing jobs on the cluster."
@@ -131,28 +133,33 @@ esac
 
 case $command in
     setup)
-        MANAGER_DIR="$( cd "$SCRIPT_DIR/../.." && pwd )"
-        if [ ! -f "$MANAGER_DIR/scripts/.env.wandb" ]; then
-            echo "[ERROR] $MANAGER_DIR/scripts/.env.wandb not found. Run 'just deps' first." >&2
-            exit 1
+        mode="${1:-}"
+        case "$mode" in
+            "" | --config | --build-only | --push-only) ;;
+            *) echo "Error: setup takes --config, --build-only or --push-only, not '$mode'." >&2; exit 1 ;;
+        esac
+        if [ "$mode" = --config ] || { [ -z "$mode" ] && [ ! -f "$SCRIPT_DIR/.env.ray" ]; }; then
+            MANAGER_DIR="$( cd "$SCRIPT_DIR/../.." && pwd )"
+            if [ ! -f "$MANAGER_DIR/scripts/.env.wandb" ]; then
+                echo "[ERROR] $MANAGER_DIR/scripts/.env.wandb not found. Run 'pls deps' first." >&2
+                exit 1
+            fi
+            read -p "UT EID: " ut_eid
+            source "$MANAGER_DIR/scripts/.env.wandb"
+            UT_EID=$ut_eid envsubst < "$SCRIPT_DIR/tools/.env.ray.template" > "$SCRIPT_DIR/.env.ray"
+            render_job_configs "$ut_eid"
+            echo "[INFO] Created Ray config files in $SCRIPT_DIR (.env.ray + job_config/bench_job_config/job_config_distributed .yaml)."
         fi
-        read -p "UT EID: " ut_eid
-        source "$MANAGER_DIR/scripts/.env.wandb"
-        UT_EID=$ut_eid envsubst < "$SCRIPT_DIR/tools/.env.ray.template" > "$SCRIPT_DIR/.env.ray"
-        render_job_configs "$ut_eid"
-        echo "[INFO] Created Ray config files in $SCRIPT_DIR (.env.ray + job_config/bench_job_config/job_config_distributed .yaml)."
-        ;;
-    push)
-        if [ $# -gt 1 ]; then
-            echo "Error: Too many arguments for push command." >&2
-            help
-            exit 1
+        [ "$mode" = --config ] && exit 0
+        if [ "$mode" != --push-only ]; then
+            echo "Building the shared Isaac image for Ray"
+            check_docker_version
+            "$SCRIPT_DIR/../docker/docker_interface.sh" build
         fi
-        echo "Building and pushing the shared Isaac image for Ray"
-        check_docker_version
-        "$SCRIPT_DIR/../docker/docker_interface.sh" build
-        docker tag hcrl-isaac:latest esturman/isaac-ray:latest
-        docker push esturman/isaac-ray:latest
+        if [ "$mode" != --build-only ]; then
+            docker tag hcrl-isaac:latest esturman/isaac-ray:latest
+            docker push esturman/isaac-ray:latest
+        fi
         ;;
     job)
         job_args=("$@")
@@ -225,7 +232,7 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         else
             echo "[ERROR] The specified job $job_id cannot be stopped."
             echo "[ERROR] Only running jobs started by you can be cancelled."
-            echo "[ERROR] You can view these jobs with \`scripts/ray.sh list\`." 
+            echo "[ERROR] You can view these jobs with \`pls cluster ray list\`." 
             exit 1
         fi
         ;;
@@ -244,7 +251,7 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         else
             echo "[ERROR] The specified job $job_id cannot be stopped."
             echo "[ERROR] You may only view the logs of jobs started by you."
-            echo "[ERROR] You can view these jobs with \`scripts/ray.sh list --all_statuses\`." 
+            echo "[ERROR] You can view these jobs with \`pls cluster ray list --all_statuses\`." 
             exit 1
         fi
         ;;
