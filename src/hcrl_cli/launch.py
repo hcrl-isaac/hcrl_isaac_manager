@@ -28,7 +28,8 @@ EPILOG = """targets (--on):
   any              any free card on the boxes
   <pool>           any free card of that pool (`pls res pools`)
   lease:<id>       a card you already lease (left leased afterwards)
-  ray              the Ray cluster (queued until a GPU frees); `train` submits a training job
+  ray              the Ray cluster (queued until a GPU frees); `train` submits a training job, `--distributed`
+                   one spanning a sub-job per GPU node
   <cluster> --batch  a batch job on that SLURM profile (`pls cluster`), running train: the workspace is staged
                    as tree `default` (or --wt NAME's worktree set as tree NAME) and the job runs that tree as
                    resolved now, even if newer trees are staged while it queues; --tree N runs a staged tree as is
@@ -64,6 +65,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--cmd", action="store_true", help="the words after -- are a command, not a script")
     p.add_argument("--batch", action="store_true", help="submit a batch job on SLURM cluster TARGET (train only)")
     p.add_argument("--tree", default="", metavar="N", help="(--batch) run staged tree N instead of staging")
+    p.add_argument("--distributed", action="store_true", help="(--on ray, train) a sub-job per GPU node")
     return p
 
 
@@ -205,6 +207,8 @@ def main(argv: list[str]) -> None:
         return
     if ns.tree:
         sys.exit("[pls] run: --tree only applies with --batch")
+    if ns.distributed and (ns.on != "ray" or run[0] != "train"):
+        sys.exit("[pls] run: --distributed only applies to train on Ray (--on ray -- train)")
     if not ns.on:
         if extra:
             sys.exit(f"[pls] run: {' '.join(extra)} only apply with --on")
@@ -215,7 +219,7 @@ def main(argv: list[str]) -> None:
         script, *args = run
         env = {"WT": ns.wt} if ns.wt else None
         if script == "train":  # a training job: wrap_resources runs train.py (sweeps, aggregate jobs)
-            handoff([RAY_BACKEND, "job", *args], env=env)
+            handoff([RAY_BACKEND, "job_distributed" if ns.distributed else "job", *args], env=env)
         else:
             handoff([RAY_BACKEND, "run", _ray_script(script), *args], env=env)
     else:
