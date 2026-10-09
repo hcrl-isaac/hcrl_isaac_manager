@@ -98,6 +98,8 @@ class ClusterTest(unittest.TestCase):
         configs = Path(self.tmp.name, "scripts/cluster/config")
         for name in ("delta", "horizon"):
             (configs / name).mkdir(parents=True)
+            (configs / name / ".env.cluster").touch()
+        (configs / "half-made").mkdir()  # no .env.cluster: not a profile
         cwd = os.getcwd()
         os.chdir(self.tmp.name)
         self.addCleanup(os.chdir, cwd)
@@ -161,6 +163,17 @@ class ClusterTest(unittest.TestCase):
         self._refused(["ray", "run", "x.py"], "pls run --on ray --")
         self._refused(["delta", "frobnicate"], "unknown verb")
         self._refused(["nope", "list"], "no cluster 'nope'")
+        self._refused(["half-made", "list"], "no cluster 'half-made'")
+
+    def test_a_worktree_without_profiles_uses_the_main_checkouts(self) -> None:
+        main = Path(self.tmp.name, "main")
+        (main / "scripts/cluster/config/stampede").mkdir(parents=True)
+        (main / "scripts/cluster/config/stampede/.env.cluster").touch()
+        Path(self.tmp.name, "wt").mkdir()
+        os.chdir(Path(self.tmp.name, "wt"))
+        found = subprocess.CompletedProcess([], 0, stdout=f"{main}/.git\n")
+        with mock.patch.object(infra.subprocess, "run", return_value=found):
+            self.assertEqual(infra.profiles(), ["stampede"])
 
 
 class BatchTest(unittest.TestCase):
@@ -170,6 +183,7 @@ class BatchTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         Path(self.tmp.name, "scripts/cluster/config/delta").mkdir(parents=True)
+        Path(self.tmp.name, "scripts/cluster/config/delta/.env.cluster").touch()
         cwd = os.getcwd()
         os.chdir(self.tmp.name)
         self.addCleanup(os.chdir, cwd)

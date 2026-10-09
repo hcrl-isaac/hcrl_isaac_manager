@@ -10,7 +10,14 @@ CLUSTER="${CLUSTER:-default}"
 IMAGE_NAME="${HCRL_IMAGE_NAME:-hcrl-isaac}"
 SIF_DIR="${HCRL_SIF_DIR:-${SCRIPT_DIR}/exports}"
 SIF_PATH="${SIF_DIR}/${IMAGE_NAME}.sif"
-CLUSTER_ENV_FILE="${SCRIPT_DIR}/config/${CLUSTER}/.env.cluster"
+# profiles are gitignored and per user, so a manager worktree has none: it uses the main checkout's (as res does)
+CONFIG_DIR="${SCRIPT_DIR}/config"
+if [ ! -f "${CONFIG_DIR}/${CLUSTER}/.env.cluster" ]; then
+    _common="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    _main="$(dirname "${_common:-/nonexistent}")/scripts/cluster/config"
+    if [ -n "$_common" ] && [ -f "${_main}/${CLUSTER}/.env.cluster" ]; then CONFIG_DIR="$_main"; fi
+fi
+CLUSTER_ENV_FILE="${CONFIG_DIR}/${CLUSTER}/.env.cluster"
 
 # Reuse the persistent SSH control master (opened by `cluster_dev.sh start`) so push/job need no 2FA.
 SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${HOME}/.ssh/cm/%C" -o ControlPersist=48h -o ConnectTimeout=60)
@@ -20,7 +27,7 @@ source "${SCRIPT_DIR}/tools/restore_profiles.sh"
 source_cluster_env() {
     if [ ! -f "$CLUSTER_ENV_FILE" ]; then
         echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'pls cluster add'). Available:" \
-            "$(ls "$SCRIPT_DIR/config" 2>/dev/null | paste -sd, -)." >&2
+            "$(ls "$CONFIG_DIR" 2>/dev/null | paste -sd, -)." >&2
         exit 1
     fi
     # shellcheck disable=SC1090
@@ -55,7 +62,7 @@ push_sif() {
 # `apptainer build --fakeroot` in a batch job with the profile's resources, replacing the .sif only once built.
 build_remote_sif() {
     source_cluster_env
-    local build="${CLUSTER_SIF_PATH}/build-${IMAGE_NAME}" submit="${SCRIPT_DIR}/config/${CLUSTER}/submit_job_slurm.sh"
+    local build="${CLUSTER_SIF_PATH}/build-${IMAGE_NAME}" submit="${CONFIG_DIR}/${CLUSTER}/submit_job_slurm.sh"
     local dockerfile="${SCRIPT_DIR}/../docker/Dockerfile" base flags="" flag value free min="${CLUSTER_BUILD_MIN_FREE_GB:-40}"
     # the same base image as the docker build, from its ARGs
     base="$(sed -nE 's/^ARG ISAACSIM_BASE_IMAGE=(.+)/\1/p' "$dockerfile"):$(sed -nE 's/^ARG ISAACSIM_VERSION=(.+)/\1/p' "$dockerfile")"
@@ -152,7 +159,7 @@ cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: 
         mkdir -p '${job_dir}/scripts/cluster/config/${CLUSTER}' && ln -s '${tree}/resources' '${job_dir}/resources'" < /dev/null || exit 1
     local f
     rsync -t -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/run_singularity.sh" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/" || exit 1
-    for f in "$SCRIPT_DIR/config/${CLUSTER}"/submit_job_*.sh; do
+    for f in "$CONFIG_DIR/${CLUSTER}"/submit_job_*.sh; do
         [ -f "$f" ] && { rsync -t -e "ssh ${SSH_OPTS[*]}" "$f" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/config/${CLUSTER}/" || exit 1; }
     done
     rsync -t -e "ssh ${SSH_OPTS[*]}" "$CLUSTER_ENV_FILE" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/.env.cluster" || exit 1
@@ -170,7 +177,7 @@ cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: 
 
 # this profile's own sbatch flags (e.g. its partition), from submit_job_slurm.sh
 profile_flag() {
-    python3 "${SCRIPT_DIR}/tools/merge_profile.py" get "${SCRIPT_DIR}/config/${CLUSTER}/submit_job_slurm.sh" "$1" 2>/dev/null
+    python3 "${SCRIPT_DIR}/tools/merge_profile.py" get "${CONFIG_DIR}/${CLUSTER}/submit_job_slurm.sh" "$1" 2>/dev/null
 }
 
 check_job_id() {

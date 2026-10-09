@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -16,9 +17,20 @@ BACKEND_VERBS = {"develop": "slurm", "add": "slurm", "bench": "ray"}  # verbs on
 JOB_VERBS = ("job", "run")  # launches go through `pls run`
 
 
+def _profile_dir() -> Path:
+    """This checkout's cluster profiles, or the main checkout's when this worktree has none (they are gitignored)."""
+    if any(CLUSTER_CONFIGS.glob("*/.env.cluster")):
+        return CLUSTER_CONFIGS
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    main = Path(common).parent / CLUSTER_CONFIGS if common else CLUSTER_CONFIGS
+    return main if any(main.glob("*/.env.cluster")) else CLUSTER_CONFIGS
+
+
 def profiles() -> list[str]:
-    """SLURM cluster profiles: the directories under scripts/cluster/config/ (gitignored, made by `pls cluster add`)."""
-    return sorted(p.name for p in CLUSTER_CONFIGS.iterdir() if p.is_dir()) if CLUSTER_CONFIGS.is_dir() else []
+    """SLURM cluster profiles: scripts/cluster/config/<name>/.env.cluster (gitignored, made by `pls cluster add`)."""
+    return sorted(p.parent.name for p in _profile_dir().glob("*/.env.cluster"))
 
 
 def cluster(args: list[str]) -> None:
