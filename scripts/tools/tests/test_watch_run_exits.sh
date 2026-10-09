@@ -37,6 +37,38 @@ printf 'Learning iteration 927/4000\n%s\nsrun: error: Node failure on c571-003\n
 out="$(watch "$T/scanner_real.log")"; rc=$?
 check "a real srun error next to scanner noise is FAILED" '[ "$rc" = 1 ] && case $out in *FAILED*) true ;; *) false ;; esac'
 
+# Kit's pip-env race at boot prints a chained traceback on every rank of a healthy run (amd-rtx BFM-Zero retrain)
+pipapi='[default3]:Traceback (most recent call last):
+[default3]:  File "/isaac-sim/extscache/omni.kit.pipapi-0.0.0/omni/kit/pipapi/pipapi.py", line 412, in _ensure_env
+[default3]:    os.makedirs(env_dir)
+[default3]:FileNotFoundError: [Errno 2] No such file or directory: '"'"'/isaac-sim/kit/data/Kit/Isaac-Sim/5.1/pip3-envs/default'"'"'
+[default3]:
+[default3]:During handling of the above exception, another exception occurred:
+[default3]:
+[default3]:Traceback (most recent call last):
+[default3]:  File "/isaac-sim/extscache/omni.kit.pipapi-0.0.0/omni/kit/pipapi/pipapi.py", line 418, in _ensure_env
+[default3]:    os.mkdir(env_dir)
+[default3]:FileExistsError: [Errno 17] File exists: '"'"'/isaac-sim/kit/data/Kit/Isaac-Sim/5.1/pip3-envs/default'"'"'
+[default3]:Successfully loaded 862 motions'
+printf '%s\n' "$pipapi" > "$T/pipapi_boot.log"
+out="$(timeout 5 bash "$REPO/scripts/tools/watch_run.sh" probe "$T/pipapi_boot.log" 4000 20 0 2>&1)"; rc=$?
+check "Kit's pipapi traceback at boot is not FAILED" '[ "$rc" = 124 ] && case $out in *FAILED*) false ;; *) true ;; esac'
+printf '%s\nLearning iteration 12/4000\n' "$pipapi" > "$T/pipapi_training.log"
+out="$(timeout 5 bash "$REPO/scripts/tools/watch_run.sh" probe "$T/pipapi_training.log" 4000 20 0 2>&1)"; rc=$?
+check "and the run it precedes trains on" '[ "$rc" = 124 ] && case $out in *training*) true ;; *) false ;; esac'
+
+real='[default1]:Traceback (most recent call last):
+[default1]:  File "/workspace/ext/hcrl_isaaclab/scripts/train.py", line 210, in main
+[default1]:    runner.learn()
+[default1]:RuntimeError: CUDA error: an illegal memory access was encountered'
+printf '%s\n%s\n' "$pipapi" "$real" > "$T/real_tb.log"
+out="$(watch "$T/real_tb.log")"; rc=$?
+check "a real traceback beside the pipapi one is FAILED" '[ "$rc" = 1 ] && case $out in *FAILED*) true ;; *) false ;; esac'
+check "and the report shows the real one, not the boot noise" 'case $out in *illegal\ memory*) true ;; *) false ;; esac && case $out in *pip3-envs*) false ;; *) true ;; esac'
+printf 'Learning iteration 40/4000\nTraceback (most recent call last):\n  File "train.py", line 3, in <module>\nKeyError: '"'"'x'"'"'\n' > "$T/plain_tb.log"
+out="$(watch "$T/plain_tb.log")"; rc=$?
+check "an unprefixed traceback after progress is FAILED" '[ "$rc" = 1 ] && case $out in *KeyError*) true ;; *) false ;; esac'
+
 # the added patterns must not swallow the normal completion path
 printf 'Learning iteration 4000/4000\n' > "$T/done.log"
 out="$(watch "$T/done.log")"; rc=$?

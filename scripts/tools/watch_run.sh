@@ -16,8 +16,32 @@ esac
 ERRPAT='Traceback|error running python|Error executing|CUDA out of memory|Could not override|No contact sensors|Segmentation fault|Killed|srun: error|Disk quota exceeded|Worker exited -11'
 # benign noise: ranks starting together, srun failing to load its unused http_parser plugin, and srun answering an
 # internet scanner that probes its port (TACC amd-rtx) with version-mismatch errors while the step runs on
-BENIGNPAT='omni/kit/pipapi|no current CUDA context|ignore_import_check|_process_ext_pipapi_config|http_parser'
+BENIGNPAT='omni/kit/pipapi|pip3-envs|no current CUDA context|ignore_import_check|_process_ext_pipapi_config|http_parser'
 BENIGNPAT+='|Incompatible versions of client and server code|protocol_version [0-9]+ not supported|destroy_forward: no init'
+
+# A Python traceback is judged whole (header, frames, exception, chained "During handling ..." tracebacks): noise when
+# any of its lines is benign (Kit's pipapi pip-env race at boot, on every rank), else a failure. Lines outside a
+# traceback count when they match ERRPAT and not BENIGNPAT. mode=count prints the count, mode=lines the offending lines.
+# Rank prefixes such as "[default3]:" are ignored. (No single quotes: the program is passed in quotes.)
+ERRAWK='
+function strip(s) { sub(/^\[[^]]*\]:[ ]?/, "", s); return s }
+function close_tb() { if (intb && !ok_tb) { bad++; if (mode == "lines") print tb } intb = 0; after = 0 }
+{
+    s = strip($0)
+    if (s ~ /Traceback \(most recent call last\)/) {
+        if (!intb) { intb = 1; ok_tb = 0; tb = $0 }
+        after = 0; next
+    }
+    if (intb) {
+        if (s ~ benign) ok_tb = 1
+        if (s ~ /^[[:space:]]/ || s == "" || s ~ /During handling of the above exception|direct cause of the following exception/) {
+            if (s ~ /^[[:space:]]/ && after) close_tb(); else next
+        } else if (!after) { after = 1; tb = tb " / " $0; next }
+        else close_tb()
+    }
+    if (!intb && s ~ err && s !~ benign) { bad++; if (mode == "lines") print $0 }
+}
+END { close_tb(); if (mode == "count") print bad + 0 }'
 
 CM=${WATCH_RUN_CONTROL_PATH:-$HOME/.ssh/cm/%C}
 mkdir -p "$(dirname "${CM/\%C/x}")" 2>/dev/null || true
@@ -37,7 +61,7 @@ it=\$(grep -aoE 'Learning iteration [0-9]+/' "\$f" | tail -1 | grep -oE '[0-9]+'
 age=\$(( \$(date +%s) - \$(stat -c %Y "\$f") ))
 ln=\$(grep -anE 'Learning iteration [0-9]+/' "\$f" | tail -1 | cut -d: -f1)
 # errors count only after the last progress line
-err=\$(tail -n +\${ln:-1} "\$f" | grep -avE '$BENIGNPAT' | grep -acE '$ERRPAT')
+err=\$(tail -n +\${ln:-1} "\$f" | awk -v mode=count -v err='$ERRPAT' -v benign='$BENIGNPAT' '$ERRAWK')
 echo "it=\${it:-none} age=\$age err=\$err"
 EOF
 }
@@ -59,7 +83,8 @@ while true; do
 
     if [ "${err:-0}" != "0" ]; then
         echo "[$LABEL] FAILED:"
-        printf 'grep -aE %q "%s" | grep -avE %q | tail -3 | cut -c1-200\n' "$ERRPAT" "$LOG" "$BENIGNPAT" | run_remote
+        printf 'awk -v mode=lines -v err=%q -v benign=%q %q "%s" | tail -3 | cut -c1-200\n' \
+            "$ERRPAT" "$BENIGNPAT" "$ERRAWK" "$LOG" | run_remote
         exit 1
     fi
     [ -n "$it" ] && [ "$it" != "$last_it" ] && { last_it=$it; last_change=$now; }
