@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`just res`: one view of every GPU on every compute pool, probed live (never declared), plus card leases."""
+"""`pls res`: one view of every GPU on every compute pool, probed live (never declared), plus card leases."""
 
 from __future__ import annotations
 
@@ -152,7 +152,7 @@ def select_pools(pools: list[Pool], prefixes: list[str] | None) -> list[Pool]:
     """Pools whose name starts with one of `prefixes` (all pools when none are given)."""
     chosen = [p for p in pools if not prefixes or any(p.name.startswith(sel) for sel in prefixes)]
     if not chosen:
-        sys.exit(f"[res] no pool matches {', '.join(prefixes or [])} (see: just res pools)")
+        sys.exit(f"[res] no pool matches {', '.join(prefixes or [])} (see: pls res pools)")
     return chosen
 
 
@@ -245,7 +245,7 @@ def _choose(seen: list[tuple[Card, Report]], taken: set[str], args: argparse.Nam
         card, rep = _named(spec, seen)
         key = ls.card_key(card)
         if key in taken:
-            sys.exit(f"[res] {spec} is leased; move it with `just res transfer {spec} --to <holder>`; nothing claimed")
+            sys.exit(f"[res] {spec} is leased; move it with `pls res transfer {spec} --to <holder>`; nothing claimed")
         if card.state != "free" and not (adopt and card.state in ("busy", "held")):
             hint = "; pass --adopt to take over the run on it" if card.state in ("busy", "held") else ""
             sys.exit(f"[res] {spec} is {card.state}{hint}; nothing claimed")
@@ -259,7 +259,7 @@ def claim(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple[ls.Le
     """Lease named cards, or --any free ones, after a fresh probe; all or nothing (exits when refused).
 
     Args:
-        args: cards, any, count, min_free_gb, pool, holder, note and for_ as `just res claim` takes them, plus
+        args: cards, any, count, min_free_gb, pool, holder, note and for_ as `pls res claim` takes them, plus
             optional adopt and run.
         pools: Pools to probe.
 
@@ -300,7 +300,7 @@ def cmd_claim(args: argparse.Namespace, pools: list[Pool]) -> None:
         print(f"{verb} {lease.id}: {lease.card} ({rep.pool}{box}{run}) for {lease.holder}")
     print(
         f"A lease ends after {windows['grace_min']:g} min unused or {windows['idle_min']:g} min idle, measured from "
-        "the first idle observation. Release early with: just res release <id> --holder <you>"
+        "the first idle observation. Release early with: pls res release <id> --holder <you>"
     )
 
 
@@ -391,7 +391,7 @@ def _duration(text: str) -> float:
 
 def main() -> None:
     """Parse the CLI and run a command."""
-    parser = argparse.ArgumentParser(prog="just res", description=__doc__)
+    parser = argparse.ArgumentParser(prog="pls res", description=__doc__)
     sub = parser.add_subparsers(dest="cmd")
     st = sub.add_parser("status", help="probe every pool and show each card's state and lease")
     st.add_argument("--pool", action="append", help="only these pools (repeatable; prefix match)")

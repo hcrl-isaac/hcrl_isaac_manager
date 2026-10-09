@@ -76,7 +76,7 @@ launch bash "$REPO/scripts/larg/train.sh" hazard hhlm/T1-Kick-v0 r grp lots > "$
 sleep 1
 check "a num_envs that is not a number launches nothing" "[ ! -e '$T/ran' ] && grep -q 'num_envs must be a number' '$T/out10'"
 
-# LARG_HOLDER leases the pinned cards through `just res claim` first; a refused claim launches nothing
+# LARG_HOLDER leases the pinned cards through `pls res claim` first; a refused claim launches nothing
 printf '#!/usr/bin/env bash\necho "$@" > "%s/claimed"\nexit "${CLAIM_RC:-0}"\n' "$T" > "$T/bin/python3"
 chmod +x "$T/bin/python3"
 rm -f "$T/ran"

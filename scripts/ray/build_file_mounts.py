@@ -42,7 +42,7 @@ def _source_mode() -> bool:
 
 def main() -> None:
     resources = os.path.join(MANAGER_DIR, "resources")
-    # the same repo list `just run WT=` selects, so a Ray job ships the same worktree set
+    # the same repo list `pls run --wt` selects, so a Ray job ships the same worktree set
     candidates = [os.path.join(resources, repo) for repo in workspace_repos(resources)]
     # WT=<name>: ship the named worktree instead of the main checkout for any repo that has one
     wt = os.environ.get("WT", "")

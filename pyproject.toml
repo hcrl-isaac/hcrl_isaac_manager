@@ -4,14 +4,14 @@ version = "0.1.0"
 description = "Environment for running Ray scripts from HCRL Isaac Manager"
 requires-python = ">=3.11,<3.14"
 
-# Manager-only dependencies (the lightweight base installed by `just deps`, used by `just ray`
-# and `just cluster`). The heavy Isaac Lab / Isaac Sim stack and the editable workspace packages
-# (hcrl_isaaclab, robot_rl, *_tasks, *_robots) are layered on top by `just setup` into the SAME
-# `ilab` venv -- see the justfile.
+# Manager-only dependencies (the lightweight base installed by `pls deps`, used by `pls cluster`
+# and `pls run`). The heavy Isaac Lab / Isaac Sim stack and the editable workspace packages
+# (hcrl_isaaclab, robot_rl, *_tasks, *_robots) are layered on top by `pls setup` into the SAME
+# `ilab` venv -- see src/hcrl_cli/workspace.py.
 dependencies = [
     "ray[default]==2.50.1",
     "rich==14.2.0",
-    "questionary==2.1.0",   # interactive workspace selector (just configure) + pretty just prompts
+    "questionary==2.1.0",   # interactive workspace selector (pls setup) + pretty pls prompts
     # questionary 2.1.0 breaks on prompt_toolkit >=3.0.51 (its _fix_unecessary_blank_lines reaches into
     # layout internals that changed): AttributeError 'VSplit' object has no attribute 'content'. Pin below.
     "prompt_toolkit==3.0.48",

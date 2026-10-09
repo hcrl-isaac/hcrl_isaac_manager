@@ -390,7 +390,7 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
     label = f"{site} ({', '.join(p.name for p in pools)})"
     if not _master_alive(login):
         return [
-            Report(label, "slurm", error=f"SSH master down: state unknown (just cluster {pools[0].name} develop open)")
+            Report(label, "slurm", error=f"SSH master down: state unknown (pls cluster {pools[0].name} develop open)")
         ]
     fmt = "%i|%P|%a|%T|%N|%D|%L|%S|%b|%j"
     try:

@@ -884,7 +884,7 @@ def _lease_card(lease_id: str, holder: str, pools: list[Pool]) -> tuple[Pool, st
     except ls.LeaseStoreError as exc:
         sys.exit(f"[res] {exc}")
     if not found:
-        sys.exit(f"[res] no lease {lease_id} (see: just res leases)")
+        sys.exit(f"[res] no lease {lease_id} (see: pls res leases)")
     lease = found[0]
     if lease.holder != holder:
         sys.exit(f"[res] lease {lease_id} is held by {lease.holder}, not {holder}")
@@ -975,7 +975,7 @@ def _print_detached(stage: Stage, taken: ls.Lease | None) -> None:
         print(f"[res] stop:   {on('kill -TERM -- -$(cat ' + q(stage.dir + '/pid') + ')')}", file=sys.stderr)
     if taken is not None:
         print(
-            f"[res] lease {taken.id} stays held; it releases once the card idles, or: just res release {taken.id}",
+            f"[res] lease {taken.id} stays held; it releases once the card idles, or: pls res release {taken.id}",
             file=sys.stderr,
         )
 
@@ -1017,7 +1017,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             min_free_gb=args.min_free_gb,
             pool=args.pool,
             holder=args.holder,
-            note=args.note or f"res eval {os.path.basename(script)}",
+            note=args.note or f"pls run {os.path.basename(script)}",
             for_=0.0,
         )
         [(taken, card, rep)] = claim(ns, usable)[0]

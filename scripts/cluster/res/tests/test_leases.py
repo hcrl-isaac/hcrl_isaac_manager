@@ -1,4 +1,4 @@
-"""Unit tests for card leases (run all script tests: just test-scripts). Every test uses a temporary store."""
+"""Unit tests for card leases (run all script tests: pls test-scripts). Every test uses a temporary store."""
 
 import argparse
 import contextlib
@@ -354,7 +354,7 @@ class CommandTest(TempStore):
         self.claim("mckennie:0")
         with self.assertRaises(SystemExit) as ctx:
             self.claim("mckennie:0", adopt=True, holder="b")
-        self.assertIn("just res transfer", str(ctx.exception.code))
+        self.assertIn("pls res transfer", str(ctx.exception.code))
         self.cards = [card(index=3, state="unknown")]
         with self.assertRaises(SystemExit):
             self.claim("mckennie:3", adopt=True)

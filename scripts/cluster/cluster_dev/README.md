@@ -14,7 +14,7 @@ persistent **ControlMaster** socket — opened once, kept warm — is what avoid
 ## User command
 ```bash
 # from the manager dir; the leading name selects scripts/cluster/config/<cluster>/
-just cluster rtx-small develop start   # approve ONE 2FA prompt; rest is non-interactive (--no-stage: ship no code)
+pls cluster rtx-small develop start   # approve ONE 2FA prompt; rest is non-interactive (--no-stage: ship no code)
 ```
 `develop` dispatches to `cluster_dev.sh` with `CLUSTER` set. `start` opens the SSH master (the
 only 2FA prompt), stages the workspace as the code tree `default` (below), submits the sentinel job, and launches a
@@ -22,11 +22,11 @@ only 2FA prompt), stages the workspace as the code tree `default` (below), submi
 
 ## Tracking / using it (no credentials needed once the master is up)
 ```bash
-just cluster rtx-small develop status      # job id / state / node / master+watcher health / live squeue
-just cluster rtx-small develop attach      # interactive shell on the compute node (once RUNNING)
-just cluster rtx-small develop exec -- <cmd>  # run <cmd> inside the Apptainer container, on the newest `default`
-just cluster rtx-small develop stage       # ship local edits: the workspace as on disk -> a new `default`
-just cluster rtx-small develop stop        # scancel the job + close the master
+pls cluster rtx-small develop status      # job id / state / node / master+watcher health / live squeue
+pls cluster rtx-small develop attach      # interactive shell on the compute node (once RUNNING)
+pls cluster rtx-small develop exec -- <cmd>  # run <cmd> inside the Apptainer container, on the newest `default`
+pls cluster rtx-small develop stage       # ship local edits: the workspace as on disk -> a new `default`
+pls cluster rtx-small develop stop        # scancel the job + close the master
 ```
 The watcher writes `~/.cluster_dev/<cluster>/state` (and `watch.log` next to it); when
 `JOB_STATE=RUNNING` and `NODE` is set, the box is ready. A Claude session can poll `status` and
@@ -38,12 +38,12 @@ command string inside the container.
 
 ## Code trees (how code reaches a cluster)
 ```bash
-just cluster delta develop stage                       # the workspace as on disk (uncommitted work too) -> `default`
-just cluster delta develop stage push-foot hhlm_tasks=feat/push-foot-contact-penalty hcrl_isaaclab=main robot_rl=main
-just cluster delta develop exec --tree push-foot -- python scripts/train.py --task ...   # (--detach as usual)
-just cluster delta develop trees                       # list staged trees
-just cluster delta develop trees rm push-foot-<fp>     # remove one (refused while a job that used it runs)
-just cluster delta develop trees rm --partials         # clear interrupted stages older than an hour
+pls cluster delta develop stage                       # the workspace as on disk (uncommitted work too) -> `default`
+pls cluster delta develop stage push-foot hhlm_tasks=feat/push-foot-contact-penalty hcrl_isaaclab=main robot_rl=main
+pls cluster delta develop exec --tree push-foot -- python scripts/train.py --task ...   # (--detach as usual)
+pls cluster delta develop trees                       # list staged trees
+pls cluster delta develop trees rm push-foot-<fp>     # remove one (refused while a job that used it runs)
+pls cluster delta develop trees rm --partials         # clear interrupted stages older than an hour
 ```
 `stage` uploads repos into a new `<CLUSTER_ISAACLAB_DIR>/trees/<name>-<fingerprint>/`. Nothing is mirrored onto a
 shared workspace, so a run never sees code change under it:
@@ -56,8 +56,8 @@ shared workspace, so a run never sees code change under it:
 - `exec` without `--tree`, `start` and `pls run --on <name> --batch` (without `--tree`) use the newest `default`; each resolves
   the tree once, so a step or queued job keeps its code while newer trees are staged.
 - A repo is given at a ref (fetched; `origin/<ref>` preferred) or as a local worktree top
-  (`hcrl_isaaclab=./resources/hcrl_isaaclab/worktrees/wt`; `/`, `./` or `../`, relative to the manager dir under
-  `just`), which carries its tracked and untracked non-ignored files.
+  (`hcrl_isaaclab=./resources/hcrl_isaaclab/worktrees/wt`; `/`, `./` or `../`, relative to the manager dir,
+  where `pls` runs), which carries its tracked and untracked non-ignored files.
 - A named stage takes every repo it does not name from the newest `default` (code hardlinked, asset repos copied),
   or links the cluster's shared checkout where no `default` is staged yet; the MANIFEST says which.
 - Files identical to one in a recent tree are hardlinked instead of re-sent, never to the shared checkout (which

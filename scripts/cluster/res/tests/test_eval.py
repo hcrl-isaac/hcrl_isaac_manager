@@ -1,4 +1,4 @@
-"""`just res eval` with stubs and no GPU: argument checks, pool refusal, checkpoints, code snapshots, lease release,
+"""`pls run --on <card>` (evaluate.py) with stubs and no GPU: argument checks, pool refusal, checkpoints, code snapshots, lease release,
 timeouts and exit status. ssh pools run against a stub `ssh` that executes locally, so rsync and the remote shell
 commands are real."""
 
@@ -218,7 +218,7 @@ class SlurmTest(unittest.TestCase):
         self.assertIn("> /workspace/artifacts/res-eval/x/status", runner)
 
     def test_a_staged_tree_id_is_read_from_develop_stage(self) -> None:
-        out = "  robot_rl /p abc worktree 123\nRun with: just cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
+        out = "  robot_rl /p abc worktree 123\nRun with: pls cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
         done = mock.Mock(returncode=0, stdout=out)
         t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
         with (

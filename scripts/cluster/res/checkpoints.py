@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checkpoint refs for `just res eval`: parse them anywhere, download W&B ones under the ilab venv (needs wandb).
+"""Checkpoint refs for `pls run --on <card>`: parse them anywhere, download W&B ones under the ilab venv (needs wandb).
 
 A ref is a local path, a W&B run URL (https://wandb.ai/<entity>/<project>/runs/<id>), or <entity>/<project>/<id>,
 optionally suffixed with @<iteration> (model_<iteration>.pt); without it the run's latest checkpoint is used.
