@@ -341,6 +341,10 @@ class RunTest(unittest.TestCase):
         h = self._pls("--on", "ray", "--", "robot_rl:scripts/census.py")
         self.assertEqual(h.cmd[1:3], ["run", "robot_rl/scripts/census.py"])
         self._refused("--on", "ray", "--", "./probe.py")
+        h = self._pls("--on", "ray", "--distributed", "--", "train", "--task", "T")
+        self.assertEqual(h.cmd, [launch.RAY_BACKEND, "job_distributed", "--task", "T"])
+        self._refused("--on", "ray", "--distributed", "--", "census")
+        self._refused("--on", "any", "--holder", "me", "--distributed", "--", "train")
 
     def test_help_before_the_double_dash_is_ours_after_it_the_scripts(self) -> None:
         self.assertEqual(self._pls("--on", "any", "--help").cmd, [*launch.CARD_CMD, "--help"])
