@@ -191,6 +191,47 @@ def fetch_checkpoint(ref: ck.CheckpointRef) -> str:
     return lines[-1]
 
 
+DATA_REPOS = ("motion_datasets",)  # data repos besides the *_robots asset repos: on no PYTHONPATH
+_LFS_POINTER = b"version https://git-lfs.github.com/spec/v1"
+
+
+def _is_data(repo: str) -> bool:
+    return repo in DATA_REPOS or repo.endswith("_robots")
+
+
+def local_data(workspace: str, wt: str) -> dict[str, str]:
+    """The data and asset repos (``motion_datasets``, ``*_robots``) that the worktree set ``wt`` has a worktree of.
+
+    Args:
+        workspace: Manager checkout whose resources/ holds the repos.
+        wt: Worktree-set name, or "" for none.
+
+    Returns:
+        Repo name -> worktree path; the rest come from the target's own copies.
+    """
+    resources = os.path.join(workspace, "resources")
+    if not wt or not os.path.isdir(resources):
+        return {}
+    return {
+        repo: os.path.join(resources, repo, "worktrees", wt)
+        for repo in sorted(os.listdir(resources))
+        if _is_data(repo) and os.path.isdir(os.path.join(resources, repo, "worktrees", wt))
+    }
+
+
+def lfs_pointers(src: str) -> list[str]:
+    """Files of a checkout that are git-lfs pointers rather than their content (relative paths)."""
+    found = []
+    for rel in code_files(src):
+        path = os.path.join(src, rel.decode())
+        with contextlib.suppress(OSError):
+            if os.path.isfile(path) and os.path.getsize(path) <= 1024:
+                with open(path, "rb") as f:
+                    if f.read(len(_LFS_POINTER)) == _LFS_POINTER:
+                        found.append(rel.decode())
+    return found
+
+
 def local_code(workspace: str, wt: str) -> dict[str, str]:
     """The package repos a run imports (core, RL package, ``*_tasks``), as worktree-set or main checkout paths.
 
@@ -213,7 +254,7 @@ def local_code(workspace: str, wt: str) -> dict[str, str]:
         wdir = os.path.join(main, "worktrees", wt) if wt else ""
         overridden |= bool(wdir) and os.path.isdir(wdir)
         code[repo] = wdir if wdir and os.path.isdir(wdir) else main
-    if wt and not overridden:
+    if wt and not overridden and not local_data(workspace, wt):
         sys.exit(f"[res] --wt {wt}: no repo under {resources} has worktrees/{wt}")
     return code
 
@@ -577,12 +618,14 @@ class Stage:
             return dest
         return self.put(src, f"ckpt/{name}/{os.path.basename(src)}")
 
-    def snapshot(self, repo: str, src: str) -> tuple[str, str]:
-        """Bring one package repo to an ssh target as a read-only ``<scratch>/res-eval/code/<repo>-<fingerprint>``.
+    def snapshot(self, repo: str, src: str, outputs: bool = True) -> tuple[str, str]:
+        """Bring one repo to an ssh target as a read-only ``<scratch>/res-eval/code/<repo>-<fingerprint>``.
 
         Args:
             repo: Repo name.
             src: Local checkout or worktree.
+            outputs: Link the repo's run-output dirs to the box workspace's copy (package repos; never data repos,
+                whose workspace copy may not exist).
 
         Returns:
             The snapshot path and the repo's line for the stage MANIFEST.
@@ -597,12 +640,16 @@ class Stage:
         # repo, as a staged tree's does on a cluster: the snapshot itself is read-only and shared between runs
         def rw(path: str) -> str:
             """Shell that links each output dir of ``path`` to the workspace's, each step ending in ``&&``."""
+            if not outputs:
+                return ""
             steps = []
             for d in SNAPSHOT_RW_DIRS:
                 target = q(f"{self.t.workspace}/resources/{repo}/{d}")
                 steps.append(f"mkdir -p {target} && {{ [ -e {path}/{d} ] || ln -s {target} {path}/{d}; }} &&")
             return " ".join(steps)
 
+        if self._ssh(f"[ -f {q(snap)}/.complete ]").returncode == 0 and not outputs:
+            return snap, line
         if self._ssh(f"[ -f {q(snap)}/.complete ]").returncode == 0:
             # a snapshot made before these links existed gets them now
             missing = " || ".join(f"[ ! -e {q(snap)}/{d} ]" for d in SNAPSHOT_RW_DIRS)
@@ -636,8 +683,11 @@ class Stage:
             sys.exit(f"[res] could not finish the {repo} snapshot on {self.t.host}")
         return snap, line
 
-    def sync_code(self, code: dict[str, str]) -> tuple[list[str], list[str]]:
+    def sync_code(self, code: dict[str, str], data: dict[str, str] | None = None) -> tuple[list[str], list[str]]:
         """PYTHONPATH entries that import ``code`` on the target, and the MANIFEST lines describing them.
+
+        ``data`` repos (a worktree set's ``motion_datasets`` / ``*_robots``) ship to an ssh target as snapshots too,
+        linked into ``<stage>/resources/`` in place of the box's copies but on no PYTHONPATH.
 
         A local target imports the checkouts in place. A remote one gets every package repo shipped: a worktree-set
         repo as it is on disk, any other at the main checkout's HEAD commit (its uncommitted edits stay here, and a
@@ -647,10 +697,26 @@ class Stage:
 
         Args:
             code: Repo name -> local checkout path.
+            data: Data repo name -> worktree path.
 
         Returns:
             The PYTHONPATH entries and the MANIFEST lines.
         """
+        data = data or {}
+        if data and self.t.kind != "ssh":
+            where = (
+                "a local run reads resources/ in place"
+                if self.t.kind == "local"
+                else ("on a cluster, stage them with `develop stage <name> <repo>=<path>`")
+            )
+            sys.exit(f"[res] --wt data repos ({', '.join(data)}) ship to ssh targets only; {where}")
+        for repo, src in data.items():
+            pointers = lfs_pointers(src)
+            if pointers:
+                sys.exit(
+                    f"[res] {repo} worktree {src} has {len(pointers)} git-lfs pointer(s), not content"
+                    f" ({', '.join(pointers[:3])}{', ...' if len(pointers) > 3 else ''}): run `git lfs pull` there"
+                )
         if self.t.kind == "local":
             return list(code.values()), [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
         main = os.path.join(local_workspace(), "resources")
@@ -691,6 +757,9 @@ class Stage:
             else:
                 line = f"{repo} {kept}/{repo} (not a git checkout here: the box's copy)"
             lines.append(line)
+        for repo, src in data.items():
+            snaps[repo], line = self.snapshot(repo, src, outputs=False)
+            lines.append(f"{line} (data)")
         links = " ".join(f"ln -s {q(s)} {q(res)}/{repo};" for repo, s in snaps.items())
         assets = f'for d in {q(self.t.workspace)}/resources/*/; do n=$(basename "$d"); '
         assets += f'[ -e {q(res)}/"$n" ] || ln -s "${{d%/}}" {q(res)}/"$n"; done'
@@ -1078,7 +1147,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         paths = {ref.name: container_path(t, stage.link_checkpoint(fetch_checkpoint(ref), ref.name)) for ref in refs}
         source = t.workspace if t.kind == "local" else local_workspace()
         code = local_code(source, args.wt)
-        pythonpath, manifest = stage.sync_code(code)
+        pythonpath, manifest = stage.sync_code(code, local_data(source, args.wt))
         stage.write("\n".join(manifest) + "\n", "MANIFEST", mode=0o644)
         # snapshots are read-only, runs may be concurrent and a stage is removed after a success, so relative outputs
         # (train.py's logs/, a census's tables) go to a writable working dir of this run's own, kept afterwards

@@ -258,6 +258,16 @@ class LocalCodeTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             ev.local_code(str(self.tmp), "nope")
 
+    def test_a_set_of_data_worktrees_only_is_a_valid_set(self) -> None:
+        (self.tmp / "resources" / "motion_datasets" / "worktrees" / "bundle").mkdir(parents=True)
+        (self.tmp / "resources" / "ssti_robots" / "worktrees" / "bundle").mkdir(parents=True)
+        code = ev.local_code(str(self.tmp), "bundle")
+        self.assertTrue(code["robot_rl"].endswith("resources/robot_rl"), "packages come from the main checkouts")
+        data = ev.local_data(str(self.tmp), "bundle")
+        self.assertEqual(sorted(data), ["motion_datasets", "ssti_robots"])
+        self.assertTrue(data["motion_datasets"].endswith("motion_datasets/worktrees/bundle"))
+        self.assertEqual(ev.local_data(str(self.tmp), ""), {})
+
 
 class SshStageTest(Isolated):
     """The ssh code path against a stub ssh: snapshots, links and the shared checkout are real directories."""
@@ -295,6 +305,38 @@ class SshStageTest(Isolated):
         self.assertEqual((snap / "mod.py").read_text(), "x = 1\n")
         self.assertEqual(stage.pp, [f"{stage.dir}/resources/robot_rl"])
         self.assertEqual(os.path.realpath(f"{stage.dir}/resources/hcrl_robots"), str(self.ws / "resources/hcrl_robots"))
+
+    def _data(self) -> Path:
+        data = self.tmp / "local" / "motion_datasets_wt"
+        _git_repo(data)
+        (data / "lafan1").mkdir()
+        (data / "lafan1" / "bundle.pt").write_bytes(b"\x80" * 4096)
+        subprocess.run(["git", "-C", str(data), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(data), "commit", "-qm", "bundle"], check=True)
+        return data
+
+    def test_a_data_worktree_ships_as_a_snapshot_on_no_pythonpath(self) -> None:
+        data = self._data()
+        stage = ev.Stage(self.t)
+        stage.make()
+        with contextlib.redirect_stderr(io.StringIO()):
+            pp, manifest = stage.sync_code({"robot_rl": str(self.src)}, {"motion_datasets": str(data)})
+        snap = Path(os.path.realpath(f"{stage.dir}/resources/motion_datasets"))
+        self.assertTrue(snap.name.startswith("motion_datasets-") and (snap / "lafan1" / "bundle.pt").is_file())
+        self.assertEqual(pp, [f"{stage.dir}/resources/robot_rl"], "data is linked, never imported")
+        self.assertTrue(manifest[-1].endswith("(data)"))
+        self.assertFalse((self.ws / "resources" / "motion_datasets").exists(), "nothing created in the box workspace")
+        self.assertFalse((snap / "logs").exists(), "no run-output links in a data snapshot")
+
+    def test_a_data_worktree_with_lfs_pointers_is_refused(self) -> None:
+        data = self._data()
+        (data / "lafan1" / "walk.pt").write_text("version https://git-lfs.github.com/spec/v1\noid sha256:ab\nsize 9\n")
+        stage = ev.Stage(self.t)
+        stage.make()
+        with self.assertRaises(SystemExit) as ctx, contextlib.redirect_stderr(io.StringIO()):
+            stage.sync_code({"robot_rl": str(self.src)}, {"motion_datasets": str(data)})
+        self.assertIn("git-lfs pointer", str(ctx.exception.code))
+        self.assertIn("lafan1/walk.pt", str(ctx.exception.code))
 
     def test_a_repo_first_linked_then_shipped_never_writes_through_the_link(self) -> None:
         stage = self._stage()
