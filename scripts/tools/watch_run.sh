@@ -3,7 +3,8 @@
 #
 #   watch_run.sh <label> <log> <target-iters> [stall_min] [report_every] [metric-grep]
 #
-# <log> is a local path, or user@host:/path when the log lands on a different host from the process.
+# <log> is a local path, or user@host:/path when the log lands on a different host from the process. A run that
+# logs every N iterations finishes when it closes (W&B's sync lines after its last iteration) within N of the target.
 set -u
 
 LABEL=$1; LOG_SPEC=$2; TARGET=$3; STALL_MIN=${4:-20}; EVERY=${5:-100}; MET=${6:-}
@@ -68,13 +69,16 @@ f="$LOG"
 if [ ! -e "\$f" ]; then echo "missing"; exit 0; fi
 it=\$(grep -aoE 'Learning iteration [0-9]+/' "\$f" | tail -1 | grep -oE '[0-9]+')
 age=\$(( \$(date +%s) - \$(stat -c %Y "\$f") ))
+prev=\$(grep -aoE 'Learning iteration [0-9]+/' "\$f" | tail -2 | head -1 | grep -oE '[0-9]+')
 ln=\$(grep -anE 'Learning iteration [0-9]+/' "\$f" | tail -1 | cut -d: -f1)
-# errors count only after the last progress line
+# errors and the run's closing lines count only after the last progress line (W&B prints "View run" at start too)
 err=\$(tail -n +\${ln:-1} "\$f" | awk -v mode=count -v err='$ERRPAT' -v benign='$BENIGNPAT' '$ERRAWK')
-echo "it=\${it:-none} age=\$age err=\$err"
+closed=\$(tail -n +\${ln:-1} "\$f" | grep -acE 'Synced [0-9]+ W&B file|View run .* at:')
+echo "it=\${it:-none} prev=\${prev:-none} age=\$age err=\$err closed=\$closed"
 EOF
 }
 
+POLL_S=120  # seconds between probes
 started=$(date +%s); last_it=-1; last_change=$started; lastc=-1; booted=0
 while true; do
     st=$(probe)
@@ -87,8 +91,10 @@ while true; do
         fi
         echo "[$LABEL] not started yet"; sleep 120; continue
     fi
-    it=${st#*it=}; it=${it%% *}; age=${st#*age=}; age=${age%% *}; err=${st##*err=}
+    field() { local v=${st#* $1=}; [ "$v" = "$st" ] && v=${st#$1=}; echo "${v%% *}"; }
+    it=$(field it); prev=$(field prev); age=$(field age); err=$(field err); closed=$(field closed)
     [ "$it" = none ] && it=""
+    [ "$prev" = none ] && prev=$it
 
     if [ "${err:-0}" != "0" ]; then
         echo "[$LABEL] FAILED:"
@@ -97,7 +103,18 @@ while true; do
         exit 1
     fi
     [ -n "$it" ] && [ "$it" != "$last_it" ] && { last_it=$it; last_change=$now; }
-    [ $booted -eq 0 ] && [ -n "$it" ] && { booted=1; echo "[$LABEL] training (iter $it)"; }
+    if [ $booted -eq 0 ] && [ -n "$it" ]; then
+        booted=1; echo "[$LABEL] training (iter $it)"
+        [ "$EVERY" -gt 0 ] && lastc=$((it / EVERY))
+    fi
+    # a run that logs every N iterations closes up to N past its last progress line
+    if [ -n "$it" ] && [ "${closed:-0}" != "0" ]; then
+        gap=$((it - prev)); [ "$gap" -gt 0 ] || gap=0
+        if [ $((it + gap)) -ge $((TARGET - 5)) ]; then
+            echo "[$LABEL] finished: the run closed after iter $it (logs every ${gap:-1}, target $TARGET)"; exit 0
+        fi
+        echo "[$LABEL] FAILED: the run closed at iter $it, short of target $TARGET"; exit 1
+    fi
     # a run may stop a few short of the nominal target
     if [ -n "$it" ] && [ "$it" -ge $((TARGET - 5)) ]; then
         echo "[$LABEL] finished at iter $it (target $TARGET)"; exit 0
@@ -111,12 +128,14 @@ while true; do
         echo "[$LABEL] STALLED: iter stuck at ${last_it} for ${STALL_MIN}+ min (log still growing)"
         last_change=$now
     fi
-    if [ -n "$it" ] && [ "$EVERY" -gt 0 ] && [ -n "$MET" ]; then
+    if [ -n "$it" ] && [ "$EVERY" -gt 0 ]; then  # a progress line every report_every iterations
         c=$((it / EVERY))
         if [ "$c" != "$lastc" ]; then
             lastc=$c
-            echo "[$LABEL] iter $it $(printf 'grep -aE %q "%s" | tail -3 | tr -s " " | paste -sd" " | cut -c1-200\n' "$MET" "$LOG" | run_remote)"
+            line="[$LABEL] iter $it"
+            [ -n "$MET" ] && line="$line $(printf 'grep -aE %q "%s" | tail -3 | tr -s " " | paste -sd" " | cut -c1-200\n' "$MET" "$LOG" | run_remote)"
+            echo "$line"
         fi
     fi
-    sleep 120
+    sleep "${POLL_S:-120}"
 done

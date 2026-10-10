@@ -90,5 +90,24 @@ printf 'Learning iteration 4000/4000\n' > "$T/done.log"
 out="$(watch "$T/done.log")"; rc=$?
 check "reaching the target is FINISHED" '[ "$rc" = 0 ] && case $out in *finished*) true ;; *) false ;; esac'
 
+# FB-CPR logs every 50 iterations: the last line is 28400/28444, then it saves, syncs W&B and exits
+printf 'Learning iteration 28350/28444\nLearning iteration 28400/28444\nsaved model_28443.pt\nwandb: Synced 6 W&B file(s), 0 media file(s)\n' > "$T/closed.log"
+out="$(bash "$REPO/scripts/tools/watch_run.sh" probe "$T/closed.log" 28443 20 0)"; rc=$?
+check "a run that closes within one log interval of the target is FINISHED" '[ "$rc" = 0 ] && case $out in *finished*) true ;; *) false ;; esac'
+printf 'Learning iteration 100/4000\nLearning iteration 150/4000\nwandb: \xf0\x9f\x9a\x80 View run r at: https://wandb.ai/x\n' > "$T/short.log"
+out="$(watch "$T/short.log")"; rc=$?
+check "a run that closes far short of the target is FAILED" '[ "$rc" = 1 ] && case $out in *short\ of\ target*) true ;; *) false ;; esac'
+printf 'wandb: \xf0\x9f\x9a\x80 View run r at: https://wandb.ai/x\nLearning iteration 10/4000\n' > "$T/starting.log"
+out="$(timeout 5 bash "$REPO/scripts/tools/watch_run.sh" probe "$T/starting.log" 4000 20 0 2>&1)"; rc=$?
+check "W&B's start line before training is not a close" '[ "$rc" = 124 ] && case $out in *training*) true ;; *) false ;; esac'
+
+# report_every prints a progress line per that many iterations, metric grep or not (a copy polls every second)
+sed 's/^POLL_S=120 /POLL_S=1 /' "$REPO/scripts/tools/watch_run.sh" > "$T/watch_fast.sh"
+printf 'Learning iteration 50/4000\n' > "$T/progress.log"
+( for i in 100 150 200 250; do sleep 0.6; printf 'Learning iteration %s/4000\n' "$i" >> "$T/progress.log"; done ) &
+out="$(timeout 5 bash "$T/watch_fast.sh" probe "$T/progress.log" 4000 20 100 2>&1)"
+wait
+check "report_every prints progress without a metric grep" 'case $out in *"iter 1"[05]0*) true ;; *) false ;; esac && case $out in *"iter 2"[05]0*) true ;; *) false ;; esac'
+
 [ "$fails" -eq 0 ] || exit 1
 echo "all watch_run exit tests passed"
