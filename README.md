@@ -98,46 +98,40 @@ x-axis in line graphs / media:
 
 ## Asynchronous Video Logging
 
-Environments that do not require cameras during training **can** be deployed to GPU clusters without
-RT cores, e.g. A100s and H100s. The LARG A40s are in the same boat until the Isaac Sim 6.0 upgrade
-(driver 595 crashes the 5.1 renderer — see [LARG rendering](scripts/larg/README.md#rendering-does-not-work-on-larg-since-2026-06-12)).
-These runs will not support video recording synchronously during training. Instead, the trainer logs rollout state to W&B and tags the run; a separate **async video
-logger** running on any local machine that meets Isaac Sim's
-[GPU requirements](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/requirements.html#system-requirements)
-then discovers the tagged run, pulls its checkpoints, renders the videos, and uploads them back to
-the same W&B run.
+A run on a card without RT cores (A100, H100, Horizon GB200), or one that leaves its card to training, records its
+videos asynchronously: the trainer tags the W&B run, and a recorder on **any free RT-capable card** finds the tagged
+run, pulls its checkpoints, renders the clips and uploads them back to the same run. Every RT card renders: the
+LARG and Delta A40s, Stampede3's RTX PRO 6000s and the 5090s (driver 595/615 boxes through the Vulkan clamp layer,
+see [LARG rendering](scripts/larg/README.md#rendering-on-larg-the-vulkan-clamp-layer)). Take whichever is free in
+`just res status --free` rather than waiting for one box.
 
 ### 1. Tag the training run
 
-When sending a cluster job, pass `--eval async` to `train.py` (for headless no-RT boxes). It tags the
-W&B run with `log_evals_async` for the async eval logger to pick up, instead of spawning a local eval
-worker (the default `--eval on`, on an RT-capable box, evaluates out-of-process; `--eval off` disables).
-Runs tagged with the old `log_videos_async` are still picked up.
+Pass `--video async` to `train.py` (`--eval async` for a task with an eval). It tags the W&B run with
+`log_evals_async` instead of spawning a recorder next to the trainer. Runs tagged with the old `log_videos_async`
+are still picked up.
 
-### 2. Run the async eval logger (on an RT-capable device)
+### 2. Run the recorder on an RT card
 
-The unified logger is `hcrl_isaaclab/scripts/video_logger.py`; run it from the manager dir via `just run`:
+`hcrl_isaaclab/scripts/video_recorder.py --mode async` sweeps a project for tagged runs and renders each pending
+checkpoint, one `video_logger.py` worker per run:
 
 ```bash
-just run video_logger --mode async --task <task_name> --wandb_project <entity>/<project> [options]
+just run video_recorder --mode async --task <task_name> --wandb_project <entity>/<project> [options]   # this machine
+just res eval --on <host>:<gpu> --holder <you> hcrl_isaaclab:scripts/video_recorder.py -- \
+    --mode async --task <task_name> --wandb_project <entity>/<project> [options]                       # a leased card
 ```
-
-Async mode scans `--wandb_project` for `log_evals_async`-tagged runs and records any checkpoints
-they haven't logged yet. Useful options:
 
 | Arg | Default | Purpose |
 | --- | --- | --- |
-| `--task <id>` | -- | IsaacLab env id to rebuild for rendering (required). |
-| `--wandb_project <entity>/<project>` | -- | Project to scan for tagged runs (required in async mode). |
+| `--task <id>` | -- | IsaacLab env id to rebuild for rendering. |
+| `--wandb_project <entity>/<project>` | -- | Project to sweep for tagged runs (required in async mode). |
+| `--only_run <id>` | -- | Restrict the sweep to one run. |
 | `--num_envs <N>` | 64 | Env count for the small render sim. |
 | `--video_length <steps>` | 400 | Clip length in env steps (capped to one episode). |
-| `--train_effective_envs <N>` | -- | Training run's `num_envs * world_size`, so the curriculum clock is restored correctly in the render sim (otherwise the curriculum looks fully ramped). |
-| `--rerecord_from <iter>` / `--rerecord_all` | -- | Re-record checkpoints >= `iter` (or all), uploading alongside the existing videos. |
-| `--max_runs_per_sweep <N>` | 0 (no limit) | Record `N` source runs then exit. Use `1` under an outer keeper loop so each process renders one run with a fresh sim. |
-| `--stochastic` | off | Record the policy **sampling** actions (training-time exploration noise) instead of the deterministic mean. |
-
-For a long-lived logger, wrap the `--max_runs_per_sweep 1` invocation in a loop that restarts it
-each pass and prevents the sim from hanging.
+| `--train_effective_envs <N>` | -- | Training run's `num_envs * world_size`, so the curriculum clock is restored correctly in the render sim. |
+| `--rerecord_from <iter>` / `--rerecord_all` | -- | Re-record checkpoints >= `iter` (or all). |
+| `--stochastic` | off | Record the policy **sampling** actions instead of the deterministic mean. |
 
 ### Cron listener
 
