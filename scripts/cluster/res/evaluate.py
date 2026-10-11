@@ -1,8 +1,8 @@
 """`pls run --on <card>`: run a one-off script on a leased GPU, with its checkpoints and code.
 
 Local and ssh pools run the workspace's ilab python on the box. A SLURM card is one of a held dev sentinel's: the
-script runs in the container through a `develop exec` step on that job, against the cluster's shared checkout with
-the ``--wt`` repos staged over it as a code tree.
+script runs in the container through a `develop exec` step on that job, against the cluster's newest `default` tree,
+or a tree of the ``--wt`` repos over it.
 """
 
 from __future__ import annotations

@@ -6,7 +6,8 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 M="$T/main"
-mkdir -p "$T/bin" "$M/scripts/cluster" "$T/remote/scripts/cluster/cluster_dev" "$T/.cluster_dev"
+mkdir -p "$T/bin" "$M/scripts/cluster" "$T/remote/trees/default-0123456789/scripts/cluster/cluster_dev" "$T/.cluster_dev"
+touch "$T/remote/trees/default-0123456789/.complete"  # exec runs the newest `default` tree
 cp -r "$REPO/scripts/cluster/cluster_dev" "$REPO/scripts/cluster/tools" "$M/scripts/cluster/"
 (cd "$M" && git init -q -b main . && git config user.email t@t && git config user.name t &&
     git add -A && git commit -qm init)
@@ -35,7 +36,7 @@ printf '%s ' "\$@" > "$T/srun_args"
 while [ \$# -gt 0 ] && [ "\$1" != bash ]; do shift; done
 exec "\$@"
 EOF
-printf '#!/usr/bin/env bash\nprintf "ARG<%%s>\\n" "$@"\n' > "$T/remote/scripts/cluster/cluster_dev/node_exec.sh"
+printf '#!/usr/bin/env bash\nprintf "ARG<%%s>\\n" "$@"\n' > "$T/remote/trees/default-0123456789/scripts/cluster/cluster_dev/node_exec.sh"
 chmod +x "$T/bin/"*
 dev() {  # dev CHECKOUT ARGS... : cluster_dev.sh of that checkout, aimed at job 900
     local co="$1"; shift

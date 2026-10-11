@@ -117,8 +117,8 @@ for d in "${RESOURCES}"/*/; do
 done
 [ -d "${RESOURCES}/IsaacLab/source" ] && \
     EXT_BINDS="$EXT_BINDS -B $(readlink -f "${RESOURCES}/IsaacLab/source"):/workspace/isaaclab_source:rw"
-# artifacts/ is the structural out-of-sync tree (see cluster_dev.sh rsync_code): cluster-only INPUT
-# data staged there still has to be readable inside the container, which the resources/* glob misses.
+# artifacts/ holds cluster-only INPUT data no tree carries; it still has to be readable inside the container,
+# which the resources/* glob misses.
 [ -d "${CLUSTER_ISAACLAB_DIR}/artifacts" ] && \
     EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/artifacts:/workspace/artifacts:rw"
 # Bind list mirrors scripts/cluster/run_singularity.sh -- with extra `-B ...:/u/esturman` so HOME is
