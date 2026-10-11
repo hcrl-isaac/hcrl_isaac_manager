@@ -62,7 +62,7 @@ def _check_projects(projects: list[str], refs: dict, known: set[str], overrides_
         else:
             errors.append(f"unknown project {name!r} (available: {', '.join(sorted(known))})")
     if errors:
-        fix = "re-run `just setup` to pick again" if any("unknown" in e for e in errors) else "re-run `just resolve`"
+        fix = "re-run `pls setup` to pick again" if any("unknown" in e for e in errors) else "re-run `pls resolve`"
         sys.exit("[resolve] " + "\n[resolve] ".join(errors) + f"\n[resolve] Update {overrides_path}, or {fix}.")
 
 
@@ -217,7 +217,7 @@ def main() -> None:
         "--retire-renamed",
         action="store_true",
         help="Uninstall renamed projects' old packages from this interpreter, print their leftover "
-        "checkouts (one per line) and exit. Used by `just setup` to skip them.",
+        "checkouts (one per line) and exit. Used by `pls setup` to skip them.",
     )
     args = ap.parse_args()
     if args.retire_renamed:

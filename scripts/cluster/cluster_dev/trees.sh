@@ -234,7 +234,7 @@ cmd_stage() {  # stage [--no-space-check] [NAME] [REPO=REF|REPO=PATH ...] : uplo
     if [ -n "$whole" ]; then _push_data || { err "could not add the data repos' new files"; exit 1; }; fi
     _prune_trees "$name"
     printf '%s' "$manifest" | sed 's/^/  /'
-    local hint="${TREE_RUN_HINT:-just cluster ${CLUSTER:-} develop exec --tree <id> -- <cmd>}"
+    local hint="${TREE_RUN_HINT:-pls cluster ${CLUSTER:-} develop exec --tree <id> -- <cmd>}"
     echo "Run with: ${hint//<id>/$(basename "$tree")}"
 }
 

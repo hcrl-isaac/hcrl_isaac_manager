@@ -108,6 +108,5 @@ clean render. The A100s have no RT cores, so render on the A40s.
   the best per-GPU env count; `--log <host> <task>` to poll.
 - **`python scripts/larg/pull_gpu_stats.py`** — print GPU utilization/memory across all LARG boxes. Use it to
   find free GPUs before launching, and be a good citizen on shared boxes.
-- **Rendering a `--video async` run:** run `hcrl_isaaclab:scripts/video_recorder.py --mode async --wandb_project
-  <entity>/<project> --only_run <id> --task <task>` on any free RT card, e.g. an A40 through `just res eval --on
-  <host>:<gpu>`. See [Asynchronous Video Logging](../../README.md#asynchronous-video-logging).
+- **Rendering a `--video async` run:** `pls run --on <host>:<gpu> --holder <you> -- video_recorder --mode async
+  --wandb_project <entity>/<project> --only_run <id> --task <task>` on any free RT card, e.g. an A40. See [Asynchronous Video Logging](../../README.md#asynchronous-video-logging).

@@ -1,4 +1,4 @@
-"""Unit tests for the pool inventory's config files (run all script tests: just test-scripts)."""
+"""Unit tests for the pool inventory's config files (run all script tests: pls test-scripts)."""
 
 import sys
 import tempfile

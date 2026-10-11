@@ -20,4 +20,5 @@ def sim2real(args: list[str]) -> None:
         print(cli.__doc__)
         sys.exit(0 if args and args[0] in ("-h", "--help") else 1)
     module, function = cli.COMMANDS[args[0]]
+    sys.argv[0] = f"pls sim2real {args[0]}"  # the command's argparse names itself after argv[0] in its usage
     getattr(importlib.import_module(module), function)(args[1:])

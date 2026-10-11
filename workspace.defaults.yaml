@@ -1,6 +1,6 @@
 # Committed workspace defaults + the catalog of selectable projects. This is the shared, version-
 # controlled source of truth; a per-user `workspace.yaml` (gitignored) records the local selection
-# (which projects + IsaacLab pip/source). `just setup` opens a picker to generate/change it;
+# (which projects + IsaacLab pip/source). `pls setup` opens a picker to generate/change it;
 # `resolve_workspace.py` merges this file with that selection into a flat gitman.yaml.
 org: hcrl-isaac
 isaaclab:

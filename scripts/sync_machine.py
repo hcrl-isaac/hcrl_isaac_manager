@@ -1,4 +1,4 @@
-"""Push this workspace + Claude state to a peer box (``just sync <host>``). One-way: run it from the machine
+"""Push this workspace + Claude state to a peer box (``pls sync <host>``). One-way: run it from the machine
 you are leaving.
 
 - Code: each checkout (manager, ``resources/*``, their worktrees, ``~/booster-deploy``) lands on the same
@@ -6,7 +6,7 @@ you are leaving.
   (``.claude/``, ``.env.*``, ``models/``) go on top. ``workspace.yaml`` is never shipped.
 - Claude state: transcripts, memory, settings and scratchpads, with absolute paths rewritten for the peer;
   newer-only. ``SESSIONS.md`` and ``~/.cluster_dev`` never travel.
-- Deps: uv re-sync of the peer's venvs; a full ``just setup`` only if ``ilab`` is missing.
+- Deps: uv re-sync of the peer's venvs; a full ``pls setup`` only if ``ilab`` is missing.
 
 Refuses if the peer has tracked modifications this side is not carrying, or its branch is ahead of or
 diverged from ours (``--force`` overrides both).
@@ -280,7 +280,7 @@ def sync_checkout(co: Checkout, peer: Machine, pmap: list[tuple[str, str]], *, f
         dry=dry,
     )
     if not dry and probe == "missing":
-        print(f"[sync] {label}: repo missing on peer (run `just setup` there first) -- skipped")
+        print(f"[sync] {label}: repo missing on peer (run `pls setup` there first) -- skipped")
         return
     print(f"[sync] {label}: {co.branch}@{co.sha[:8]}  dirty={len(co.dirty)} deleted={len(co.deleted)}")
     # 1) commits: push HEAD into the peer's object store under a sync ref -- unless it already has it.
@@ -517,12 +517,11 @@ def ensure_deps(peer: Machine, *, dry: bool) -> None:
     script = f"""
         set -e
         command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
-        command -v just >/dev/null || uv tool install -q rust-just
         export PATH=$HOME/.local/bin:$PATH VIRTUAL_ENV="" UV_PROJECT_ENVIRONMENT=ilab
         cd {m}
         if [ ! -x ilab/bin/python ]; then
-            echo "[deps] no ilab venv on peer -> full 'just setup' (this is the slow path)"
-            OMNI_KIT_ACCEPT_EULA=YES just setup < /dev/null
+            echo "[deps] no ilab venv on peer -> full 'pls setup' via bootstrap.sh (this is the slow path)"
+            OMNI_KIT_ACCEPT_EULA=YES ./bootstrap.sh setup < /dev/null
             exit 0
         fi
         echo "[deps] manager deps (uv sync)"; uv sync -q

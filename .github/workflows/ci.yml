@@ -18,7 +18,7 @@ jobs:
       - run: pre-commit run --all-files --show-diff-on-failure
 
   tests:
-    # Every scripts/<area>/tests/test_*.{py,sh} (= `just test-scripts`); stubs only, no cluster access.
+    # Every scripts/<area>/tests/test_*.{py,sh} (= `pls test-scripts`); stubs only, no cluster access.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

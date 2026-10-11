@@ -14,7 +14,7 @@
 #   LARG_NPROC            GPUs for the run (default 1)
 #   CUDA_VISIBLE_DEVICES  physical GPUs to pin the run to (e.g. 2 or 0,1); also tags the run dir
 #   LARG_SCRATCH          per-box scratch for run logs and Kit caches (default /var/local/$LARG_USER)
-#   LARG_HOLDER           your session name: lease the pinned cards with `just res claim` before launching
+#   LARG_HOLDER           your session name: lease the pinned cards with `pls res claim` before launching
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/common.sh"

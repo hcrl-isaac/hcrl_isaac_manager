@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rich output helpers for the justfile: styled section headers + a spinner around opaque steps.
+"""Rich output helpers for pls: styled section headers + a spinner around opaque steps.
 
 Subcommands:
     section <title>             Print a styled rule to delineate a phase of a multi-step recipe.

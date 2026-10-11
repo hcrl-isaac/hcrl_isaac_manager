@@ -62,12 +62,12 @@ artifact at its path, with the command to publish it. A new export therefore nee
 job; Ray's 100 MiB `py_modules` limit is why exports cannot ship with the code:
 
 ```bash
-just upload-artifacts --list                         # what is published, and where it resolves
-just upload-artifacts <path>                         # publish a dir at the path it sits in
-just upload-artifacts <path> --rel-path <rel> --tier cache   # publish from a worktree under the main path
+pls upload-artifacts --list                         # what is published, and where it resolves
+pls upload-artifacts <path>                         # publish a dir at the path it sits in
+pls upload-artifacts <path> --rel-path <rel> --tier cache   # publish from a worktree under the main path
 ```
 
-Job arguments keep their quoting (`--run_group "push foot contact"` stays one argument). `WT=<name>` mounts
+Job arguments keep their quoting (`--run_group "push foot contact"` stays one argument). `--wt <name>` mounts
 `resources/<repo>/worktrees/<name>` wherever one exists; without it the job runs the shared checkout's branches.
 
 See [Large-file resources](#large-file-resources) for how the runtime resolver fetches them and how to
@@ -151,7 +151,7 @@ There is no registry to edit: each artifact stores its placement (`rel_path`, `t
 metadata, and the resolver discovers it. Upload the path once from the manager directory:
 
 ```bash
-just upload-artifacts <path> [--tier cache] [--name <existing name>] [--rel-path <rel>]
+pls upload-artifacts <path> [--tier cache] [--name <existing name>] [--rel-path <rel>]
 ```
 
 This sources W&B credentials from `scripts/.env.wandb` and runs the uploader in the `ilab` venv. Uploading
