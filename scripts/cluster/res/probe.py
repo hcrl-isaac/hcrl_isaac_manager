@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import urllib.request
 from dataclasses import asdict, dataclass, field
 
-from inventory import Pool
+from inventory import CLUSTER_CONFIG_DIR, Pool
 
 # Idle cards read 0-545 MiB and the smallest card seen in use reads ~2.4 GB, so 1 GiB sits in that gap: at or
 # above this with no visible process a card is held (e.g. Isaac kept its VRAM after exit).
@@ -357,6 +358,23 @@ def _gres_gpus(gres: str) -> int | None:
     return None
 
 
+def profile_accounts(pools: list[Pool]) -> dict[str, str]:
+    """The accounts these pools' profiles submit with (``#SBATCH -A``), keyed by their lowercase form.
+
+    squeue reports an account lowercased (cda26011), and TACC's submit filter refuses that spelling in an overlap step.
+    """
+    found = {}
+    for pool in pools:
+        script = CLUSTER_CONFIG_DIR / pool.name / "submit_job_slurm.sh"
+        if not script.is_file():
+            continue
+        for line in script.read_text().splitlines():
+            m = re.match(r"#SBATCH\s+(?:-A\s*|--account[=\s]+)(\S+)", line.strip())
+            if m:
+                found[m.group(1).lower()] = m.group(1)
+    return found
+
+
 def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
     """Probe every job of the login's user once, for all profiles that share that login.
 
@@ -382,6 +400,7 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
     if res.returncode != 0:
         return [Report(label, "slurm", error=f"squeue failed: {res.stderr.strip()[:200]}")]
     report, failed = Report(label, "slurm", owner=login.split("@")[0]), []
+    spelling = profile_accounts(pools)
     for line in res.stdout.splitlines():
         f = line.split("|", 9)
         if len(f) < 10:
@@ -396,7 +415,9 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
             failed.append(Report(f"{label} job {jobid}", "slurm", error=f"job is {state}: its cards are unknown"))
             continue
         node = node.split(",")[0]
-        # -p/-A because TACC refuses overlap steps without them on multi-project accounts
+        # -p/-A because TACC refuses overlap steps without them on multi-project accounts, and -A as the profile
+        # spells it
+        acct = spelling.get(acct.lower(), acct)
         opts = f"--jobid={jobid} --overlap --immediate=10 --job-name=res-probe -N1 -n1 -t 00:02:00"
         opts += (f" -p {part}" if part else "") + (f" -A {acct}" if acct and acct != "(null)" else "")
         remote = f"timeout 45 srun {opts} {REMOTE_QUERY}"
