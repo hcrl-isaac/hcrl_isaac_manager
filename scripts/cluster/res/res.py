@@ -259,9 +259,7 @@ def _choose(seen: list[tuple[Card, Report]], taken: set[str], args: argparse.Nam
         card, rep = _named(spec, seen)
         key = ls.card_key(card)
         if key in taken:
-            raise Busy(
-                f"[res] {spec} is leased; move it with `pls res transfer {spec} --to <holder>`; nothing claimed"
-            )
+            raise Busy(f"[res] {spec} is leased; move it with `pls res transfer {spec} --to <holder>`; nothing claimed")
         if card.state != "free" and not (adopt and card.state in ("busy", "held")):
             hint = "; pass --adopt to take over the run on it" if card.state in ("busy", "held") else ""
             raise Busy(f"[res] {spec} is {card.state}{hint}; nothing claimed")
