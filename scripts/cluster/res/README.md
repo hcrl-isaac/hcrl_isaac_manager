@@ -44,6 +44,9 @@ just res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take 
 
 - A claim probes first and succeeds only on cards it sees as free that nobody holds; all named cards or none.
   `--any` fills partly used hosts first and skips Ray unless `--pool ray` is given (Ray schedules onto its cards).
+- `--wait [limit]` queues instead of refusing: while the cards are leased or busy (or too few `--any` matches are
+  free), the claim probes again every minute and leases them once they free, giving up after the limit (e.g.
+  `--wait 2h`; bare `--wait` has none). A card that does not exist is still refused at once.
 - Activity renews a lease: a process of the holder's OS user on that pool, or a busy card whose processes cannot be
   attributed (Ray lists them as `?`). If every attributable process belongs to another user the lease is not renewed
   and shows `CONFLICT`, even when unattributed processes share the card; retained memory with no process and no
@@ -84,20 +87,26 @@ just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --d
   from its shipped copy, so its own sibling imports resolve (e.g. `hcrl_isaaclab:scripts/train.py`). It runs in a
   writable working dir of its own, `<scratch>/res-eval/work/<stage id>`, where relative outputs such as `logs/` land
   and stay.
+- On a remote card every package repo ships: a `--wt` repo as it is on disk, any other at the main checkout's HEAD
+  commit (its uncommitted edits stay here, and the target's own copy, which can be stale, is never used). The
+  MANIFEST gives each one's commit. On an ssh card they are read-only snapshots under `<scratch>/res-eval/code/`;
+  output a script writes inside one (`logs/`, `outputs/`, `wandb/`, e.g. video_logger's checkpoints and videos) lands
+  in the box workspace's copy of that repo.
 - `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
   owns its stage dir, and its lease stays held until the card goes idle (or `just res release <id>`). `--timeout`
   and `--stall` do not apply to a detached run.
 
 - The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
-  several jobs), `--any` or `--lease <id>`. A busy card is refused; `just res claim --adopt` takes over the run on it.
+  several jobs), `--any` or `--lease <id>`. A busy card is refused (`--wait [limit]` waits for it, or for an `--any`
+  match, to free, as `res claim --wait` does); `just res claim --adopt` takes over the run on it.
   A lease `eval` takes is released when the script ends, success or failure; a `--lease` you pass stays yours.
   `--any` stays on the local and ssh pools unless `--pool` names a cluster. `ray` pools are refused (use
   `just ray job`).
 - On a SLURM card (a running job of yours, normally a held dev sentinel) the script runs in the container through a
   `develop exec` step on that job, with the job's own partition, account and GPU request. The stage dir is
   `<cluster checkout>/artifacts/res-eval/<id>`, which the container sees as `/workspace/artifacts/res-eval/<id>`; the
-  `--wt` repos are staged over the cluster's shared checkout as a code tree (`develop stage`), and the rest run from
-  that shared checkout as `develop sync` left it (the MANIFEST gives each one's commit). The card is pinned by its GPU
+  package repos are staged over the cluster's shared checkout as a code tree (`develop stage`), as above; asset repos
+  run from that shared checkout as `develop sync` left it. The card is pinned by its GPU
   UUID, and a step that cannot see it fails with status 98 (on Delta a step holding the job's GPUs can starve
   another). The container's `/tmp` is the job's node-local dir, which every step of the sentinel shares, so the run
   gets its own `TMPDIR` there (removed when it ends) and per-card Kit caches beside it (gone with the job). A script
@@ -118,7 +127,8 @@ just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --d
   `CHECKPOINT`). A ref is a local path, a W&B run URL or `entity/project/run_id`, with `@<iter>` for
   `model_<iter>.pt` (default: the run's latest). W&B checkpoints download on this machine through the same code as
   `--load_run` (cached in `~/.cache/hcrl_res/checkpoints`), so a checkpoint is no longer tied to the box that
-  trained it.
+  trained it. A script that takes the path as an argument gets it through `{NAME}` in its arguments, e.g.
+  `--checkpoint CKPT=T1_Balance/8ufa90cl -- --checkpoint '{CKPT}'`; braces naming no checkpoint stay as written.
 - The script runs this machine's code: the package repos (`hcrl_isaaclab`, `robot_rl`, `*_tasks`; a `--wt` worktree
   set where one exists) go on `PYTHONPATH`. A local pool imports the checkouts in place. On an ssh pool each repo
   becomes an immutable snapshot `<scratch>/res-eval/code/<repo>-<fingerprint>` (tracked and non-ignored files, written

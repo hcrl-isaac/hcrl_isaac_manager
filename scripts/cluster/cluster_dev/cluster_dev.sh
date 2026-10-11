@@ -413,6 +413,9 @@ require_running() {
         part="$(echo "$row" | awk '{print $3}')"; acct="$(echo "$row" | awk '{print $4}')"
         gpus="$(echo "$row" | awk '{print $5}' | grep -oE 'gpu(:[A-Za-z0-9_-]+)?:[0-9]+' | grep -oE '[0-9]+$' | head -1 || true)"
         [ -n "$part" ] && SRUN_PART_OPT="-p ${part}"
+        # squeue reports the account lowercased (cda26011), which TACC's submit filter refuses: the profile's own
+        # spelling wins when it names the same account
+        [ -n "$DEV_ACCOUNT" ] && [ "${acct,,}" = "${DEV_ACCOUNT,,}" ] && acct="$DEV_ACCOUNT"
         [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A ${acct}"
         [ -n "$gpus" ] && SRUN_GRES_OPT="--gres=gpu:${gpus}"
         _srun_opts
