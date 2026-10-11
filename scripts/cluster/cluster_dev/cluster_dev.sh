@@ -512,7 +512,7 @@ source "${SCRIPT_DIR}/trees.sh"
 case "${1:-}" in
     stage)    shift; cmd_stage "$@" ;;
     trees)    shift; cmd_trees "$@" ;;
-    __resolve_tree) shift; ensure_master >&2; resolve_tree "$@" ;;   # internal: tests, `cluster job`
+    __resolve_tree) shift; ensure_master >&2; resolve_tree "$@" ;;   # internal: tests, `pls run --batch`
     __free_gb) shift; ensure_master >/dev/null; remote_free_gb "$1" ;;   # internal (tests)
     start)    shift; cmd_start "$@" ;;
     open)     shift; cmd_open "$@" ;;

@@ -35,8 +35,8 @@ STAGE="${TMPDIR:-/tmp}/cluster_dev_${SLURM_JOB_ID:-box}"
 SIF="${STAGE}/${PROFILE}.sif"
 
 stage_once() {
-    # Copy the .sif to node-local scratch once; re-copy if a newer one was pushed, so `cluster.sh
-    # repush` takes effect without clearing the node cache. (Kit writes go to a --writable-tmpfs overlay.)
+    # Copy the .sif to node-local scratch once; re-copy if a newer one was pushed, so `pls cluster <name>
+    # setup --push-only` takes effect without clearing the node cache. (Kit writes go to a --writable-tmpfs overlay.)
     local src="${CLUSTER_SIF_PATH}/${PROFILE}.sif"
     [ -f "$SIF" ] && [ ! "$src" -nt "$SIF" ] && return 0
     mkdir -p "$STAGE"

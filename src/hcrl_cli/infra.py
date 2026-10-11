@@ -1,49 +1,70 @@
-"""Compute commands: cluster, res, ray, sync and upload-artifacts. The scripts they call are unchanged."""
+"""Compute commands: cluster (SLURM profiles and Ray), res, sync and upload-artifacts."""
 
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 from hcrl_cli.proc import VENV_PY, ask_select, handoff
 
 CLUSTER_CONFIGS = Path("scripts/cluster/config")
-CLUSTER_VERBS = ("setup", "job", "develop", "repush", "build", "add")
-CLUSTER_TARGETED = ("setup", "job", "develop", "repush")  # verbs that ask for a target when several clusters exist
-RAY_VERBS = ("setup", "bench", "push", "list", "logs", "stop")
-RAY_RUNS = ("job", "run")  # `pls run --on ray` submits these
+SLURM_BACKEND = "scripts/cluster/cluster_interface.sh"
+RAY_BACKEND = "scripts/ray/ray_interface.sh"
+SHARED_VERBS = ("setup", "list", "logs", "stop", "status")
+BACKEND_VERBS = {"develop": "slurm", "add": "slurm", "bench": "ray"}  # verbs only one kind of cluster has
+JOB_VERBS = ("job", "run")  # launches go through `pls run`
+
+
+def _profile_dir() -> Path:
+    """This checkout's cluster profiles, or the main checkout's when this worktree has none (they are gitignored)."""
+    if any(CLUSTER_CONFIGS.glob("*/.env.cluster")):
+        return CLUSTER_CONFIGS
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    main = Path(common).parent / CLUSTER_CONFIGS if common else CLUSTER_CONFIGS
+    return main if any(main.glob("*/.env.cluster")) else CLUSTER_CONFIGS
+
+
+def profiles() -> list[str]:
+    """SLURM cluster profiles: scripts/cluster/config/<name>/.env.cluster (gitignored, made by `pls cluster add`)."""
+    return sorted(p.parent.name for p in _profile_dir().glob("*/.env.cluster"))
 
 
 def cluster(args: list[str]) -> None:
-    """Cluster interface (scripts/cluster/); a leading config name selects config/<name>, bare args show a picker."""
-    os.environ.pop("CLUSTER", None)  # the leading name (or the picker) is the only cluster selector
-    name = ""
-    if args and args[0] and (CLUSTER_CONFIGS / args[0]).is_dir():
-        name, args = args[0], args[1:]
-    if not args or not args[0]:
-        args = [ask_select("Cluster subcommand:", CLUSTER_VERBS)]
-    if not name and args[0] in CLUSTER_TARGETED:
-        configs = sorted(p.name for p in CLUSTER_CONFIGS.iterdir() if p.is_dir()) if CLUSTER_CONFIGS.is_dir() else []
-        if len(configs) > 1:
-            name = ask_select("Target cluster:", configs)
-    handoff(["scripts/cluster/cluster_interface.sh", *args], env={"CLUSTER": name} if name else None)
+    """`pls cluster <name> <verb> [args]`: <name> is a SLURM profile or `ray`; bare arguments show pickers."""
+    os.environ.pop("CLUSTER", None)  # the name is the only cluster selector
+    if args and args[0] == "add":  # a new profile has no name yet
+        return handoff([SLURM_BACKEND, "add", *args[1:]])
+    names = [*profiles(), "ray"]
+    name, args = (args[0], args[1:]) if args and args[0] else (ask_select("Cluster:", names), [])
+    if name not in names:
+        sys.exit(f"[pls] cluster: no cluster {name!r} (profiles: {', '.join(names[:-1]) or 'none'}; or ray)."
+                 " `pls cluster add` creates a profile.")  # fmt: skip
+    kind = "ray" if name == "ray" else "slurm"
+    verbs = [*SHARED_VERBS, *(v for v, k in BACKEND_VERBS.items() if k == kind)]
+    verb, rest = (args[0], args[1:]) if args and args[0] else (ask_select(f"{name}:", verbs), [])
+    if verb in JOB_VERBS:
+        batch = "-- <script> [args]" if kind == "ray" else "--batch [--tree N] -- train [args]"
+        sys.exit(f"[pls] runs go through `pls run --on {name} {batch}`, not `pls cluster {name} {verb}`")
+    if verb in BACKEND_VERBS and BACKEND_VERBS[verb] != kind:
+        sys.exit(f"[pls] cluster: {verb} is for {BACKEND_VERBS[verb].upper()} clusters only; {name} is {kind}")
+    if verb not in verbs:
+        sys.exit(f"[pls] cluster {name}: unknown verb {verb!r} ({', '.join(verbs)})")
+    if verb == "status":  # the cluster's cards, from the resource probe
+        return handoff(["python3", "scripts/cluster/res/res.py", "status", "--pool", name, *rest])
+    if verb == "add":
+        return handoff([SLURM_BACKEND, "add", *rest, name])
+    if kind == "ray":
+        return handoff([RAY_BACKEND, verb, *rest])
+    handoff([SLURM_BACKEND, verb, *rest], env={"CLUSTER": name})
 
 
 def res(args: list[str]) -> None:
     """Compute resources (scripts/cluster/res/): `status` probes every GPU on every pool; claims and leases."""
     handoff(["python3", "scripts/cluster/res/res.py", *args])
-
-
-def ray(args: list[str]) -> None:
-    """Ray interface (scripts/ray/): setup, bench, push, list, logs, stop; bare picks. Runs go through `pls run --on ray`."""
-    if not args or not args[0]:
-        args = [ask_select("Ray subcommand:", RAY_VERBS)]
-    if args[0] in RAY_RUNS:
-        sys.exit(
-            f"[pls] Ray runs and training jobs go through `pls run --on ray -- <script|train> [args]`, not ray {args[0]}"
-        )
-    handoff(["scripts/ray/ray_interface.sh", *args])
 
 
 def sync(host: str, args: list[str]) -> None:
