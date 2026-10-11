@@ -38,6 +38,9 @@ def deps() -> None:
         os.environ["PATH"] = f"{Path.home()}/.local/bin{os.pathsep}{os.environ['PATH']}"  # where the installer puts uv
     if os.access(VENV_PY, os.X_OK):
         # An existing ilab holds the Isaac stack + editable packages: add pls, never remove (`uv sync` is exact).
+        owner = (ROOT / VENV).resolve().parent
+        if owner != ROOT.resolve():  # a worktree's linked ilab: -e . would repoint the shared venv here
+            sys.exit(f"[pls] deps: {VENV} belongs to {owner}; run `pls deps` from that checkout.")
         run(["uv", "pip", "install", "--python", VENV_PY, "-e", "."], echo=True)
     else:
         # --relocatable: console scripts derive the interpreter from their own path (survives a dir rename).
