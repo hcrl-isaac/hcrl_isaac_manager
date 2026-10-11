@@ -23,9 +23,17 @@ dependencies = [
     "tensorboard",
 ]
 
-# The manager itself is not an importable package (just scripts); don't try to build/install it.
-[tool.uv]
-package = false
+[project.scripts]
+pls = "hcrl_cli.cli:main"
+
+# Only the CLI package is installed (editable, by `uv sync`); scripts/ stays a plain directory of scripts.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# src/ layout: the editable install puts src/ on sys.path, never the manager root (scripts/, wandb/, resources/).
+[tool.hatch.build.targets.wheel]
+packages = ["src/hcrl_cli"]
 
 [tool.codespell]
 # install-git-lfs.sh is packagecloud's vendored installer; leave its text alone.
