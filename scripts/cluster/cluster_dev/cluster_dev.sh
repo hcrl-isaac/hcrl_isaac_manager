@@ -413,6 +413,9 @@ require_running() {
         part="$(echo "$row" | awk '{print $3}')"; acct="$(echo "$row" | awk '{print $4}')"
         gpus="$(echo "$row" | awk '{print $5}' | grep -oE 'gpu(:[A-Za-z0-9_-]+)?:[0-9]+' | grep -oE '[0-9]+$' | head -1 || true)"
         [ -n "$part" ] && SRUN_PART_OPT="-p ${part}"
+        # squeue reports the account lowercased (cda26011), which TACC's submit filter refuses: the profile's own
+        # spelling wins when it names the same account
+        [ -n "$DEV_ACCOUNT" ] && [ "${acct,,}" = "${DEV_ACCOUNT,,}" ] && acct="$DEV_ACCOUNT"
         [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A ${acct}"
         [ -n "$gpus" ] && SRUN_GRES_OPT="--gres=gpu:${gpus}"
         _srun_opts
@@ -560,7 +563,8 @@ cmd_open() {  # open (or confirm) the SSH control master only -- no sync, no job
 cmd_kill() {  # cluster_dev.sh kill [--all | STEP...] : scancel launched run steps, keep the dev job alive
     # `exec` runs live in their own SLURM step but a fresh container (own PID namespace), so pkill
     # from a later exec can NOT see them -- step-scoped scancel from the login node is the reliable kill.
-    local jobid; jobid="$(state_get JOBID)"
+    # DEV_JOBID names a job other than the tracked one, as for exec (two dev jobs on one profile)
+    local jobid; jobid="${DEV_JOBID:-$(state_get JOBID)}"
     [ -z "$jobid" ] && { err "No dev job on record. Use 'start' first."; exit 1; }
     ensure_master
     # every step except batch (the sentinel holding the node) and extern (slurm bookkeeping) is a launched run
@@ -580,7 +584,9 @@ cmd_kill() {  # cluster_dev.sh kill [--all | STEP...] : scancel launched run ste
         while read -r sid _; do [ -n "$sid" ] && targets+=("$sid"); done <<< "$steps"
     else
         local s
-        for s in "$@"; do targets+=("${jobid}.${s#"${jobid}".}"); done
+        for s in "$@"; do  # a full <job>.<step> as given, a bare step on this job
+            if [[ "$s" =~ ^[0-9]+\.[0-9]+$ ]]; then targets+=("$s"); else targets+=("${jobid}.${s}"); fi
+        done
     fi
     [ ${#targets[@]} -eq 0 ] && { log "Nothing to cancel."; return 0; }
     log "Cancelling step(s): ${targets[*]} (job $jobid and its SSH master stay up)"

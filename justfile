@@ -151,11 +151,11 @@ cluster *args:
 res *args:
     @python3 scripts/cluster/res/res.py "$@"
 
-# Ray interface (scripts/ray/): `setup`, `job`, `bench`, `push`, `list`, `logs`, `stop`; bare shows a picker.
+# Ray interface (scripts/ray/): `setup`, `job`, `run` (a one-off script), `bench`, `push`, `list`, `logs`, `stop`; bare shows a picker.
 [positional-arguments]
 ray *args:
     @if [ -z "${1:-}" ]; then \
-        set -- "$( {{venv_py}} scripts/tools/ask.py select 'Ray subcommand:' setup job bench push list logs stop )"; \
+        set -- "$( {{venv_py}} scripts/tools/ask.py select 'Ray subcommand:' setup job run bench push list logs stop )"; \
     fi; \
     scripts/ray/ray_interface.sh "$@"
 

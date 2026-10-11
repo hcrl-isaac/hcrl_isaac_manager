@@ -103,7 +103,7 @@ def make_target(pool: Pool, host: str, gpu: int, job: str = "", uuid: str = "") 
         The target, with workspace, scratch and pin from the pool settings or their defaults.
     """
     if pool.kind not in SUPPORTED:
-        hint = {"ray": "use `just ray job`"}
+        hint = {"ray": "use `just ray run <repo>/<script>.py` (Ray queues it until a GPU frees)"}
         sys.exit(f"[res] eval does not run on {pool.kind} pools yet; {hint.get(pool.kind, 'pick another card')}")
     s = pool.settings
     if pool.kind == "slurm":
@@ -146,6 +146,20 @@ def parse_env(pairs: list[str]) -> dict[str, str]:
             sys.exit(f"[res] --env {pair!r}: expected KEY=VALUE")
         out[key] = val
     return out
+
+
+def fill_checkpoints(script_args: list[str], paths: dict[str, str]) -> list[str]:
+    """The script's arguments with each ``{NAME}`` replaced by checkpoint NAME's path on the target.
+
+    The path is the value ``$NAME`` holds, for a script that takes it as an argument; braces naming no checkpoint
+    stay as written.
+    """
+    filled = []
+    for arg in script_args:
+        for name, path in paths.items():
+            arg = arg.replace("{" + name + "}", path)
+        filled.append(arg)
+    return filled
 
 
 def parse_checkpoints(specs: list[str]) -> list[ck.CheckpointRef]:
@@ -1128,6 +1142,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             holder=args.holder,
             note=args.note or f"res eval {os.path.basename(script)}",
             for_=0.0,
+            wait=args.wait,
         )
         [(taken, card, rep)] = claim(ns, usable)[0]
         host, gpu = card.host, card.index
@@ -1169,7 +1184,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if taken is not None:
             _touch_lease(taken.id)
         if args.detach:
-            stage.start_detached(args.script_args)
+            stage.start_detached(fill_checkpoints(args.script_args, paths))
             detached = True
             _print_detached(stage, taken)
             rc = 0
@@ -1177,7 +1192,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             print(
                 f"[res] running {os.path.basename(script)} on {t.host}:gpu{t.gpu} (stage {stage.dir})", file=sys.stderr
             )
-            rc = run(stage, args.script_args, args.timeout, args.stall)
+            rc = run(stage, fill_checkpoints(args.script_args, paths), args.timeout, args.stall)
     except KeyboardInterrupt as exc:
         rc = 130
         print(f"[res] interrupted ({exc or 'SIGINT'})", file=sys.stderr)
@@ -1232,11 +1247,18 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     ev.add_argument("--pool", action="append", help="with --any/--on: only these pools (prefix match)")
     ev.add_argument("--min-free-gb", type=float, default=0, help="with --any: free memory the card needs")
     ev.add_argument("--holder", required=True, help="your session name")
+    ev.add_argument(
+        "--wait",
+        nargs="?",
+        const=0.0,
+        type=_duration,
+        help="when the card (or every --any match) is taken, wait for one to free (optionally at most this long)",
+    )
     ev.add_argument("--note", default="", help="lease note")
     ev.add_argument(
         "--checkpoint",
         action="append",
-        help="[NAME=]<W&B run URL | entity/project/run[@iter] | path>, exported as NAME",
+        help="[NAME=]<W&B run URL | entity/project/run[@iter] | path>, exported as NAME; {NAME} in the script args is its path",
     )
     ev.add_argument("--env", action="append", help="KEY=VALUE for the script (repeatable)")
     ev.add_argument("--wt", default="", help="run this machine's worktree set (resources/<repo>/worktrees/<name>)")

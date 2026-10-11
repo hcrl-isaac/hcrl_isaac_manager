@@ -128,3 +128,36 @@ class PreflightTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExtScriptTest(unittest.TestCase):
+    def test_a_repo_script_maps_to_its_worker_mount(self) -> None:
+        from job_args import ext_script
+
+        self.assertEqual(
+            ext_script("hcrl_isaaclab/scripts/video_logger.py"), "/workspace/ext/hcrl_isaaclab/scripts/video_logger.py"
+        )
+
+    def test_paths_outside_a_shipped_repo_are_refused(self) -> None:
+        from job_args import ext_script
+
+        for bad in ("/abs/x.py", "hcrl_isaaclab/../x.py", "video_logger.py", "hcrl_isaaclab/scripts/run.sh", "a//b.py"):
+            with self.assertRaises(ValueError, msg=bad):
+                ext_script(bad)
+
+
+class SubmitPreparationTest(unittest.TestCase):
+    def test_every_submitting_subcommand_renders_and_syncs_first(self) -> None:
+        """A subcommand that submits without re-rendering ships whatever job config another session left behind."""
+        import re
+
+        text = (Path(__file__).resolve().parents[1] / "ray_interface.sh").read_text()
+        prepare = re.search(r"^\s+([\w|]+)\)\n\s+prepare_submit", text, re.M)
+        self.assertIsNotNone(prepare)
+        prepared = set(prepare.group(1).split("|"))
+        submitting = set()
+        for m in re.finditer(r"^    ([\w|]+)\)\n(.*?)^        ;;", text, re.M | re.S):
+            if "submit_job.py" in m.group(2):
+                submitting.update(m.group(1).split("|"))
+        self.assertTrue(submitting)
+        self.assertEqual(submitting - prepared, set())

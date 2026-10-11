@@ -50,10 +50,13 @@ just cluster delta develop trees rm --partials         # clear interrupted stage
   (`hcrl_isaaclab=./resources/hcrl_isaaclab/worktrees/wt`; `/`, `./` or `../`, relative to the manager dir under
   `just`), which carries its tracked and untracked non-ignored files.
 - It never uses `--delete` and never touches the shared checkout. Every repo not named is a link to the shared one.
-  Asset repos (`*_robots`, where URDF->USD conversion writes) and `IsaacLab` always are, and cannot be staged.
+  `IsaacLab` always is, and cannot be staged.
 - Files identical to one in a recent tree are hardlinked instead of re-sent, never to the shared checkout (which
   runs write to). Staged files are read-only, so an in-place write fails instead of changing every tree that
   shares the file; the directories stay writable.
+- An asset repo (`*_robots`) stages like any other (e.g. `hcrl_robots=fix/t1-shank-mass`), except that its files
+  stay writable and are the tree's own copies, never hardlinked: the run's URDF->USD conversion writes beside the
+  URDF, and that must change neither another tree nor the shared checkout.
 - `MANIFEST` records each repo's ref or absolute path, commit and content hash (modes and symlink targets
   included). Staging the same content again reuses the tree, and a failed stage leaves no tree, partial or
   temporary checkout behind.

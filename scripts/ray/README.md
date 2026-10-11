@@ -84,6 +84,15 @@ from this interface.
     - You can modify the script that runs (e.g. between `train.py` and `play.py`) in the `python_script` field of `job_config.yaml`
 - Can be followed by any arguments you'd like to pass to the script (e.g. `--task reach-v0`)
 
+### `just ray run <repo>/<path>.py [args]`
+
+- Runs a one-off script (an eval, a render, a census) on the cluster instead of `train.py`, shipped exactly like a
+  job: the same mounts, artifact fetching and `WT=<name>` worktree routing.
+- The script is named inside a shipped repo, e.g.
+  `WT=steady-camera just ray run hcrl_isaaclab/scripts/video_logger.py --wandb_run <run> --task <task> --num_envs 16`.
+- Ray holds the job until a GPU frees, so a busy cluster queues it instead of refusing it. `just res eval` refuses
+  Ray pools and points here.
+
 ### `scripts/ray.sh stop <job_id>`
 
 - Stop a running job
