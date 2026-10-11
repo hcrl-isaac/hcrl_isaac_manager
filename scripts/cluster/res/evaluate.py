@@ -148,6 +148,20 @@ def parse_env(pairs: list[str]) -> dict[str, str]:
     return out
 
 
+def fill_checkpoints(script_args: list[str], paths: dict[str, str]) -> list[str]:
+    """The script's arguments with each ``{NAME}`` replaced by checkpoint NAME's path on the target.
+
+    The path is the value ``$NAME`` holds, for a script that takes it as an argument; braces naming no checkpoint
+    stay as written.
+    """
+    filled = []
+    for arg in script_args:
+        for name, path in paths.items():
+            arg = arg.replace("{" + name + "}", path)
+        filled.append(arg)
+    return filled
+
+
 def parse_checkpoints(specs: list[str]) -> list[ck.CheckpointRef]:
     """Parsed ``--checkpoint`` specs; exits on a bad or duplicate name before anything is claimed."""
     refs = []
@@ -1054,7 +1068,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if taken is not None:
             _touch_lease(taken.id)
         if args.detach:
-            stage.start_detached(args.script_args)
+            stage.start_detached(fill_checkpoints(args.script_args, paths))
             detached = True
             _print_detached(stage, taken)
             rc = 0
@@ -1062,7 +1076,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             print(
                 f"[res] running {os.path.basename(script)} on {t.host}:gpu{t.gpu} (stage {stage.dir})", file=sys.stderr
             )
-            rc = run(stage, args.script_args, args.timeout, args.stall)
+            rc = run(stage, fill_checkpoints(args.script_args, paths), args.timeout, args.stall)
     except KeyboardInterrupt as exc:
         rc = 130
         print(f"[res] interrupted ({exc or 'SIGINT'})", file=sys.stderr)
@@ -1121,7 +1135,7 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     ev.add_argument(
         "--checkpoint",
         action="append",
-        help="[NAME=]<W&B run URL | entity/project/run[@iter] | path>, exported as NAME",
+        help="[NAME=]<W&B run URL | entity/project/run[@iter] | path>, exported as NAME; {NAME} in the script args is its path",
     )
     ev.add_argument("--env", action="append", help="KEY=VALUE for the script (repeatable)")
     ev.add_argument("--wt", default="", help="run this machine's worktree set (resources/<repo>/worktrees/<name>)")

@@ -118,7 +118,8 @@ just res eval census.py --on c571-003:3 --holder "<session>" --wt my-feature --d
   `CHECKPOINT`). A ref is a local path, a W&B run URL or `entity/project/run_id`, with `@<iter>` for
   `model_<iter>.pt` (default: the run's latest). W&B checkpoints download on this machine through the same code as
   `--load_run` (cached in `~/.cache/hcrl_res/checkpoints`), so a checkpoint is no longer tied to the box that
-  trained it.
+  trained it. A script that takes the path as an argument gets it through `{NAME}` in its arguments, e.g.
+  `--checkpoint CKPT=T1_Balance/8ufa90cl -- --checkpoint '{CKPT}'`; braces naming no checkpoint stay as written.
 - The script runs this machine's code: the package repos (`hcrl_isaaclab`, `robot_rl`, `*_tasks`; a `--wt` worktree
   set where one exists) go on `PYTHONPATH`. A local pool imports the checkouts in place. On an ssh pool each repo
   becomes an immutable snapshot `<scratch>/res-eval/code/<repo>-<fingerprint>` (tracked and non-ignored files, written
