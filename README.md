@@ -39,6 +39,7 @@ after a repo adds a dependency in its `dependencies.yaml`, or to fetch each repo
 
 ```bash
 ./bootstrap.sh          # a fresh machine: installs uv, then runs `pls setup`
+./bootstrap.sh deps     # a checkout that already has ilab: adds pls to it, removes nothing
 pls setup               # afterwards (from the ilab venv), to reinstall or reconfigure
 ```
 
@@ -157,7 +158,7 @@ the `ilab` venv, sources your W&B credentials, skips the pass if GPU 0 is >50% b
 
 ## pls
 
-`pls` is the workspace command line (`src/hcrl_cli`), installed into the `ilab` venv by `uv sync`; `pls --help`
+`pls` is the workspace command line (`src/hcrl_cli`), installed into the `ilab` venv by `pls deps`; `pls --help`
 lists its verbs. On a fresh machine `./bootstrap.sh` installs uv and runs `pls setup` before `pls` exists.
 
 `pls run` runs a script here, on a leased GPU, or on Ray — `pls run --help` has the full grammar:
