@@ -348,6 +348,47 @@ class SshStageTest(Isolated):
         self.assertFalse(os.access(snap / "mod.py", os.W_OK))
         self.assertFalse(os.access(snap, os.W_OK))
 
+    def test_run_output_inside_a_snapshot_lands_in_the_workspace(self) -> None:
+        """A script that writes <repo>/logs (video_logger's checkpoints and videos) writes the box workspace's copy."""
+        stage = self._stage()
+        snap = Path(os.path.realpath(f"{stage.dir}/resources/robot_rl"))
+        for d in ev.SNAPSHOT_RW_DIRS:
+            self.assertEqual(os.path.realpath(snap / d), str(self.ws / "resources" / "robot_rl" / d))
+        (snap / "logs" / "video_logger").mkdir()
+        (snap / "logs" / "video_logger" / "model_10.pt").write_text("w")
+        self.assertTrue((self.ws / "resources/robot_rl/logs/video_logger/model_10.pt").is_file())
+        self.assertFalse(os.access(snap, os.W_OK), "the snapshot itself stays read-only")
+
+    def test_a_snapshot_from_before_the_output_links_gets_them_on_reuse(self) -> None:
+        snap = Path(os.path.realpath(f"{self._stage().dir}/resources/robot_rl"))
+        snap.chmod(0o755)
+        for d in ev.SNAPSHOT_RW_DIRS:
+            (snap / d).unlink()
+        snap.chmod(0o555)
+        again = Path(os.path.realpath(f"{self._stage().dir}/resources/robot_rl"))
+        self.assertEqual(again, snap)
+        self.assertTrue(all((snap / d).is_symlink() for d in ev.SNAPSHOT_RW_DIRS))
+        self.assertFalse(os.access(snap, os.W_OK))
+
+    def test_a_main_checkout_repo_ships_at_its_head_commit(self) -> None:
+        """Without a worktree, a repo ships as the main checkout's HEAD: none of the checkout's uncommitted edits, and
+        never the box's own copy, which can be stale."""
+        local_ws = self.tmp / "local_ws"
+        (local_ws / "resources").mkdir(parents=True)
+        (local_ws / "resources" / "robot_rl").symlink_to(self.src)
+        (self.src / "mod.py").write_text("x = 'uncommitted'\n")
+        (self.src / "scratch_notes.py").write_text("z = 1\n")
+        with mock.patch.object(ev, "local_workspace", return_value=str(local_ws)):
+            stage = self._stage()
+        snap = Path(os.path.realpath(f"{stage.dir}/resources/robot_rl"))
+        self.assertTrue(snap.name.startswith("robot_rl-"), "a snapshot, not the box's workspace copy")
+        self.assertEqual((snap / "mod.py").read_text(), "x = 1\n")
+        self.assertFalse((snap / "scratch_notes.py").exists())
+        self.assertIn("main checkout", stage.manifest[0])
+        self.assertEqual(self.shared_file.read_text(), "shared = True\n")
+        worktrees = subprocess.run(["git", "-C", str(self.src), "worktree", "list"], capture_output=True, text=True)
+        self.assertEqual(len(worktrees.stdout.strip().splitlines()), 1, "the temporary HEAD checkout is removed")
+
     def test_an_interrupted_upload_leaves_no_partial(self) -> None:
         stage = ev.Stage(self.t)
         stage.make()
@@ -534,14 +575,28 @@ class SlurmEvalTest(Isolated):
         ev.stage_tree.assert_called_once()
         self.assertEqual(ev.stage_tree.call_args.args[1], {"robot_rl": str(self.src)}, "only the --wt repo is staged")
 
-    def test_without_worktrees_the_run_uses_the_shared_checkout(self) -> None:
+    def test_a_main_checkout_repo_is_staged_at_its_head_commit(self) -> None:
+        """The cluster's copy can be stale (Delta's ignored encoder_cfg): the run gets this machine's HEAD instead."""
+        shutil.rmtree(self.main_repo)
+        _git_repo(self.main_repo)
+        head = subprocess.run(["git", "-C", str(self.main_repo), "rev-parse", "HEAD"], capture_output=True, text=True)
+        self.code = {"hcrl_isaaclab": str(self.main_repo)}
+        rc, out = self._eval("--detach")
+        self.assertEqual(rc, 0, out)
+        self._status(self._stage())
+        ev.stage_tree.assert_called_once()
+        self.assertEqual(ev.stage_tree.call_args.args[1], {"hcrl_isaaclab": head.stdout.strip()})
+        self.assertIn("(main checkout HEAD)", (self._stage() / "MANIFEST").read_text())
+
+    def test_a_repo_that_is_not_a_git_checkout_runs_the_clusters_copy(self) -> None:
+        """Nothing to ship at a commit: the run uses the cluster's copy, and the MANIFEST says why."""
         self.code = {"hcrl_isaaclab": str(self.main_repo)}
         rc, out = self._eval("--detach")
         self.assertEqual(rc, 0, out)
         self._status(self._stage())
         ev.stage_tree.assert_not_called()
         self.assertNotIn("--tree", self.calls.read_text().splitlines())
-        self.assertIn("(shared checkout)", (self._stage() / "MANIFEST").read_text())
+        self.assertIn("not a git checkout here", (self._stage() / "MANIFEST").read_text())
 
     def test_foreground_run_streams_releases_and_cleans_up(self) -> None:
         rc, out = self._eval("--env", "N=7")
