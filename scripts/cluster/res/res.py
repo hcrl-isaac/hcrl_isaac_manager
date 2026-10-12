@@ -261,7 +261,9 @@ def _choose(
         card, rep = _named(spec, seen)
         key = ls.card_key(card)
         if key in taken and taken[key].holder == args.holder:  # never frees by waiting: say how to use it
-            sys.exit(f"[res] {spec} is already yours (lease {taken[key].id}); run on it with `--on lease:{taken[key].id}`")
+            sys.exit(
+                f"[res] {spec} is already yours (lease {taken[key].id}); run on it with `--on lease:{taken[key].id}`"
+            )
         if key in taken:
             raise Busy(f"[res] {spec} is leased; move it with `pls res transfer {spec} --to <holder>`; nothing claimed")
         if card.state != "free" and not (adopt and card.state in ("busy", "held")):
