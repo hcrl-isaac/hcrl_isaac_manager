@@ -109,5 +109,13 @@ out="$(timeout 5 bash "$T/watch_fast.sh" probe "$T/progress.log" 4000 20 100 2>&
 wait
 check "report_every prints progress without a metric grep" 'case $out in *"iter 1"[05]0*) true ;; *) false ;; esac && case $out in *"iter 2"[05]0*) true ;; *) false ;; esac'
 
+# a probe that hangs (ssh waiting on a prompt) is cut off, and stall_min without an answer is BLIND, never silence
+mkdir -p "$T/bin" && printf '#!/usr/bin/env bash\nsleep 600\n' > "$T/bin/ssh" && chmod +x "$T/bin/ssh"
+sed 's/^POLL_S=120 /POLL_S=1 /; s/^PROBE_S=90 /PROBE_S=1 /' "$REPO/scripts/tools/watch_run.sh" > "$T/watch_blind.sh"
+out="$(PATH="$T/bin:$PATH" timeout 10 bash "$T/watch_blind.sh" probe "x@host:/log" 4000 0 0 2>&1)"; rc=$?
+check "a hanging probe ends as BLIND" '[ "$rc" = 1 ] && case $out in *BLIND*) true ;; *) false ;; esac'
+out="$(PATH="$T/bin:$PATH" timeout 4 bash "$T/watch_blind.sh" probe "x@host:/log" 4000 20 0 2>&1)"; rc=$?
+check "a few failed probes inside stall_min are retried" '[ "$rc" = 124 ] && [ -z "$out" ]'
+
 [ "$fails" -eq 0 ] || exit 1
 echo "all watch_run exit tests passed"
