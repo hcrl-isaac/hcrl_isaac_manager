@@ -160,6 +160,11 @@ check "concurrent stages give one tree" "[ \$(ntrees conc) -eq 1 ] && [ -f \"\$(
 
 dev trees > "$T/out5" 2>&1
 check "trees lists them" "[ \"\$(grep -c '^t1-' '$T/out5')\" -eq 1 ] && ! grep -q '^ *#' '$T/out5'"
+before="$(ls "$R/trees" | wc -l)"
+dev stage --help > "$T/out_help" 2>&1
+check "stage --help prints usage and stages nothing" "[ $? -eq 0 ] && grep -q 'stage' '$T/out_help' && [ \"\$(ls '$R/trees' | wc -l)\" -eq $before ]"
+dev stage --bogus > "$T/out_help" 2>&1
+check "an option-like tree name is refused" "[ $? -ne 0 ] && grep -q 'starting with a letter' '$T/out_help' && [ \"\$(ls '$R/trees' | wc -l)\" -eq $before ]"
 
 # trees rm: refused while a job that used the tree is running
 id="$(basename "$tree")"
@@ -181,8 +186,8 @@ dev trees rm "$id" > "$T/out6" 2>&1
 check "an ended step on a live job does not hold it, a non-slurm marker does" "[ $? -ne 0 ] && grep -q 'node7.99' '$T/out6' && ! grep -q '4242.0' '$T/out6'"
 rm "$tree/.in-use/node7.99"
 echo 'slurm_load_jobs error: Invalid job id specified' > "$T/squeue_err"
-dev trees rm "$id" > "$T/out6" 2>&1
-check "rm removes it once the step ended" "[ $? -eq 0 ] && [ ! -e '$tree' ]"
+dev trees rm -- "$id" > "$T/out6" 2>&1
+check "rm removes it once the step ended (an id after -- too)" "[ $? -eq 0 ] && [ ! -e '$tree' ]"
 rm -f "$T/squeue_err"
 check "rm needs the full id" "! dev trees rm r > /dev/null 2>&1"
 mkdir -p "$R/trees/old.partial.1/a" "$R/trees/new.partial.2" "$R/trees/busy.partial.3/a"

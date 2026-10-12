@@ -403,7 +403,11 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     # every hop re-parses the command, so each one gets its own %q layer and the argv arrives intact
     local args; args="$(printf '%q ' "$@")"
     # resolved once, here: the step runs this tree for its whole life, whatever is staged after it starts
-    tree="$(resolve_tree "${tree:-default}")" || exit 1
+    if [ -z "$tree" ]; then
+        tree="$(resolve_tree default)" || { err "no --tree given and no tree named default: pass --tree <name> (develop trees lists them)"; exit 1; }
+    else
+        tree="$(resolve_tree "$tree")" || exit 1
+    fi
     log "Using tree ${tree}"
     local nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} NODE_EXEC_RESOURCES=${tree}/resources"
     nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
@@ -508,6 +512,8 @@ usage() {
 }
 
 source "${SCRIPT_DIR}/trees.sh"
+
+case "${1:-}:${2:-}" in stage:-h|stage:--help|trees:-h|trees:--help|exec:-h|exec:--help) usage; exit 0 ;; esac
 
 case "${1:-}" in
     stage)    shift; cmd_stage "$@" ;;
