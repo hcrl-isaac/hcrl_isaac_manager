@@ -433,6 +433,15 @@ class CommandTest(TempStore):
             self.claim("mckennie:3", adopt=True)
         self.assertEqual(self.stored(), ["mckennie:0"])
 
+    def test_a_card_you_hold_names_its_lease_instead_of_waiting(self) -> None:
+        self.claim("mckennie:0")
+        [lease] = self.leases()
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim("mckennie:0")
+        self.assertNotIsInstance(ctx.exception, res.Busy, "--wait would never see it free")
+        self.assertIn(f"--on lease:{lease.id}", str(ctx.exception.code))
+        self.assertEqual(self.stored(), ["mckennie:0"])
+
     def test_transfer_moves_the_lease_and_records_the_previous_holder(self) -> None:
         self.claim("mckennie:0", note="seed 1")
         with contextlib.redirect_stdout(io.StringIO()):
