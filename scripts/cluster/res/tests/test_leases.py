@@ -501,9 +501,10 @@ class ReservationTest(CommandBase):
     def test_the_priority_holder_takes_a_yielding_card_even_while_its_run_is_busy(self) -> None:
         self.claim_err("mckennie:2", holder="a", adopt=True)  # a's run is on the busy card
         self.reserve("mckennie:2", eta="now")
-        err = self.claim_err("mckennie:2", holder="P")
+        err = self.claim_err("mckennie:2", holder="P", for_=2 * 3600.0)
         [lease], [r] = self.state()
         self.assertEqual((lease.holder, lease.previous, lease.yield_to), ("P", "a", ""))
+        self.assertAlmostEqual(lease.expires, ls.time.time() + 2 * 3600.0, delta=60)  # the claim's --for applies
         self.assertTrue(r.used)
         self.assertIn("TOOK mckennie:2 from a", err)
 

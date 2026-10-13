@@ -389,11 +389,14 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
                         lease = by_key[key]
                         notices.append(
                             f"[res] TOOK {lease.card} from {lease.holder} (lease {lease.id}) under your reservation: "
-                            f"tell {lease.holder} to stop its run there now"
+                            f"tell {lease.holder} to stop its run there now, and wait for the card to drain "
+                            "(pls res status) before you launch on it"
                         )
                         lease.previous, lease.holder, lease.yield_to = lease.holder, args.holder, ""
                         lease.note, lease.run = args.note or lease.note, run or lease.run
-                        lease.created, lease.idle_since, lease.expires = time.time(), 0.0, 0.0
+                        now = time.time()
+                        lease.created, lease.idle_since = now, 0.0
+                        lease.expires = now + args.for_ if args.for_ else 0.0
                     else:
                         lease = ls.new_lease(c, r, args.holder, args.note, args.for_, run=run)
                         leases.append(lease)

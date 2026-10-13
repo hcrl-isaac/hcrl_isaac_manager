@@ -88,7 +88,8 @@ pls res reserve --end [<id>] --holder "<session>"                          # end
   `[res] PREEMPTED ...` once the card moved; a holder checkpoints when warned and stops its run when preempted.
 - The priority holder's claim takes free reserved cards first, then yielding ones even while their runs are busy: the
   lease moves to it (`took over (from <holder>)`) and `res` prints whom to tell to stop now. `res` never stops another
-  holder's processes; stopping is the holder's job.
+  holder's processes; stopping is the holder's job. The old run usually still holds the card right after a
+  takeover, so wait until `pls res status` shows it drained before launching on it.
 - A pool reservation covers every card of that pool. On a SLURM login shared by several profiles (amd-rtx and
   rtx-small on Stampede3) the probe cannot tell which profile a job came from, so it covers every job on that login;
   name the cards when that matters.
