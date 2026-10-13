@@ -851,7 +851,7 @@ class EvalRunTest(Isolated):
     def test_any_exception_after_the_start_kills_the_run(self) -> None:
         pids = []
 
-        def broken(stage: ev.Stage, argv: list, timeout: float, stall: float) -> int:
+        def broken(stage: ev.Stage, argv: list, timeout: float, stall: float, lease: tuple = ("", "")) -> int:
             proc = stage.start(argv)
             pids.append(int(next(x for x in proc.stdout if x.startswith("PID ")).split()[1]))
             raise BrokenPipeError
@@ -869,7 +869,7 @@ class EvalRunTest(Isolated):
         self.assertEqual(self._leases(), [])
 
     def test_a_run_that_survives_the_kill_keeps_its_lease(self) -> None:
-        def stuck(stage: ev.Stage, argv: list, timeout: float, stall: float) -> int:
+        def stuck(stage: ev.Stage, argv: list, timeout: float, stall: float, lease: tuple = ("", "")) -> int:
             stage.start(argv)
             raise KeyboardInterrupt
 
@@ -890,7 +890,7 @@ class EvalRunTest(Isolated):
     def test_an_interrupt_kills_the_run_and_releases(self) -> None:
         real_run = ev.run
 
-        def interrupted(stage: ev.Stage, argv: list, timeout: float, stall: float) -> int:
+        def interrupted(stage: ev.Stage, argv: list, timeout: float, stall: float, lease: tuple = ("", "")) -> int:
             stage.start(argv)
             time.sleep(3)
             raise KeyboardInterrupt

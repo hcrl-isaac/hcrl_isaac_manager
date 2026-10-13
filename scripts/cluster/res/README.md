@@ -64,6 +64,36 @@ pls res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take o
   not honour, so run `res` from one machine. A store that cannot be read or has wrong-typed fields is moved aside:
   `status` then shows no leases and `claim`/`release`/`leases` refuse.
 
+## Priority (reservations)
+
+Priority is a reservation in `res`, not a promise to remember: it never leaves cards idle. Others may lease reserved
+cards meanwhile; their leases *yield*, and move to the priority holder when it claims the cards.
+
+```bash
+pls res reserve --pool amd-rtx --count 8 --eta 10m-60m --holder "<session>" --note "BFM-Zero retrain (Emily)"
+pls res reserve c571-003:0 c571-003:1 --eta 2h --holder "<session>"   # named cards instead of N of a pool
+pls res reserve --pool amd-rtx --count 8 --eta now --holder "<session>"   # same holder and scope: updates the ETA
+pls res claim --any --pool amd-rtx --count 8 --holder "<session>"       # takes free reserved cards, then yielding ones
+pls res reserve --end [<id>] --holder "<session>"                          # end it early
+```
+
+- `--eta` is when the cards are needed: `now`, `30m`, or a window such as `10m-60m`. `--for` caps the priority
+  (default 24h); it also ends once its holder has claimed cards under it and holds none of them again, i.e. the
+  prioritized run is done and released (or went idle). `status` and `leases` show each reservation, the
+  ETA, and the leases that yield to it.
+- Reserving marks the leases already on those cards as yielding and prints their holders. **The priority session
+  messages each of them with the ETA**, and again when it moves the ETA: `res` cannot message a session itself.
+- A claim by anyone else on a reserved card succeeds, warns that it yields and when, and marks the lease. `--any`
+  takes unreserved cards first. A `pls run --on` job whose lease yields prints `[res] YIELD ...` in its output, and
+  `[res] PREEMPTED ...` once the card moved; a holder checkpoints when warned and stops its run when preempted.
+- The priority holder's claim takes free reserved cards first, then yielding ones even while their runs are busy: the
+  lease moves to it (`took over (from <holder>)`) and `res` prints whom to tell to stop now. `res` never stops another
+  holder's processes; stopping is the holder's job.
+- A pool reservation covers every card of that pool. On a SLURM login shared by several profiles (amd-rtx and
+  rtx-small on Stampede3) the probe cannot tell which profile a job came from, so it covers every job on that login;
+  name the cards when that matters.
+- Reservations live in `reservations.json` beside the lease store, under the same lock.
+
 ## One-off scripts on a card (`pls run --on`)
 
 `pls run --on <card>` runs an eval or analysis script on a leased card of a `local` or `ssh` pool, or of a held SLURM

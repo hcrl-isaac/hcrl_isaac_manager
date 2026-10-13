@@ -927,7 +927,28 @@ def _kill_local_group(proc: subprocess.Popen) -> bool:
     return False
 
 
-def run(stage: Stage, argv: list[str], timeout: float, stall: float) -> int:
+LEASE_CHECK_S = 60.0  # how often a run looks for a reservation its lease yields to
+
+
+def lease_notice(lease_id: str, holder: str) -> str:
+    """What the run's output should say about its lease: it yields to a reservation, or moved to its holder."""
+    try:
+        with ls.locked_state() as (leases, reservations):
+            lease = next((x for x in leases if x.id == lease_id), None)
+            res = next((r for r in reservations if lease and r.id == lease.yield_to), None)
+    except ls.LeaseStoreError:
+        return ""
+    if lease is not None and lease.holder != holder:
+        return f"[res] PREEMPTED: {lease.holder} took this card ({lease.card}) under its priority; stop this run now"
+    if res is not None:
+        return (
+            f"[res] YIELD: {lease.card} is reserved by {res.holder}, needed {ls.eta_text(res)} ({res.note or res.id});"
+            " checkpoint and be ready to stop"
+        )
+    return ""
+
+
+def run(stage: Stage, argv: list[str], timeout: float, stall: float, lease: tuple[str, str] = ("", "")) -> int:
     """Stream the run; exit 0 after a Python traceback is a failure, and a timeout or stall kills it.
 
     Args:
@@ -935,6 +956,8 @@ def run(stage: Stage, argv: list[str], timeout: float, stall: float) -> int:
         argv: The script's arguments.
         timeout: Seconds before the run is killed (0 = none).
         stall: Seconds without output before the run is killed (0 = none).
+        lease: (lease id, holder) of the card, to announce in the output when it yields to a reservation or moves
+            to its holder; the run is never stopped for it.
 
     Returns:
         The script's exit status, 1 for a traceback with status 0, or 124 when it was killed.
@@ -948,8 +971,8 @@ def run(stage: Stage, argv: list[str], timeout: float, stall: float) -> int:
         lines.put(None)
 
     threading.Thread(target=pump, daemon=True).start()
-    start = last = time.monotonic()
-    saw_traceback = False
+    start = last = checked = time.monotonic()
+    saw_traceback, said = False, ""
     while True:
         try:
             line = lines.get(timeout=0.5)
@@ -963,6 +986,12 @@ def run(stage: Stage, argv: list[str], timeout: float, stall: float) -> int:
             sys.stdout.write(line)
             sys.stdout.flush()
             saw_traceback |= TRACEBACK in line
+        if lease[0] and now - checked >= LEASE_CHECK_S:
+            checked = now
+            notice = lease_notice(*lease)
+            if notice and notice.split(":")[0] != said.split(":")[0]:  # each kind of notice once
+                print(notice, file=sys.stderr, flush=True)
+            said = notice or said
         why = "timed out" if timeout and now - start > timeout else ""
         why = why or ("stalled (no output)" if stall and now - last > stall else "")
         if why:
@@ -1210,7 +1239,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             print(
                 f"[res] running {os.path.basename(script)} on {t.host}:gpu{t.gpu} (stage {stage.dir})", file=sys.stderr
             )
-            rc = run(stage, fill_checkpoints(run_args, paths), args.timeout, args.stall)
+            held = taken.id if taken is not None else args.lease or ""
+            rc = run(stage, fill_checkpoints(run_args, paths), args.timeout, args.stall, (held, args.holder))
     except KeyboardInterrupt as exc:
         rc = 130
         print(f"[res] interrupted ({exc or 'SIGINT'})", file=sys.stderr)
