@@ -98,6 +98,16 @@ def _published_digests(rels: list[str]) -> dict[str, tuple[str, list[str]]]:
     return out
 
 
+def has_lfs_pointer(path: str) -> bool:
+    """True if a file at ``path`` (or under it) is a git-lfs pointer rather than its content."""
+    files = [path] if os.path.isfile(path) else [os.path.join(r, f) for r, _, fs in os.walk(path) for f in fs]
+    for f in files:
+        with open(f, "rb") as fh:
+            if fh.read(40).startswith(b"version https://git-lfs.github.com/spec/"):
+                return True
+    return False
+
+
 def local_digests(path: str) -> list[str]:
     """W&B-style digests (base64 md5) of every file at ``path`` (a file, or a dir walked recursively)."""
     files = [path] if os.path.isfile(path) else [os.path.join(r, f) for r, _, fs in os.walk(path) for f in fs]
@@ -148,6 +158,14 @@ def _check_worktree_data(entries: list[tuple[str, str]], wt: str) -> None:
     """Exit 1 if a worktree's artifact-only entry differs from the artifact the job fetches in its place."""
     if not entries:
         return
+    pointers = [rel for rel, local in entries if has_lfs_pointer(local)]
+    if pointers:  # pointers never match an artifact's bytes; the job would get the published data, unchecked
+        print(f"[ERROR] preflight: WT={wt} holds git-lfs pointers, not data, so it cannot be compared with W&B's:",
+              file=sys.stderr)  # fmt: skip
+        for rel in pointers:
+            print(f"  {rel}", file=sys.stderr)
+        print("  run `git lfs pull` in those worktrees, then submit again.", file=sys.stderr)
+        sys.exit(1)
     try:
         published = _published_digests([rel for rel, _ in entries])
     except Exception as exc:  # cannot verify: warn, as for the presence check

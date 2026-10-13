@@ -175,6 +175,13 @@ class WorktreeDataTest(unittest.TestCase):
     def test_matching_worktree_data_passes(self) -> None:
         self.assertEqual(self.run_main(b"140 columns")[0], 0)
 
+    def test_lfs_pointers_are_refused_with_the_pull(self) -> None:
+        pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:ab\nsize 9\n"
+        (self.wt / "ssti_tasks" / "agile" / "style_data" / "traverse.pt").write_bytes(pointer)
+        code, err = self.run_main(b"134 columns")
+        self.assertEqual(code, 1)
+        self.assertIn("git lfs pull", err)
+
     def test_mounts_are_printed(self) -> None:
         out = io.StringIO()
         preflight._published_digests = lambda rels: {}
