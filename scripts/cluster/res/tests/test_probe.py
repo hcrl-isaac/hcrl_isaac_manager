@@ -217,6 +217,33 @@ class SlurmUnseenCardsTest(unittest.TestCase):
         self.assertIn("saw 1 of 4 allocated cards", reports[1].error)
 
 
+class SlurmAccountRetryTest(unittest.TestCase):
+    def test_an_unknown_lowercase_project_is_retried_uppercased(self) -> None:
+        """A job moved to an account no profile names: squeue gives cda26011, TACC only knows CDA26011."""
+        squeue = "42|gpu-a100|cda26011|RUNNING|c571-003|1|10:00|N/A|gres/gpu:1|box\n"
+        good = "@@CARDS\n0, GPU-a, A100, 0, 40960, 0\n@@APPS rc=0\n@@PS rc=0\n@@END\n"
+        steps: list[str] = []
+
+        def run(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
+            if "squeue" in cmd[-1]:
+                return subprocess.CompletedProcess(cmd, 0, squeue, "")
+            steps.append(cmd[-1])
+            out = (
+                good if "-A CDA26011" in cmd[-1] else "ERROR: Unknown project cda26011 (in accounting_check_prod.pl)\n"
+            )
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+
+        saved = probe._run, probe._master_alive
+        probe._master_alive, probe._run = (lambda login: True), run
+        try:
+            reports = probe.probe_slurm_login("u@login.tacc.x", [Pool("amd-rtx", "slurm", {"login": "u@login.tacc.x"})])
+        finally:
+            probe._run, probe._master_alive = saved
+        self.assertEqual(len(reports[0].cards), 1)
+        self.assertEqual(reports[1:], [])
+        self.assertEqual([("-A cda26011" in s, "-A CDA26011" in s) for s in steps], [(True, False), (False, True)])
+
+
 class PartialReportTest(unittest.TestCase):
     def slurm(self, squeue: str) -> list[Report]:
         saved = probe._run, probe._master_alive
