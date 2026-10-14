@@ -460,7 +460,6 @@ class CommandTest(TempStore):
         self.assertEqual(self.stored(), [])
 
 
-
 class StagingHeartbeatTest(TempStore):
     """A card run's stage can outlast the idle window; the lease stays active until the run starts."""
 
