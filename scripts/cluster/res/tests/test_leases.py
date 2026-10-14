@@ -460,9 +460,6 @@ class CommandTest(TempStore):
         self.assertEqual(self.stored(), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class StagingHeartbeatTest(TempStore):
     """A card run's stage can outlast the idle window; the lease stays active until the run starts."""
@@ -492,3 +489,7 @@ class StagingHeartbeatTest(TempStore):
         beat = evaluate._LeaseHeartbeat("").start()
         beat.stop()
         self.assertFalse(beat._thread.is_alive())
+
+
+if __name__ == "__main__":
+    unittest.main()
