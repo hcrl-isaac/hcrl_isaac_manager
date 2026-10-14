@@ -462,3 +462,33 @@ class CommandTest(TempStore):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StagingHeartbeatTest(TempStore):
+    """A card run's stage can outlast the idle window; the lease stays active until the run starts."""
+
+    def test_the_heartbeat_keeps_the_lease_active_while_staging(self) -> None:
+        import evaluate
+
+        with ls.locked_store() as leases:
+            leases.append(lease_on(card(index=0), idle_since=T0, last_active=0.0))
+            lease_id = leases[0].id
+        saved = evaluate.STAGING_TOUCH_S
+        evaluate.STAGING_TOUCH_S = 0.05
+        try:
+            beat = evaluate._LeaseHeartbeat(lease_id).start()
+            ls.time.sleep(0.2)
+            beat.stop()
+            beat.stop()  # a second stop (the run's finally) is harmless
+        finally:
+            evaluate.STAGING_TOUCH_S = saved
+        with ls.locked_store() as leases:
+            self.assertEqual(leases[0].idle_since, 0.0)
+            self.assertGreater(leases[0].last_active, T0)
+
+    def test_no_lease_no_heartbeat(self) -> None:
+        import evaluate
+
+        beat = evaluate._LeaseHeartbeat("").start()
+        beat.stop()
+        self.assertFalse(beat._thread.is_alive())
