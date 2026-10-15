@@ -227,7 +227,7 @@ class StoreTest(TempStore):
                 ls.parse_duration(bad)
 
 
-class CommandTest(TempStore):
+class CommandBase(TempStore):
     def setUp(self) -> None:
         super().setUp()
         self.saved_probe = res.probe_all
@@ -257,6 +257,8 @@ class CommandTest(TempStore):
         with ls.locked_store() as leases:
             return sorted(x.card for x in leases)
 
+
+class CommandTest(CommandBase):
     def test_duplicate_names_give_one_lease(self) -> None:
         self.claim("mckennie:0", "mckennie:0")
         self.assertEqual(self.stored(), ["mckennie:0"])
@@ -467,6 +469,106 @@ class CommandTest(TempStore):
         self.assertEqual(self.stored(), ["mckennie:0"])
         res.cmd_release(argparse.Namespace(targets=["mckennie:0"], holder="other", force=True), self.pools)
         self.assertEqual(self.stored(), [])
+
+
+class ReservationTest(CommandBase):
+    """Priority on cards: others may use them meanwhile, and their leases yield when the priority holder claims."""
+
+    def reserve(self, *cards: str, **kw: object) -> str:
+        args = {"cards": list(cards), "pool": None, "count": 1, "holder": "P", "eta": "10m-60m",
+                "for_": 24 * 3600.0, "note": "BFM-Zero retrain", "end": None}  # fmt: skip
+        args.update(kw)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            res.cmd_reserve(argparse.Namespace(**args), self.pools)
+        return out.getvalue()
+
+    def claim_err(self, *cards: str, **kw: object) -> str:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.claim(*cards, **kw)
+        return err.getvalue()
+
+    def state(self) -> tuple[list[ls.Lease], list[ls.Reservation]]:
+        with ls.locked_state() as (leases, reservations):
+            return list(leases), list(reservations)
+
+    def test_a_pool_reservation_marks_current_leases_and_names_their_holders(self) -> None:
+        self.claim_err("mckennie:0", holder="a")
+        out = self.reserve(pool="larg", count=2)
+        [lease], [r] = self.state()
+        self.assertEqual(lease.yield_to, r.id)
+        self.assertIn("a: mckennie:0", out)
+
+    def test_others_may_lease_a_reserved_card_and_are_told_it_yields(self) -> None:
+        self.reserve("mckennie:1")
+        err = self.claim_err("mckennie:1", holder="b")
+        [lease], [r] = self.state()
+        self.assertEqual((lease.holder, lease.yield_to), ("b", r.id))
+        self.assertIn("reserved by P", err)
+
+    def test_the_priority_holder_takes_a_yielding_card_even_while_its_run_is_busy(self) -> None:
+        self.claim_err("mckennie:2", holder="a", adopt=True)  # a's run is on the busy card
+        self.reserve("mckennie:2", eta="now")
+        err = self.claim_err("mckennie:2", holder="P", for_=2 * 3600.0)
+        [lease], [r] = self.state()
+        self.assertEqual((lease.holder, lease.previous, lease.yield_to), ("P", "a", ""))
+        self.assertAlmostEqual(lease.expires, ls.time.time() + 2 * 3600.0, delta=60)  # the claim's --for applies
+        self.assertTrue(r.used)
+        self.assertIn("TOOK mckennie:2 from a", err)
+
+    def test_others_take_unreserved_cards_first(self) -> None:
+        self.reserve("mckennie:0")
+        self.claim_err(any=True, holder="b")
+        self.assertEqual(self.stored(), ["mckennie:1"])
+
+    def test_a_used_reservation_ends_when_its_cards_are_released(self) -> None:
+        self.reserve("mckennie:0")
+        self.claim_err("mckennie:0", holder="P")
+        lease = self.state()[0][0]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            res.cmd_release(argparse.Namespace(targets=[lease.id], holder="P", force=False), self.pools)
+        self.assertEqual(self.state(), ([], []))
+
+    def test_a_reservation_ends_at_its_time_box_and_its_leases_stop_yielding(self) -> None:
+        r = ls.Reservation("r1", "P", pool="larg", count=1, expires=T0 + 10 * MIN)
+        lease = lease_on(card(index=0), holder="a", yield_to="r1")
+        reservations = [r]
+        self.assertEqual(ls.settle(reservations, [lease], now=T0), [])
+        self.assertEqual([why for _, why in ls.settle(reservations, [lease], now=T0 + 11 * MIN)], ["time box ended"])
+        self.assertEqual((reservations, lease.yield_to), ([], ""))
+
+    def test_ending_a_reservation_frees_its_leases(self) -> None:
+        self.claim_err("mckennie:0", holder="a")
+        self.reserve(pool="larg")
+        self.reserve(end="")
+        [lease], reservations = self.state()
+        self.assertEqual((lease.yield_to, reservations), ("", []))
+
+    def test_updating_the_eta_keeps_one_reservation(self) -> None:
+        self.reserve(pool="larg", eta="1h")
+        self.reserve(pool="larg", eta="now")
+        [r] = self.state()[1]
+        self.assertLessEqual(r.eta_hi, ls.time.time() + 1)
+
+    def test_parse_eta(self) -> None:
+        self.assertEqual(ls.parse_eta("now", now=T0), (T0, T0))
+        self.assertEqual(ls.parse_eta("10m-60m", now=T0), (T0 + 10 * MIN, T0 + 60 * MIN))
+        self.assertEqual(ls.parse_eta("30m", now=T0), (T0 + 30 * MIN, T0 + 30 * MIN))
+        for bad in ("60m-10m", "soon", "-5m"):
+            with self.assertRaises(ValueError):
+                ls.parse_eta(bad, now=T0)
+
+    def test_a_card_run_announces_the_yield_then_the_takeover(self) -> None:
+        import evaluate
+
+        self.claim_err("mckennie:2", holder="a", adopt=True)
+        lease = self.state()[0][0]
+        self.assertEqual(evaluate.lease_notice(lease.id, "a"), "")
+        self.reserve("mckennie:2", eta="now")
+        self.assertIn("YIELD", evaluate.lease_notice(lease.id, "a"))
+        self.claim_err("mckennie:2", holder="P")
+        self.assertIn("PREEMPTED", evaluate.lease_notice(lease.id, "a"))
 
 
 class StagingHeartbeatTest(TempStore):
