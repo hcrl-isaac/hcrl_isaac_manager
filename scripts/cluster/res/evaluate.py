@@ -346,8 +346,14 @@ def _describe(src: str) -> str:
         return "(not a git checkout)"
 
 
+TOOL_VENV_PYTHON = "3.11"  # ilab's version, so a tool venv runs the same language as the workspace
+
+
 def tool_venv(spec: str, code: dict[str, str], scratch: str) -> tuple[str, list[str]]:
     """The target dir and requirements of a ``<repo>[<extra>]`` tool venv, read from the local repo's pyproject.
+
+    Only the extra's list is installed, not the repo's ``[project] dependencies`` (hcrl_sim2real's pull torch, whose
+    CUDA wheels the tool venv exists to keep apart), so the extra lists everything the tool imports.
 
     Args:
         spec: ``<repo>[<extra>]``: a shipped repo and one of its optional dependency groups.
@@ -355,7 +361,8 @@ def tool_venv(spec: str, code: dict[str, str], scratch: str) -> tuple[str, list[
         scratch: The target's scratch dir.
 
     Returns:
-        The venv dir on the target (keyed by the requirements, so a change builds a new one) and the requirements.
+        The venv dir on the target (keyed by the python version and requirements, so a change builds a new one) and
+        the requirements.
     """
     m = re.fullmatch(r"([\w.-]+)\[([\w.-]+)\]", spec)
     if not m:
@@ -368,7 +375,7 @@ def tool_venv(spec: str, code: dict[str, str], scratch: str) -> tuple[str, list[
         reqs = tomllib.loads(pyproject.read_text())["project"]["optional-dependencies"][extra]
     except (OSError, KeyError, tomllib.TOMLDecodeError):
         sys.exit(f"[res] --venv {spec}: {pyproject} has no [project.optional-dependencies] {extra}")
-    key = hashlib.sha256("\n".join(sorted(reqs)).encode()).hexdigest()[:12]
+    key = hashlib.sha256("\n".join([f"python {TOOL_VENV_PYTHON}", *sorted(reqs)]).encode()).hexdigest()[:12]
     return f"{scratch}/res-eval/venvs/{repo}-{extra}-{key}", list(reqs)
 
 
@@ -446,7 +453,7 @@ if [ ! -f {q(path + "/.complete")} ]; then
     (
         flock 9
         [ -f {q(path + "/.complete")} ] && exit 0
-        rm -rf {q(path)} && "$uv" venv -q {q(path)} && "$uv" pip install -q --python {q(path + "/bin/python")} \\
+        rm -rf {q(path)} && "$uv" venv -q --python {TOOL_VENV_PYTHON} {q(path)} &&"$uv" pip install -q --python {q(path + "/bin/python")} \\
             {" ".join(q(r) for r in reqs)} && touch {q(path + "/.complete")}
     ) 9>{q(path + ".lock")} || {{ echo "[res] building the tool venv {path} failed"; exit 97; }}
 fi

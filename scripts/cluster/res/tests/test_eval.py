@@ -181,7 +181,11 @@ class TargetTest(unittest.TestCase):
         self.assertTrue(path.startswith("/var/local/u/res-eval/venvs/hcrl_sim2real-mjx-"))
         self.assertEqual(reqs, ["jax==0.11.2", "optax"])
         pyproject.write_text(pyproject.read_text().replace("0.11.2", "0.11.3"))
-        self.assertNotEqual(ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")[0], path)
+        bumped = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")[0]
+        self.assertNotEqual(bumped, path)
+        with mock.patch.object(ev, "TOOL_VENV_PYTHON", "3.12"):  # the interpreter version is part of the key
+            other = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")[0]
+        self.assertNotEqual(other, bumped)
         for spec, code in (("hcrl_sim2real", {}), ("x[mjx]", {"hcrl_sim2real": str(repo)}),
                            ("hcrl_sim2real[cuda]", {"hcrl_sim2real": str(repo)})):  # fmt: skip
             with self.assertRaises(SystemExit):
@@ -193,6 +197,7 @@ class TargetTest(unittest.TestCase):
         runner = ev.runner_script(t, "/s", "", [], ["/s/code/r"], command=True, venv=venv)
         self.assertIn("py=/var/local/u/res-eval/venvs/r-mjx-abc/bin/python", runner)
         self.assertIn("'jax[cuda12]==0.11.2' scipy", runner)
+        self.assertIn(f"venv -q --python {ev.TOOL_VENV_PYTHON} ", runner)
         self.assertNotIn("ilab/bin/python", runner)
         self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
         self.assertIn("ilab/bin/python", ev.runner_script(t, "/s", "x.py", [], []))
