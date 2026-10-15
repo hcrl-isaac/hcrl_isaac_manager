@@ -134,6 +134,13 @@ if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ] && [ "$(uname -m)" = x86_64 ]; then  # 
     VK_BINDS="-B ${VKCLAMP_DIR}:/opt/vkclamp:ro"
     export APPTAINERENV_XDG_CONFIG_DIRS="/opt/vkclamp/conf:/etc/xdg"
 fi
+# NODE_EXEC_OWN_TMP=1 (develop exec --own-tmp): this step's /tmp is its own, not the job's shared one, so steps on
+# one node never meet in Isaac Lab's hard-coded /tmp/IsaacLab (its URDF->USD conversions race)
+STEP_TMP="${STAGE}/tmp"
+if [ "${NODE_EXEC_OWN_TMP:-}" = 1 ]; then
+    STEP_TMP="$(mktemp -d "${STAGE}/step-tmp.XXXXXX")"
+    trap 'rm -rf "$STEP_TMP"' EXIT
+fi
 run_container() {
 apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
@@ -146,7 +153,7 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/docker-isaac-sim/documents:${DOCKER_USER_HOME}/Documents:rw \
     -B ${STAGE}/home:/u/esturman:rw \
     ${EXT_BINDS} ${VK_BINDS} \
-    -B ${STAGE}/tmp:/tmp:rw \
+    -B ${STEP_TMP}:/tmp:rw \
     --nv --writable-tmpfs --containall --no-home "$SIF" \
     bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
 }

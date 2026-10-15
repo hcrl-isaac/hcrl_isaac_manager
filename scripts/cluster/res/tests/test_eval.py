@@ -645,7 +645,7 @@ class SlurmEvalTest(Isolated):
         self.assertEqual([x.card for x in self._leases()], ["c571-003:3 (job 3557743)"], "a detached run keeps it")
         calls = self.calls.read_text().splitlines()
         self.assertEqual(calls[0], "JOB=3557743 CLUSTER=amd-rtx")
-        self.assertEqual(calls[1:6], ["exec", "--tree", "res-eval-0123456789", "--detach", "--log"])
+        self.assertEqual(calls[1:7], ["exec", "--tree", "res-eval-0123456789", "--own-tmp", "--detach", "--log"])
         self.assertIn("ControlPath", out, "the printed stop command goes over the master")
         ev.stage_tree.assert_called_once()
         self.assertEqual(ev.stage_tree.call_args.args[1], {"robot_rl": str(self.src)}, "only the --wt repo is staged")
