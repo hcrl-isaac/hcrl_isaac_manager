@@ -444,7 +444,7 @@ def stage_tree(t: Target, code: dict[str, str]) -> str:
     trees = q(profile_value(t.pool, "CLUSTER_TREES_DIR") or f"{t.workspace}/trees")
     # the tree's mtime is its last use: a reused (deduplicated) tree is touched, so a concurrent prune keeps it
     prune = (
-        f"touch {trees}/{q(tree)}; "
+        f"[ -d {trees}/{q(tree)} ] && touch {trees}/{q(tree)}; "  # never a file in its place, if a prune won
         f'for d in {trees}/res-eval-*; do [ "$(basename "$d")" = {q(tree)} ] && continue; '
         f'[ -n "$(find "$d" -maxdepth 0 -mtime +{TREE_KEEP_DAYS})" ] || continue; '
         '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; chmod -R u+w "$d" && rm -rf "$d"; done'

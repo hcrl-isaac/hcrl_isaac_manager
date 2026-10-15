@@ -279,6 +279,13 @@ check "the one in use is kept" "[ -d '$dt' ]"
 check "the newest is what default resolves to" "grep -qx v6 \"\$(dev __resolve_tree default 2>/dev/null)/resources/hcrl_isaaclab/whole_new.py\""
 rm -f "$G/whole_new.py"
 
+# a pruned tree left as an empty file at its path (an old touch) must not block staging the same refs again
+dev stage fp hcrl_isaaclab=feat > "$T/out_fp1" 2>&1
+fp_tree="$(ls -d "$R"/trees/fp-* 2>/dev/null | head -1)"
+chmod -R u+w "$fp_tree" && rm -rf "$fp_tree" && touch "$fp_tree"
+dev stage fp hcrl_isaaclab=feat > "$T/out_fp2" 2>&1
+check "a stray file at a tree's path is replaced by the restaged tree" "[ $? -eq 0 ] && [ -d '$fp_tree' ] && [ -f '$fp_tree/.complete' ]"
+
 if [ "$fails" -ne 0 ]; then
     ls -la "$R/trees"
     for f in "$T"/out*; do echo "--- $f"; tail -15 "$f"; done
