@@ -209,6 +209,18 @@ class TargetTest(unittest.TestCase):
         self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
         self.assertIn("ilab/bin/python", ev.runner_script(t, "/s", "x.py", [], []))
 
+    def test_jax_does_not_preallocate_a_shared_card(self) -> None:
+        runner = ev.runner_script(ev.make_target(Pool("a", "ssh", {"user": "u"}), "h", 0), "/s", "x.py", [], [])
+        self.assertIn('XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"', runner)
+
+    def test_with_names_a_known_sibling_checkout(self) -> None:
+        repo = Path(tempfile.mkdtemp())
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        self.assertEqual(ev.sibling_args([f"booster-deploy={repo}"]), {"booster-deploy": str(repo)})
+        for spec in ("models-repo", f"booster-deploy={repo}/nope"):
+            with self.assertRaises(SystemExit):
+                ev.sibling_args([spec])
+
     def test_a_bad_pin_is_refused(self) -> None:
         with self.assertRaises(SystemExit):
             ev.make_target(Pool("a", "ssh", {"user": "u", "pin": "maybe"}), "h", 0)

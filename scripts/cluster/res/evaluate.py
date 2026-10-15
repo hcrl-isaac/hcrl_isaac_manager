@@ -250,6 +250,39 @@ def lfs_pointers(src: str) -> list[str]:
 TOOL_REPOS = ("hcrl_sim2real",)  # package repos outside the worktree set that runs (and --venv tools) import
 
 
+@dataclass(frozen=True)
+class Sibling:
+    """A repo beside the workspace (not under resources/) that a run can ask for with ``--with``."""
+
+    path: str  # default checkout, ~ expanded
+    dirs: tuple[str, ...]  # the top-level dirs shipped (a deploy repo's models/ stay behind)
+    env: str  # the variable the run finds it by
+
+
+SIBLINGS = {"booster-deploy": Sibling("~/booster-deploy", ("configs", "src"), "BOOSTER_DEPLOY_ROOT")}
+
+
+def sibling_args(specs: list[str]) -> dict[str, str]:
+    """``--with <repo>[=<path>]`` -> repo name -> local checkout, checked to be a git checkout.
+
+    Args:
+        specs: The ``--with`` values.
+
+    Returns:
+        Repo name -> absolute local path.
+    """
+    found = {}
+    for spec in specs:
+        name, _, path = spec.partition("=")
+        if name not in SIBLINGS:
+            sys.exit(f"[res] --with {spec}: known repos are {', '.join(SIBLINGS)}")
+        path = os.path.abspath(os.path.expanduser(path or SIBLINGS[name].path))
+        if not os.path.isdir(os.path.join(path, ".git")) and not os.path.isfile(os.path.join(path, ".git")):
+            sys.exit(f"[res] --with {spec}: {path} is not a git checkout")
+        found[name] = path
+    return found
+
+
 def local_code(workspace: str, wt: str) -> dict[str, str]:
     """The package repos a run imports (core, RL package, ``*_tasks``, ``TOOL_REPOS``), as worktree-set or main
     checkout paths.
@@ -431,6 +464,8 @@ rm -f {q(stage + "/env")}  # credentials stay in this process's environment only
 export TMPDIR={q(stage + "/tmp")} XDG_CACHE_HOME={q(cache + "/xdg")} OMNI_CACHE_DIR={q(cache + "/omni")}
 export HCRL_ARTIFACT_ROOT={q(t.scratch + "/res-eval/artifacts")}
 export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y PYTHONUNBUFFERED=1 PYTHONPYCACHEPREFIX="$TMPDIR/pycache"
+# cards are shared: JAX takes memory as it needs it, not 75% of the card up front (--env may still set it)
+export XLA_PYTHON_CLIENT_PREALLOCATE="${{XLA_PYTHON_CLIENT_PREALLOCATE:-false}}"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR" "$HCRL_ARTIFACT_ROOT"
 {_venv_lines(t, venv) if venv else _ilab_lines()}
 export PYTHONPATH={q(":".join(pythonpath))}"${{PYTHONPATH:+:$PYTHONPATH}}"
@@ -724,7 +759,7 @@ class Stage:
             return dest
         return self.put(src, f"ckpt/{name}/{os.path.basename(src)}")
 
-    def snapshot(self, repo: str, src: str, outputs: bool = True) -> tuple[str, str]:
+    def snapshot(self, repo: str, src: str, outputs: bool = True, only: tuple[str, ...] = ()) -> tuple[str, str]:
         """Bring one repo to an ssh target as a read-only ``<scratch>/res-eval/code/<repo>-<fingerprint>``.
 
         Args:
@@ -732,6 +767,7 @@ class Stage:
             src: Local checkout or worktree.
             outputs: Link the repo's run-output dirs to the box workspace's copy (package repos; never data repos,
                 whose workspace copy may not exist).
+            only: Ship just these top-level dirs (the snapshot is named after them too).
 
         Returns:
             The snapshot path and the repo's line for the stage MANIFEST.
@@ -739,7 +775,8 @@ class Stage:
         q = shlex.quote
         fp, desc = code_fingerprint(src)
         root = f"{self.t.scratch}/res-eval/code"
-        snap = f"{root}/{repo}-{fp}"
+        name = f"{repo}.{'+'.join(only)}" if only else repo
+        snap = f"{root}/{name}-{fp}"
         line = f"{repo} {src} {desc} -> {snap}"
 
         # run output a repo writes inside itself (logs/, outputs/, wandb/) lands in the box workspace's copy of that
@@ -765,7 +802,7 @@ class Stage:
             return snap, line
         part = f"{snap}.partial.{uuid.uuid4().hex[:6]}"
         prev = self._ssh(
-            f"ls -1dt {q(root)}/{repo}-*/.complete 2>/dev/null | head -1", capture_output=True, text=True
+            f"ls -1dt {q(root)}/{name}-*/.complete 2>/dev/null | head -1", capture_output=True, text=True
         ).stdout.strip()
         links = [f"--link-dest={os.path.dirname(prev)}/"] if prev else []
         print(f"[res] uploading {repo} ({desc}) -> {self.t.host}:{snap}", file=sys.stderr)
@@ -774,7 +811,8 @@ class Stage:
             self._ssh(f"mkdir -p {q(part)}")
             ssh = self._rsync_ssh()
             cmd = ["rsync", "-rlp", "--checksum", "-s", "--from0", "--files-from=-", *links, "-e", ssh, f"{src}/"]
-            if subprocess.run([*cmd, f"{self.t.ssh}:{part}/"], input=b"\0".join(code_files(src))).returncode != 0:
+            files = [f for f in code_files(src) if not only or f.split(b"/")[0].decode() in only]
+            if subprocess.run([*cmd, f"{self.t.ssh}:{part}/"], input=b"\0".join(files)).returncode != 0:
                 sys.exit(f"[res] could not upload {repo} to {self.t.host}")
             finish = (
                 f"{rw(q(part))} touch {q(part)}/.complete && chmod -R a-w {q(part)} && "
@@ -1276,6 +1314,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         sys.exit("[res] pick the card with exactly one of --on host:gpu, --any or --lease <id>")
     env = parse_env(args.env or [])
     refs = parse_checkpoints(args.checkpoint or [])
+    siblings = sibling_args(args.with_ or [])
+    if clash := sorted(set(env) & {SIBLINGS[n].env for n in siblings}):
+        sys.exit(f"[res] --env {', '.join(clash)} and --with both set it; --with points it at the shipped copy")
     taken, job, uuid = None, "", ""
     if args.lease:
         pool, host, gpu, job, uuid = _lease_card(args.lease, args.holder, pools)
@@ -1317,6 +1358,16 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         source = t.workspace if t.kind == "local" else local_workspace()
         code = local_code(source, args.wt)
         pythonpath, manifest = stage.sync_code(code, local_data(source, args.wt))
+        for name, src in siblings.items():  # a sibling repo's dirs, found through its variable, on no PYTHONPATH
+            sib = SIBLINGS[name]
+            if t.kind == "slurm":
+                sys.exit(f"[res] --with {name} ships to box cards only; a SLURM run finds it in the cluster's tree")
+            if t.kind == "local":
+                env[sib.env] = src
+                manifest.append(f"{name} {src} {_describe(src)} (in place, {sib.env})")
+            else:
+                env[sib.env], line = stage.snapshot(name, src, outputs=False, only=sib.dirs)
+                manifest.append(f"{line} ({', '.join(sib.dirs)} only, {sib.env})")
         stage.write("\n".join(manifest) + "\n", "MANIFEST", mode=0o644)
         # snapshots are read-only, runs may be concurrent and a stage is removed after a success, so relative outputs
         # (train.py's logs/, a census's tables) go to a writable working dir of this run's own, kept afterwards
@@ -1419,6 +1470,14 @@ def parser() -> argparse.ArgumentParser:
         help="when the card (or every --any match) is taken, wait for one to free (optionally at most this long)",
     )
     ev.add_argument("--note", default="", help="lease note")
+    ev.add_argument(
+        "--with",
+        dest="with_",
+        action="append",
+        metavar="REPO[=PATH]",
+        help=f"ship a repo beside the workspace and point its variable at it ({', '.join(SIBLINGS)}; default path"
+        " ~/<repo>; repeatable)",
+    )
     ev.add_argument(
         "--venv",
         default="",
