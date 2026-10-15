@@ -1,11 +1,15 @@
 """Unit tests for the GPU probe parser (run all script tests: pls test-scripts)."""
 
+import contextlib
 import io
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import probe
@@ -201,6 +205,13 @@ class MergeDuplicatesTest(unittest.TestCase):
         self.assertEqual(([p.pid for p in card.procs], card.note), ([1, 2], "a; b"))
 
 
+@contextlib.contextmanager
+def no_profiles() -> Iterator[None]:
+    """Probe with an empty cluster config, so no profile names a partition."""
+    with tempfile.TemporaryDirectory() as d, mock.patch.object(probe, "CLUSTER_CONFIG_DIR", Path(d)):
+        yield
+
+
 class SlurmUnseenCardsTest(unittest.TestCase):
     def test_unseen_allocated_cards_are_unknown(self) -> None:
         squeue = "42|gpuA40x4|acct|RUNNING|gpub001|1|10:00|N/A|gres/gpu:4|box\n"
@@ -210,7 +221,10 @@ class SlurmUnseenCardsTest(unittest.TestCase):
         probe._master_alive = lambda login: True
         probe._run = lambda cmd, timeout: subprocess.CompletedProcess(cmd, 0, next(outputs), "")
         try:
-            reports = probe.probe_slurm_login("u@login.delta.x", [Pool("delta", "slurm", {"login": "u@login.delta.x"})])
+            with no_profiles():
+                reports = probe.probe_slurm_login(
+                    "u@login.delta.x", [Pool("delta", "slurm", {"login": "u@login.delta.x"})]
+                )
         finally:
             probe._run, probe._master_alive = saved
         self.assertEqual(len(reports[0].cards), 1)
@@ -236,7 +250,10 @@ class SlurmAccountRetryTest(unittest.TestCase):
         saved = probe._run, probe._master_alive
         probe._master_alive, probe._run = (lambda login: True), run
         try:
-            reports = probe.probe_slurm_login("u@login.tacc.x", [Pool("amd-rtx", "slurm", {"login": "u@login.tacc.x"})])
+            with no_profiles():
+                reports = probe.probe_slurm_login(
+                    "u@login.tacc.x", [Pool("amd-rtx", "slurm", {"login": "u@login.tacc.x"})]
+                )
         finally:
             probe._run, probe._master_alive = saved
         self.assertEqual(len(reports[0].cards), 1)
@@ -250,7 +267,10 @@ class PartialReportTest(unittest.TestCase):
         probe._master_alive = lambda login: True
         probe._run = lambda cmd, timeout: subprocess.CompletedProcess(cmd, 0, squeue, "")
         try:
-            return probe.probe_slurm_login("u@login.delta.x", [Pool("delta", "slurm", {"login": "u@login.delta.x"})])
+            with no_profiles():
+                return probe.probe_slurm_login(
+                    "u@login.delta.x", [Pool("delta", "slurm", {"login": "u@login.delta.x"})]
+                )
         finally:
             probe._run, probe._master_alive = saved
 
@@ -259,7 +279,7 @@ class PartialReportTest(unittest.TestCase):
 
     def test_completing_job_is_an_unknown_sub_report(self) -> None:
         reports = self.slurm("42|gpuA40x4|acct|COMPLETING|gpub001|1|0:00|N/A|gres/gpu:4|box\n")
-        self.assertEqual([(r.pool, bool(r.error)) for r in reports[1:]], [("delta (delta) job 42", True)])
+        self.assertEqual([(r.pool, bool(r.error)) for r in reports[1:]], [("delta (gpuA40x4) job 42", True)])
 
     def ray(self, nodes: dict, jobs: list) -> Report:
         class Resp:
@@ -356,3 +376,25 @@ class ProfileAccountsTest(unittest.TestCase):
         self.assertEqual(spelling.get("cda26011"), "CDA26011")
         self.assertEqual(spelling.get("bggq-delta-gpu"), "bggq-delta-gpu")
         self.assertNotIn("otherproj", spelling)
+
+
+class SlurmByPartitionTest(unittest.TestCase):
+    def test_jobs_are_reported_per_partition_named_by_the_profiles_submitting_there(self) -> None:
+        cfg = Path(tempfile.mkdtemp())
+        for name, part in (("amd-rtx", "amd-rtx"), ("stampede", "amd-rtx"), ("rtx-small", "rtx-small")):
+            (cfg / name).mkdir()
+            (cfg / name / "submit_job_slurm.sh").write_text(f"#!/bin/bash\n#SBATCH -p {part}\n#SBATCH -A X\n")
+        squeue = "42|rtx-small|x|RUNNING|c1|1|10:00|N/A|gres/gpu:1|a\n43|amd-rtx|x|PENDING|(Priority)|1|1:00|N/A|gres/gpu:2|b\n"
+        step = "@@CARDS\n0, GPU-a, RTX, 0, 98304, 0\n@@APPS rc=0\n@@PS rc=0\n@@END\n"
+        outputs = iter([squeue, step])
+        saved = probe._run, probe._master_alive
+        probe._master_alive = lambda login: True
+        probe._run = lambda cmd, timeout: subprocess.CompletedProcess(cmd, 0, next(outputs), "")
+        pools = [Pool(n, "slurm", {"login": "u@login.stampede3.x"}) for n in ("amd-rtx", "rtx-small", "stampede")]
+        try:
+            with mock.patch.object(probe, "CLUSTER_CONFIG_DIR", cfg):
+                reports = probe.probe_slurm_login("u@login.stampede3.x", pools)
+        finally:
+            probe._run, probe._master_alive = saved
+        got = {r.pool: (len(r.cards), bool(r.notes)) for r in reports}
+        self.assertEqual(got, {"stampede3 (amd-rtx, stampede)": (0, True), "stampede3 (rtx-small)": (1, False)})

@@ -375,6 +375,21 @@ def profile_accounts(pools: list[Pool]) -> dict[str, str]:
     return found
 
 
+def profile_partitions(pools: list[Pool]) -> dict[str, list[str]]:
+    """Partition -> the profiles whose sbatch script submits to it (``#SBATCH -p``)."""
+    found: dict[str, list[str]] = {}
+    for pool in pools:
+        script = CLUSTER_CONFIG_DIR / pool.name / "submit_job_slurm.sh"
+        if not script.is_file():
+            continue
+        for line in script.read_text().splitlines():
+            m = re.match(r"#SBATCH\s+(?:-p\s*|--partition[=\s]+)(\S+)", line.strip())
+            if m:
+                found.setdefault(m.group(1), []).append(pool.name)
+                break
+    return found
+
+
 def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
     """Probe every job of the login's user once, for all profiles that share that login.
 
@@ -383,7 +398,8 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
         pools: Profiles that use this login.
 
     Returns:
-        One report for the login plus one error report per job whose cards could not be probed.
+        One report per partition the profiles submit to (or a job sits in), labelled ``site (profile, ...)``, plus one
+        error report per job whose cards could not be probed; a login-wide failure is one report for the login.
     """
     parts = login.split("@")[-1].split(".")
     site = next((p for p in parts if not p.startswith("login")), parts[0])
@@ -399,15 +415,28 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
         return [Report(label, "slurm", error="squeue timed out")]
     if res.returncode != 0:
         return [Report(label, "slurm", error=f"squeue failed: {res.stderr.strip()[:200]}")]
-    report, failed = Report(label, "slurm", owner=login.split("@")[0]), []
+    owner, failed = login.split("@")[0], []
     spelling = profile_accounts(pools)
+    by_partition = profile_partitions(pools)
+    reports: dict[str, Report] = {}
+
+    def report_for(part: str) -> Report:  # one report per partition, named after the profiles submitting there
+        if part not in reports:
+            reports[part] = Report(f"{site} ({', '.join(by_partition.get(part, [part]))})", "slurm", owner=owner)
+        return reports[part]
+
+    for part in by_partition:
+        report_for(part)
     for line in res.stdout.splitlines():
         f = line.split("|", 9)
         if len(f) < 10:
-            report.notes.append(f"unparsable squeue line: {line[:120]}")
-            report.partial = True
+            whole = reports.setdefault("", Report(label, "slurm", owner=owner))
+            whole.notes.append(f"unparsable squeue line: {line[:120]}")
+            whole.partial = True
             continue
         jobid, part, acct, state, node, nnodes, left, start, gres, name = f
+        report = report_for(part)
+        label = report.pool
         if state == "PENDING":
             report.notes.append(f"job {jobid} ({part}, {name}) PENDING, est. start {start}")
             continue
@@ -450,6 +479,12 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
         if alloc is not None and alloc > len(cards):
             msg = f"saw {len(cards)} of {alloc} allocated cards; {alloc - len(cards)} unknown"
             failed.append(Report(f"{label} job {jobid}", "slurm", error=msg))
-    if not report.cards and not report.notes and not failed:
-        report.notes.append("no jobs held")
-    return [report, *failed]
+    for part, report in reports.items():
+        if (
+            part
+            and not report.cards
+            and not report.notes
+            and not any(f.pool.startswith(f"{report.pool} job ") for f in failed)
+        ):
+            report.notes.append("no jobs held")
+    return [*sorted(reports.values(), key=lambda r: r.pool), *failed]
