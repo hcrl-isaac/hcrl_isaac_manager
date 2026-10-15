@@ -1200,6 +1200,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if not repo and not os.path.isfile(script):
             sys.exit(f"[res] no script {args.script}")
     run_args = [args.script, *args.script_args] if args.cmd else args.script_args
+    if args.lease and "," in args.lease:
+        sys.exit("[res] several leases (lease:A,B) run a job list: add --jobs FILE --out DIR")
     if sum(map(bool, (args.on, args.any, args.lease))) != 1:
         sys.exit("[res] pick the card with exactly one of --on host:gpu, --any or --lease <id>")
     env = parse_env(args.env or [])
@@ -1345,6 +1347,13 @@ def parser() -> argparse.ArgumentParser:
     )
     ev.add_argument("--note", default="", help="lease note")
     ev.add_argument(
+        "--jobs",
+        metavar="FILE",
+        help="run the script once per job (JSON array or lines of {id, args, checkpoint, env}) across the leases"
+        " lease:A,B,...: one worker per card, a job's args after the common ones",
+    )
+    ev.add_argument("--out", metavar="DIR", help="with --jobs: each job's <id>.log and <id>.status (rerun skips ok)")
+    ev.add_argument(
         "--checkpoint",
         action="append",
         help="[NAME=]<W&B run URL | entity/project/run[@iter] | path>, exported as NAME; {NAME} in the script args is its path",
@@ -1372,7 +1381,16 @@ def main(argv: list[str] | None = None) -> None:
     """Entry point of `pls run --on <card>`: claim the card through res, run the script, release."""
     import res
 
-    args = parse_args(sys.argv[1:] if argv is None else argv)
+    argv = sys.argv[1:] if argv is None else argv
+    args = parse_args(argv)
+    if args.jobs:
+        import batch
+
+        if not args.lease or args.on or args.any or args.detach or not args.out:
+            sys.exit("[res] --jobs runs on held cards: --on lease:A,B,... and --out DIR (no --any, --detach)")
+        pre = argv[: argv.index("--")] if "--" in argv else argv
+        pre = pre[:-1] if pre and pre[-1] == args.script else pre  # the script comes after the shared options
+        sys.exit(batch.run_batch(pre, args.lease.split(","), args.jobs, args.out, args.script, args.script_args))
     try:
         pools = res.load_pools()
     except Exception as exc:  # a broken inventory must say so, not print a traceback
