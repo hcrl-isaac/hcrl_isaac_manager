@@ -94,7 +94,9 @@ def _published_digests(rels: list[str]) -> dict[str, tuple[str, list[str]]]:
         if rel in by_rel:
             s = by_rel[rel]
             art = api.artifact(f"{module._project()}/{s.key}:{s.version}")
-            out[rel] = (f"{s.key}:{s.version}", sorted(e.digest for e in art.manifest.entries.values()))
+            entries = art.manifest.entries.items()
+            digests = sorted(e.digest for name, e in entries if not name.lower().endswith(DOC_SUFFIXES))
+            out[rel] = (f"{s.key}:{s.version}", digests)
     return out
 
 
@@ -108,9 +110,13 @@ def has_lfs_pointer(path: str) -> bool:
     return False
 
 
+DOC_SUFFIXES = (".md", ".rst")  # documentation beside the weights: never what a job loads, so not compared
+
+
 def local_digests(path: str) -> list[str]:
-    """W&B-style digests (base64 md5) of every file at ``path`` (a file, or a dir walked recursively)."""
+    """W&B-style digests (base64 md5) of every file at ``path`` (a file, or a dir walked recursively), docs left out."""
     files = [path] if os.path.isfile(path) else [os.path.join(r, f) for r, _, fs in os.walk(path) for f in fs]
+    files = [f for f in files if not f.lower().endswith(DOC_SUFFIXES)]
     out = []
     for f in files:
         h = hashlib.md5()

@@ -182,6 +182,11 @@ class WorktreeDataTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("git lfs pull", err)
 
+    def test_a_differing_readme_alone_is_not_a_difference(self) -> None:
+        data = self.wt / "ssti_tasks" / "agile" / "style_data"
+        (data / "README.md").write_text("an older description")  # docs never reach the comparison
+        self.assertEqual(self.run_main(b"140 columns")[0], 0)
+
     def test_the_refusal_names_the_opt_out(self) -> None:
         self.assertIn(f"--wt-data-ok {self.rel}", self.run_main(b"134 columns")[1])
 
