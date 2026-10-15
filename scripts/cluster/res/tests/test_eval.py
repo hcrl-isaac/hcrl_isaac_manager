@@ -177,15 +177,22 @@ class TargetTest(unittest.TestCase):
         repo = Path(tempfile.mkdtemp())
         pyproject = repo / "pyproject.toml"
         pyproject.write_text('[project]\nname = "s"\n[project.optional-dependencies]\nmjx = ["jax==0.11.2", "optax"]\n')
-        path, reqs = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")
+        path, reqs, python = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")
         self.assertTrue(path.startswith("/var/local/u/res-eval/venvs/hcrl_sim2real-mjx-"))
-        self.assertEqual(reqs, ["jax==0.11.2", "optax"])
+        self.assertEqual((reqs, python), (["jax==0.11.2", "optax"], ev.TOOL_VENV_PYTHON))
         pyproject.write_text(pyproject.read_text().replace("0.11.2", "0.11.3"))
         bumped = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")[0]
         self.assertNotEqual(bumped, path)
         with mock.patch.object(ev, "TOOL_VENV_PYTHON", "3.12"):  # the interpreter version is part of the key
             other = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")[0]
         self.assertNotEqual(other, bumped)
+        pyproject.write_text(pyproject.read_text() + '[tool.pls.venv.mjx]\npython = "3.12"\n')
+        path12, _, python = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")
+        self.assertEqual(python, "3.12")
+        self.assertNotEqual(path12, bumped)
+        pyproject.write_text(pyproject.read_text().replace('"3.12"', '"latest"'))
+        with self.assertRaises(SystemExit):
+            ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")
         for spec, code in (("hcrl_sim2real", {}), ("x[mjx]", {"hcrl_sim2real": str(repo)}),
                            ("hcrl_sim2real[cuda]", {"hcrl_sim2real": str(repo)})):  # fmt: skip
             with self.assertRaises(SystemExit):
@@ -193,11 +200,11 @@ class TargetTest(unittest.TestCase):
 
     def test_a_tool_venv_run_builds_once_and_runs_its_python(self) -> None:
         t = ev.make_target(Pool("larg", "ssh", {"user": "u"}), "hazard", 1)
-        venv = ("/var/local/u/res-eval/venvs/r-mjx-abc", ["jax[cuda12]==0.11.2", "scipy"])
+        venv = ("/var/local/u/res-eval/venvs/r-mjx-abc", ["jax[cuda12]==0.11.2", "scipy"], "3.12")
         runner = ev.runner_script(t, "/s", "", [], ["/s/code/r"], command=True, venv=venv)
         self.assertIn("py=/var/local/u/res-eval/venvs/r-mjx-abc/bin/python", runner)
         self.assertIn("'jax[cuda12]==0.11.2' scipy", runner)
-        self.assertIn(f"venv -q --python {ev.TOOL_VENV_PYTHON} ", runner)
+        self.assertIn("venv -q --python 3.12 ", runner)
         self.assertNotIn("ilab/bin/python", runner)
         self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
         self.assertIn("ilab/bin/python", ev.runner_script(t, "/s", "x.py", [], []))

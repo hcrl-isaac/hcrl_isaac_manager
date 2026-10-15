@@ -350,14 +350,15 @@ def _describe(src: str) -> str:
         return "(not a git checkout)"
 
 
-TOOL_VENV_PYTHON = "3.11"  # ilab's version, so a tool venv runs the same language as the workspace
+TOOL_VENV_PYTHON = "3.11"  # ilab's version: a tool venv's python unless its repo's [tool.pls.venv.<extra>] sets one
 
 
-def tool_venv(spec: str, code: dict[str, str], scratch: str) -> tuple[str, list[str]]:
+def tool_venv(spec: str, code: dict[str, str], scratch: str) -> tuple[str, list[str], str]:
     """The target dir and requirements of a ``<repo>[<extra>]`` tool venv, read from the local repo's pyproject.
 
     Only the extra's list is installed, not the repo's ``[project] dependencies`` (hcrl_sim2real's pull torch, whose
-    CUDA wheels the tool venv exists to keep apart), so the extra lists everything the tool imports.
+    CUDA wheels the tool venv exists to keep apart), so the extra lists everything the tool imports. The python
+    version is ``[tool.pls.venv.<extra>] python`` in the same pyproject, else ``TOOL_VENV_PYTHON``.
 
     Args:
         spec: ``<repo>[<extra>]``: a shipped repo and one of its optional dependency groups.
@@ -365,8 +366,8 @@ def tool_venv(spec: str, code: dict[str, str], scratch: str) -> tuple[str, list[
         scratch: The target's scratch dir.
 
     Returns:
-        The venv dir on the target (keyed by the python version and requirements, so a change builds a new one) and
-        the requirements.
+        The venv dir on the target (keyed by the python version and requirements, so a change builds a new one), the
+        requirements and the python version.
     """
     m = re.fullmatch(r"([\w.-]+)\[([\w.-]+)\]", spec)
     if not m:
@@ -376,11 +377,15 @@ def tool_venv(spec: str, code: dict[str, str], scratch: str) -> tuple[str, list[
         sys.exit(f"[res] --venv {spec}: {repo} is not a shipped repo ({', '.join(sorted(code))})")
     pyproject = Path(code[repo]) / "pyproject.toml"
     try:
-        reqs = tomllib.loads(pyproject.read_text())["project"]["optional-dependencies"][extra]
+        meta = tomllib.loads(pyproject.read_text())
+        reqs = meta["project"]["optional-dependencies"][extra]
     except (OSError, KeyError, tomllib.TOMLDecodeError):
         sys.exit(f"[res] --venv {spec}: {pyproject} has no [project.optional-dependencies] {extra}")
-    key = hashlib.sha256("\n".join([f"python {TOOL_VENV_PYTHON}", *sorted(reqs)]).encode()).hexdigest()[:12]
-    return f"{scratch}/res-eval/venvs/{repo}-{extra}-{key}", list(reqs)
+    python = str(meta.get("tool", {}).get("pls", {}).get("venv", {}).get(extra, {}).get("python", TOOL_VENV_PYTHON))
+    if not re.fullmatch(r"3\.\d+(\.\d+)?", python):
+        sys.exit(f"[res] --venv {spec}: [tool.pls.venv.{extra}] python must be a version like 3.12; got {python!r}")
+    key = hashlib.sha256("\n".join([f"python {python}", *sorted(reqs)]).encode()).hexdigest()[:12]
+    return f"{scratch}/res-eval/venvs/{repo}-{extra}-{key}", list(reqs), python
 
 
 def runner_script(
@@ -391,7 +396,7 @@ def runner_script(
     pythonpath: list[str],
     cwd: str = "",
     command: bool = False,
-    venv: tuple[str, list[str]] | None = None,
+    venv: tuple[str, list[str], str] | None = None,
 ) -> str:
     """The bash that runs on the target: a stage log, isolated caches, the given PYTHONPATH, the script's status.
 
@@ -403,7 +408,7 @@ def runner_script(
         pythonpath: PYTHONPATH entries on the target.
         cwd: Directory to run the script from (default: the target workspace).
         command: Run the arguments as a command line, the ilab venv first on PATH, instead of the script.
-        venv: A tool venv (dir, requirements) to run with instead of ilab, built on first use.
+        venv: A tool venv (dir, requirements, python version) to run with instead of ilab, built on first use.
 
     Returns:
         The run.sh text.
@@ -445,10 +450,10 @@ def _ilab_lines() -> str:
     )
 
 
-def _venv_lines(t: Target, venv: tuple[str, list[str]]) -> str:
+def _venv_lines(t: Target, venv: tuple[str, list[str], str]) -> str:
     """run.sh lines building (once, under a lock) and selecting a tool venv's python."""
     q = shlex.quote
-    path, reqs = venv
+    path, reqs, python = venv
     return f"""uv="$(command -v uv || echo "$HOME/.local/bin/uv")"
 export UV_CACHE_DIR={q(t.scratch + "/res-eval/cache/uv")}
 if [ ! -f {q(path + "/.complete")} ]; then
@@ -457,7 +462,7 @@ if [ ! -f {q(path + "/.complete")} ]; then
     (
         flock 9
         [ -f {q(path + "/.complete")} ] && exit 0
-        rm -rf {q(path)} && "$uv" venv -q --python {TOOL_VENV_PYTHON} {q(path)} \\
+        rm -rf {q(path)} && "$uv" venv -q --python {q(python)} {q(path)} \\
             && "$uv" pip install -q --python {q(path + "/bin/python")} \\
             {" ".join(q(r) for r in reqs)} && touch {q(path + "/.complete")}
     ) 9>{q(path + ".lock")} || {{ echo "[res] building the tool venv {path} failed"; exit 97; }}
