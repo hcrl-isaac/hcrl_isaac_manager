@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -239,6 +240,31 @@ class SlurmTest(unittest.TestCase):
             "a reused tree counts as just used, and a pruned one is never recreated as a file",
         )
         self.assertIn(".in-use", prune, "a tree a running step uses is never pruned")
+        self.assertTrue(prune.endswith("[ -f /w/trees/res-eval-0123456789/.complete ]"), "the tree must still exist")
+
+    def test_a_reused_tree_pruned_before_the_run_is_staged_again(self) -> None:
+        out = "Run with: pls cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
+        staged = mock.Mock(returncode=0, stdout=out)
+        t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
+
+        def runs(*prunes: int) -> Callable[..., mock.Mock]:  # stages report the tree; prune checks return the next code
+            left = list(prunes)
+            return lambda cmd, **kw: mock.Mock(returncode=left.pop(0)) if cmd[0] == "ssh" else staged
+
+        with (
+            mock.patch.object(ev.subprocess, "run", side_effect=runs(1, 0)) as run,
+            mock.patch.object(ev, "profile_value", return_value=""),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(ev.stage_tree(t, {"robot_rl": "/p"}), "res-eval-0123456789")
+        self.assertEqual(sum(c.args[0][2:3] == ["stage"] for c in run.call_args_list), 2)
+        with (
+            mock.patch.object(ev.subprocess, "run", side_effect=runs(1, 1)),
+            mock.patch.object(ev, "profile_value", return_value=""),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            ev.stage_tree(t, {"robot_rl": "/p"})
 
 
 class LocalCodeTest(unittest.TestCase):
