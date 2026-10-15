@@ -68,6 +68,14 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--batch", action="store_true", help="submit a batch job on SLURM cluster TARGET (train only)")
     p.add_argument("--tree", default="", metavar="N", help="(--batch) run staged tree N instead of staging")
     p.add_argument("--distributed", action="store_true", help="(--on ray, train) a sub-job per GPU node")
+    p.add_argument(
+        "--wt-data-ok",
+        nargs="+",
+        default=[],
+        metavar="REL",
+        help="(--on ray --wt) these artifact-only entries, as the preflight names them, may differ from W&B: the job"
+        " trains on the published copy",
+    )
     return p
 
 
@@ -221,6 +229,8 @@ def main(argv: list[str]) -> None:
         sys.exit("[pls] run: --tree only applies with --batch")
     if ns.distributed and (ns.on != "ray" or run[0] != "train"):
         sys.exit("[pls] run: --distributed only applies to train on Ray (--on ray -- train)")
+    if ns.wt_data_ok and (ns.on != "ray" or not ns.wt):
+        sys.exit("[pls] run: --wt-data-ok only applies to a worktree set on Ray (--on ray --wt NAME)")
     if not ns.on:
         if extra:
             sys.exit(f"[pls] run: {' '.join(extra)} only apply with --on")
@@ -230,7 +240,10 @@ def main(argv: list[str]) -> None:
         if extra or ns.cmd:
             sys.exit(f"[pls] run --on ray: {' '.join([*extra, *(['--cmd'] if ns.cmd else [])])} only apply on a card")
         script, *args = run
-        env = {"WT": ns.wt} if ns.wt else None
+        env = {"WT": ns.wt} if ns.wt else {}
+        if ns.wt_data_ok:
+            env["WT_DATA_OK"] = os.pathsep.join(ns.wt_data_ok)
+        env = env or None
         if script == "train":  # a training job: wrap_resources runs train.py (sweeps, aggregate jobs)
             handoff([RAY_BACKEND, "job_distributed" if ns.distributed else "job", *args], env=env)
         else:

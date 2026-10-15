@@ -94,7 +94,9 @@ def _published_digests(rels: list[str]) -> dict[str, tuple[str, list[str]]]:
         if rel in by_rel:
             s = by_rel[rel]
             art = api.artifact(f"{module._project()}/{s.key}:{s.version}")
-            out[rel] = (f"{s.key}:{s.version}", sorted(e.digest for e in art.manifest.entries.values()))
+            entries = art.manifest.entries.items()
+            digests = sorted(e.digest for name, e in entries if not name.lower().endswith(DOC_SUFFIXES))
+            out[rel] = (f"{s.key}:{s.version}", digests)
     return out
 
 
@@ -108,9 +110,13 @@ def has_lfs_pointer(path: str) -> bool:
     return False
 
 
+DOC_SUFFIXES = (".md", ".rst")  # documentation beside the weights: never what a job loads, so not compared
+
+
 def local_digests(path: str) -> list[str]:
-    """W&B-style digests (base64 md5) of every file at ``path`` (a file, or a dir walked recursively)."""
+    """W&B-style digests (base64 md5) of every file at ``path`` (a file, or a dir walked recursively), docs left out."""
     files = [path] if os.path.isfile(path) else [os.path.join(r, f) for r, _, fs in os.walk(path) for f in fs]
+    files = [f for f in files if not f.lower().endswith(DOC_SUFFIXES)]
     out = []
     for f in files:
         h = hashlib.md5()
@@ -174,6 +180,11 @@ def _check_worktree_data(entries: list[tuple[str, str]], wt: str) -> None:
         return
     differ = [(rel, published[rel][0]) for rel, local in entries
               if rel in published and local_digests(local) != published[rel][1]]  # fmt: skip
+    accepted = {r for r in os.environ.get("WT_DATA_OK", "").split(os.pathsep) if r}  # pls run --wt-data-ok
+    for rel, art in [x for x in differ if x[0] in accepted]:
+        print(f"[WARN] preflight: WT={wt} differs from {art} at {rel}; --wt-data-ok accepts it, so the job trains on"
+              " the published copy.", file=sys.stderr)  # fmt: skip
+    differ = [x for x in differ if x[0] not in accepted]
     if not differ:
         return
     print(f"[ERROR] preflight: WT={wt} holds other data than the W&B artifact a Ray job fetches in its place:",
@@ -181,7 +192,8 @@ def _check_worktree_data(entries: list[tuple[str, str]], wt: str) -> None:
     for rel, art in differ:
         print(f"  {rel}  (the job would get {art})", file=sys.stderr)
     print("  Ray excludes these from its upload; run this set where its files ship (a card: pls run --on <host:gpu>"
-          f" --wt {wt}, or a SLURM tree).", file=sys.stderr)  # fmt: skip
+          f" --wt {wt}, or a SLURM tree), or, when the job does not read them, pass"
+          f" --wt-data-ok {' '.join(rel for rel, _ in differ)} to train on the published copy.", file=sys.stderr)  # fmt: skip
     sys.exit(1)
 
 

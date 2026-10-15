@@ -146,12 +146,12 @@ class WorktreeDataTest(unittest.TestCase):
         preflight.mounted_sources, preflight._published_rel_paths, preflight._published_digests = self.saved
         self.dir.cleanup()
 
-    def run_main(self, published_bytes: bytes) -> tuple[int, str]:
+    def run_main(self, published_bytes: bytes, accepted: str = "") -> tuple[int, str]:
         digest = preflight.local_digests(self._file(published_bytes))
         preflight._published_digests = lambda rels: {r: ("traverse:v3", digest) for r in rels}
         err = io.StringIO()
         with (
-            mock.patch.dict(os.environ, {"WT": "momonly"}),
+            mock.patch.dict(os.environ, {"WT": "momonly", "WT_DATA_OK": accepted}),
             contextlib.redirect_stderr(err),
             contextlib.redirect_stdout(io.StringIO()),
         ):
@@ -181,6 +181,19 @@ class WorktreeDataTest(unittest.TestCase):
         code, err = self.run_main(b"134 columns")
         self.assertEqual(code, 1)
         self.assertIn("git lfs pull", err)
+
+    def test_a_differing_readme_alone_is_not_a_difference(self) -> None:
+        data = self.wt / "ssti_tasks" / "agile" / "style_data"
+        (data / "README.md").write_text("an older description")  # docs never reach the comparison
+        self.assertEqual(self.run_main(b"140 columns")[0], 0)
+
+    def test_the_refusal_names_the_opt_out(self) -> None:
+        self.assertIn(f"--wt-data-ok {self.rel}", self.run_main(b"134 columns")[1])
+
+    def test_an_accepted_entry_warns_and_passes(self) -> None:
+        code, err = self.run_main(b"134 columns", accepted=self.rel)
+        self.assertEqual(code, 0)
+        self.assertIn("--wt-data-ok accepts it", err)
 
     def test_mounts_are_printed(self) -> None:
         out = io.StringIO()
