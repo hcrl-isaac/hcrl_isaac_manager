@@ -137,6 +137,7 @@ class WorktreeDataTest(unittest.TestCase):
         data = self.wt / "ssti_tasks" / "agile" / "style_data"
         data.mkdir(parents=True)
         (data / "traverse.pt").write_bytes(b"140 columns")
+        (data.parent / "crab_cfg.py").write_text('STYLE = "agile/style_data/traverse.pt"\n')  # the task reads it
         self.rel = "ssti_tasks/ssti_tasks/agile/style_data"
         self.saved = (preflight.mounted_sources, preflight._published_rel_paths, preflight._published_digests)
         preflight.mounted_sources = lambda wt: [(str(self.wt), "ssti_tasks")]
@@ -181,6 +182,12 @@ class WorktreeDataTest(unittest.TestCase):
         code, err = self.run_main(b"134 columns")
         self.assertEqual(code, 1)
         self.assertIn("git lfs pull", err)
+
+    def test_a_differing_entry_no_code_names_only_warns(self) -> None:
+        (self.wt / "ssti_tasks" / "agile" / "crab_cfg.py").write_text("STYLE = None\n")  # nothing loads the data
+        code, err = self.run_main(b"134 columns")
+        self.assertEqual(code, 0)
+        self.assertIn("no mounted code or config names it", err)
 
     def test_mounts_are_printed(self) -> None:
         out = io.StringIO()
