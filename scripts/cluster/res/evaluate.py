@@ -434,23 +434,28 @@ def stage_tree(t: Target, code: dict[str, str]) -> str:
     """
     specs = [f"{repo}={src}" for repo, src in code.items() if repo != "IsaacLab" and not repo.endswith("_robots")]
     cmd, env = cluster_dev_cmd(t.pool, "", "stage", "res-eval", *specs)
-    print(f"[res] staging {', '.join(code)} on {t.pool} as a code tree", file=sys.stderr)
-    res = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, text=True)
-    found = re.search(r"--tree (\S+) --", res.stdout)
-    if res.returncode != 0 or not found:
-        sys.exit(f"[res] could not stage the code on {t.pool} (develop stage exited {res.returncode})")
-    tree = found.group(1)
     q = shlex.quote
     trees = q(profile_value(t.pool, "CLUSTER_TREES_DIR") or f"{t.workspace}/trees")
-    # the tree's mtime is its last use: a reused (deduplicated) tree is touched, so a concurrent prune keeps it
-    prune = (
-        f"touch {trees}/{q(tree)}; "
-        f'for d in {trees}/res-eval-*; do [ "$(basename "$d")" = {q(tree)} ] && continue; '
-        f'[ -n "$(find "$d" -maxdepth 0 -mtime +{TREE_KEEP_DAYS})" ] || continue; '
-        '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; chmod -R u+w "$d" && rm -rf "$d"; done'
-    )
-    subprocess.run(["ssh", *t.ssh_opts, t.ssh, prune], capture_output=True)
-    return tree
+    for _ in range(2):  # a prune elsewhere may remove a reused tree between its stage and this run: stage it again
+        print(f"[res] staging {', '.join(code)} on {t.pool} as a code tree", file=sys.stderr)
+        res = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, text=True)
+        found = re.search(r"--tree (\S+) --", res.stdout)
+        if res.returncode != 0 or not found:
+            sys.exit(f"[res] could not stage the code on {t.pool} (develop stage exited {res.returncode})")
+        tree = found.group(1)
+        # the tree's mtime is its last use: a reused (deduplicated) tree is touched, so a concurrent prune keeps it;
+        # the closing test tells whether it still exists
+        prune = (
+            f"[ -d {trees}/{q(tree)} ] && touch {trees}/{q(tree)}; "  # never a file in its place, if a prune won
+            f'for d in {trees}/res-eval-*; do [ "$(basename "$d")" = {q(tree)} ] && continue; '
+            f'[ -n "$(find "$d" -maxdepth 0 -mtime +{TREE_KEEP_DAYS})" ] || continue; '
+            '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; chmod -R u+w "$d" && rm -rf "$d"; done; '
+            f"[ -f {trees}/{q(tree)}/.complete ]"
+        )
+        if subprocess.run(["ssh", *t.ssh_opts, t.ssh, prune], capture_output=True).returncode == 0:
+            return tree
+        print(f"[res] tree {tree} was pruned before the run could use it; staging it again", file=sys.stderr)
+    sys.exit(f"[res] the code tree on {t.pool} was removed again before the run; nothing was run")
 
 
 def container_path(t: Target, path: str) -> str:

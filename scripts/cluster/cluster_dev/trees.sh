@@ -222,6 +222,8 @@ cmd_stage() {  # stage [--no-space-check] [NAME] [REPO=REF|REPO=PATH ...] : uplo
             echo \"\$n shared-live \${d%/}\" >> '${STAGE_PART}/MANIFEST'; done" || exit 1
         # marked complete before the rename, so a tree under its final name is always complete
         on_login "touch '${STAGE_PART}/.complete'" || exit 1
+        # a stray non-directory at the tree's path (an old touch after a prune) would block the rename forever
+        on_login "[ ! -e '${tree}' ] || [ -d '${tree}' ] || rm -f '${tree}'" || exit 1
         if on_login "mv -T '${STAGE_PART}' '${tree}'"; then
             STAGE_PART=""
         elif on_login "[ -f '${tree}/.complete' ]"; then
