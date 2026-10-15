@@ -234,7 +234,10 @@ class SlurmTest(unittest.TestCase):
         prune = run.call_args_list[-1].args[0][-1]
         self.assertIn("/w/trees/res-eval-*", prune)
         self.assertIn("res-eval-0123456789", prune, "the tree just staged is never pruned")
-        self.assertTrue(prune.startswith("touch /w/trees/res-eval-0123456789;"), "a reused tree counts as just used")
+        self.assertTrue(
+            prune.startswith("[ -d /w/trees/res-eval-0123456789 ] && touch /w/trees/res-eval-0123456789;"),
+            "a reused tree counts as just used, and a pruned one is never recreated as a file",
+        )
         self.assertIn(".in-use", prune, "a tree a running step uses is never pruned")
 
 
