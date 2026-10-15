@@ -273,7 +273,7 @@ class SlurmTest(unittest.TestCase):
 
         def runs(*prunes: int) -> Callable[..., mock.Mock]:  # stages report the tree; prune checks return the next code
             left = list(prunes)
-            return lambda cmd, **kw: mock.Mock(returncode=left.pop(0)) if cmd[0] == "ssh" else staged
+            return lambda cmd, **kw: mock.Mock(returncode=left.pop(0), stderr="timeout") if cmd[0] == "ssh" else staged
 
         with (
             mock.patch.object(ev.subprocess, "run", side_effect=runs(1, 0)) as run,
@@ -289,6 +289,14 @@ class SlurmTest(unittest.TestCase):
             self.assertRaises(SystemExit),
         ):
             ev.stage_tree(t, {"robot_rl": "/p"})
+        with (  # an ssh failure leaves the tree's state unknown: no restage, and the exit says so
+            mock.patch.object(ev.subprocess, "run", side_effect=runs(255)) as run,
+            mock.patch.object(ev, "profile_value", return_value=""),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaisesRegex(SystemExit, "could not reach amd-rtx"),
+        ):
+            ev.stage_tree(t, {"robot_rl": "/p"})
+        self.assertEqual(sum(c.args[0][2:3] == ["stage"] for c in run.call_args_list), 1)
 
 
 class LocalCodeTest(unittest.TestCase):

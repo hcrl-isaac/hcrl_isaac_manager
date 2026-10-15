@@ -507,8 +507,11 @@ def stage_tree(t: Target, code: dict[str, str]) -> str:
             '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; chmod -R u+w "$d" && rm -rf "$d"; done; '
             f"[ -f {trees}/{q(tree)}/.complete ]"
         )
-        if subprocess.run(["ssh", *t.ssh_opts, t.ssh, prune], capture_output=True).returncode == 0:
+        check = subprocess.run(["ssh", *t.ssh_opts, t.ssh, prune], capture_output=True, text=True)
+        if check.returncode == 0:
             return tree
+        if check.returncode == 255:  # ssh's own failure: the tree's state is unknown, not gone
+            sys.exit(f"[res] could not reach {t.pool} to check the code tree: {check.stderr.strip()[:200]}")
         print(f"[res] tree {tree} was pruned before the run could use it; staging it again", file=sys.stderr)
     sys.exit(f"[res] the code tree on {t.pool} was removed again before the run; nothing was run")
 

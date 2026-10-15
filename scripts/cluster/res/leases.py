@@ -304,6 +304,16 @@ def _uncertain(reports: list[Report]) -> tuple[set[str], set[tuple[str, str]]]:
     return ok, jobs
 
 
+def _site_complete(lease: Lease, reports: list[Report], ok: set[str]) -> bool:
+    """True if a lease's out-of-date SLURM label names a site whose reports all listed every card, none failing."""
+    if " (" not in lease.report:
+        return False
+    site = lease.report.split(" (")[0] + " ("
+    mine = [r.pool for r in reports if r.pool.startswith(site) and " job " not in r.pool]
+    failed = [r.pool for r in reports if r.pool.startswith(site) and " job " in r.pool]
+    return bool(mine) and all(m in ok for m in mine) and not failed
+
+
 def _activity(lease: Lease, card: Card) -> bool | None:
     """True if the holder's activity shows on the card, False if it is idle, None if it cannot be told."""
     if card.state == "unknown":
@@ -343,7 +353,9 @@ def reconcile(
     """
     now = time.time() if now is None else now
     cards = {card_key(c): c for r in reports for c in r.cards}
+    seen_in = {card_key(c): r.pool for r in reports for c in r.cards}
     ok, uncertain_jobs = _uncertain(reports)
+    labels = {r.pool for r in reports}
     released = []
     for lease in list(leases):
         card = cards.get(lease.key)
@@ -351,6 +363,8 @@ def reconcile(
             released.append((lease, "time box ended"))
             continue
         if card is None:
+            if lease.report not in labels and _site_complete(lease, reports, ok):
+                lease.report = next(r for r in sorted(ok) if r.startswith(lease.report.split(" (")[0] + " ("))
             if lease.report in ok and (lease.report, lease.job) not in uncertain_jobs:
                 # like idle: gone on two complete probes at least the idle window apart
                 if not lease.missing_since:
@@ -359,6 +373,7 @@ def reconcile(
                     released.append((lease, "card no longer exists"))
             continue
         lease.missing_since = 0.0
+        lease.report = seen_in[lease.key]  # a label from before reports were split by partition follows its card
         active = _activity(lease, card)
         if active is None:
             continue
