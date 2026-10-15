@@ -453,7 +453,8 @@ if [ ! -f {q(path + "/.complete")} ]; then
     (
         flock 9
         [ -f {q(path + "/.complete")} ] && exit 0
-        rm -rf {q(path)} && "$uv" venv -q --python {TOOL_VENV_PYTHON} {q(path)} &&"$uv" pip install -q --python {q(path + "/bin/python")} \\
+        rm -rf {q(path)} && "$uv" venv -q --python {TOOL_VENV_PYTHON} {q(path)} \\
+            && "$uv" pip install -q --python {q(path + "/bin/python")} \\
             {" ".join(q(r) for r in reqs)} && touch {q(path + "/.complete")}
     ) 9>{q(path + ".lock")} || {{ echo "[res] building the tool venv {path} failed"; exit 97; }}
 fi
