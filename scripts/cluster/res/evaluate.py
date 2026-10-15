@@ -35,7 +35,7 @@ SUPPORTED = ("local", "ssh", "slurm")
 # where node_exec binds the cluster checkout's artifacts/ inside the container, and the container's interpreter
 CONTAINER_ARTIFACTS = "/workspace/artifacts"
 CONTAINER_PYTHON = "/isaac-sim/python.sh"
-CONTAINER_TMP = "/tmp/res-eval"  # in the container's /tmp, the job's node-local dir
+CONTAINER_TMP = "/tmp/res-eval"  # in the container's /tmp, the step's own node-local dir (develop exec --own-tmp)
 CKPT_CACHE = Path.home() / ".cache" / "hcrl_res" / "checkpoints"
 TRACEBACK = "Traceback (most recent call last)"
 TIMED_OUT = 124
@@ -496,10 +496,10 @@ def slurm_runner_script(
     python = python or CONTAINER_PYTHON
     launch = '"$@"' if command else f'{q(python)} {q(script)} "$@"'
     s = {k: q(f"{stage}/{k}") for k in ("log", "env", "status", "stop", "heartbeat", "MANIFEST")}
-    # node-local: the container's /tmp is this step's own (develop exec --own-tmp), and the run keeps its TMPDIR and
-    # per-card Kit caches inside it (one lease per card)
-    run_id, local = os.path.basename(stage), CONTAINER_TMP
-    tmp, cache = q(f"{local}/{run_id}"), q(f"{local}/cache/{t.host}-gpu{t.gpu}")
+    # node-local: the run's TMPDIR is in this step's own /tmp (develop exec --own-tmp); its per-card Kit caches are in
+    # /tmp/cache, the job's dir that persists across runs (one lease per card)
+    run_id = os.path.basename(stage)
+    tmp, cache = q(f"{CONTAINER_TMP}/{run_id}"), q(f"/tmp/cache/res-eval/{t.host}-gpu{t.gpu}")
     apps = f"nvidia-smi -i {q(t.uuid)} --query-compute-apps=pid --format=csv,noheader 2>/dev/null"
     return f"""#!/usr/bin/env bash
 set -u
