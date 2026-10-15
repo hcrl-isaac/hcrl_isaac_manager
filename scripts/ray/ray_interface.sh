@@ -10,8 +10,19 @@ tabs 4
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
+# The code runs from this checkout; its gitignored per-user state (ilab, resources/, .env.ray, .env.wandb,
+# workspace.yaml) is the main checkout's when this is a manager worktree without its own.
+WORKSPACE_DIR="$( cd "$SCRIPT_DIR/../.." && pwd )"
+if [ ! -d "$WORKSPACE_DIR/resources" ]; then
+    common="$(git -C "$WORKSPACE_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    [ -n "$common" ] && [ -d "$(dirname "$common")/resources" ] && WORKSPACE_DIR="$(dirname "$common")"
+fi
+export WORKSPACE_DIR
+RAY_ENV_ROOT="$( cd "$SCRIPT_DIR/../.." && pwd )"  # the checkout whose scripts/ray/.env.ray the jobs read
+[ -f "$SCRIPT_DIR/.env.ray" ] || RAY_ENV_ROOT="$WORKSPACE_DIR"
+
 # Prefer the ilab venv's python/ray so commands work without activating it first.
-VENV_BIN="$( cd "$SCRIPT_DIR/../.." && pwd )/ilab/bin"
+VENV_BIN="$WORKSPACE_DIR/ilab/bin"
 [ -d "$VENV_BIN" ] && export PATH="$VENV_BIN:$PATH"
 
 #==
@@ -27,8 +38,7 @@ check_docker_version() {
 
 # Sync managed large-file resources to W&B so the cluster fetches current versions; failure is non-fatal.
 sync_resources() {
-    local mgr up
-    mgr="$( cd "$SCRIPT_DIR/../.." && pwd )"
+    local mgr="$WORKSPACE_DIR" up
     up="$mgr/resources/hcrl_isaaclab/scripts/tools/upload_artifacts.py"
     if [ ! -f "$mgr/scripts/.env.wandb" ] || [ ! -f "$up" ]; then
         return 0
@@ -40,8 +50,7 @@ sync_resources() {
 # Render the job configs from their templates. WT=<name> routes ext_dir + file mounts
 # through resources/<repo>/worktrees/<name> wherever one exists.
 render_job_configs() {  # render_job_configs <ut_eid>
-    local ut_eid="$1" manager_dir venv_py
-    manager_dir="$( cd "$SCRIPT_DIR/../.." && pwd )"
+    local ut_eid="$1" manager_dir="$WORKSPACE_DIR" venv_py
     venv_py="$manager_dir/ilab/bin/python"
     [ -x "$venv_py" ] || venv_py="python3"
     export WT="${WT:-}"
@@ -54,7 +63,7 @@ render_job_configs() {  # render_job_configs <ut_eid>
     export WORKSPACE_EXT_DIR
     local cfg
     for cfg in job_config bench_job_config job_config_distributed; do
-        UT_EID="$ut_eid" MANAGER_DIR="$manager_dir" \
+        UT_EID="$ut_eid" MANAGER_DIR="$RAY_ENV_ROOT" \
             envsubst '$UT_EID $MANAGER_DIR $WORKSPACE_FILE_MOUNTS $WORKSPACE_EXT_DIR' \
             < "$SCRIPT_DIR/tools/$cfg.template.yaml" > "$SCRIPT_DIR/$cfg.yaml"
     done
@@ -62,12 +71,12 @@ render_job_configs() {  # render_job_configs <ut_eid>
 
 # Re-render the job configs before a submit so the mounts match this job's WT, not the one setup saw.
 prepare_submit() {
-    if [ ! -f "$SCRIPT_DIR/.env.ray" ]; then
-        echo "[ERROR] $SCRIPT_DIR/.env.ray not found. Run 'pls cluster ray setup' first." >&2
+    local env_ray="$RAY_ENV_ROOT/scripts/ray/.env.ray" ut_eid
+    if [ ! -f "$env_ray" ]; then
+        echo "[ERROR] $env_ray not found. Run 'pls cluster ray setup' first." >&2
         exit 1
     fi
-    local ut_eid
-    ut_eid="$( . "$SCRIPT_DIR/.env.ray"; echo "$UT_EID" )"
+    ut_eid="$( . "$env_ray"; echo "$UT_EID" )"
     render_job_configs "$ut_eid"
 }
 
@@ -124,9 +133,9 @@ case "$command" in
     job|job_distributed|run|bench)
         prepare_submit; sync_resources
         # every dir the job leaves to W&B artifacts must have one, or the job would only fail on the cluster
-        venv_py="$( cd "$SCRIPT_DIR/../.." && pwd )/ilab/bin/python"
+        venv_py="$WORKSPACE_DIR/ilab/bin/python"
         [ -x "$venv_py" ] || venv_py="python3"
-        ( mgr="$( cd "$SCRIPT_DIR/../.." && pwd )"; set -a; [ -f "$mgr/scripts/.env.wandb" ] && . "$mgr/scripts/.env.wandb"
+        ( mgr="$WORKSPACE_DIR"; set -a; [ -f "$mgr/scripts/.env.wandb" ] && . "$mgr/scripts/.env.wandb"
           set +a; "$venv_py" "$SCRIPT_DIR/preflight.py" ) || exit 1
         ;;
 esac
@@ -138,8 +147,8 @@ case $command in
             "" | --config | --build-only | --push-only) ;;
             *) echo "Error: setup takes --config, --build-only or --push-only, not '$mode'." >&2; exit 1 ;;
         esac
-        if [ "$mode" = --config ] || { [ -z "$mode" ] && [ ! -f "$SCRIPT_DIR/.env.ray" ]; }; then
-            MANAGER_DIR="$( cd "$SCRIPT_DIR/../.." && pwd )"
+        if [ "$mode" = --config ] || { [ -z "$mode" ] && [ ! -f "$RAY_ENV_ROOT/scripts/ray/.env.ray" ]; }; then
+            MANAGER_DIR="$WORKSPACE_DIR"
             if [ ! -f "$MANAGER_DIR/scripts/.env.wandb" ]; then
                 echo "[ERROR] $MANAGER_DIR/scripts/.env.wandb not found. Run 'pls deps' first." >&2
                 exit 1
@@ -181,7 +190,7 @@ case $command in
         worker="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from job_args import ext_script
 print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         repo="${script%%/*}"; rest="${script#*/}"
-        mgr="$( cd "$SCRIPT_DIR/../.." && pwd )"
+        mgr="$WORKSPACE_DIR"
         local_copy="$mgr/resources/$repo/$rest"
         wt="${WT:-}"
         [ -n "$wt" ] && [ -d "$mgr/resources/$repo/worktrees/$wt" ] && local_copy="$mgr/resources/$repo/worktrees/$wt/$rest"
