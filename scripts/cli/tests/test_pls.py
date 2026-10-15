@@ -234,6 +234,20 @@ class BatchTest(unittest.TestCase):
 class RunTest(unittest.TestCase):
     """`pls run`: local runs, --wt, and the card and Ray targets."""
 
+    def test_a_nearly_full_disk_refuses_runs_here_and_warns_when_low(self) -> None:
+        def usage(free_gb: float) -> mock.Mock:
+            return mock.Mock(return_value=types.SimpleNamespace(free=free_gb * 2**30))
+
+        for argv in (["probe"], ["--on", "local:0", "--holder", "h", "--", "probe"]):
+            with self.subTest(argv=argv), mock.patch.object(launch.shutil, "disk_usage", usage(5)):
+                with self.assertRaises(SystemExit) as ctx:
+                    launch.main(argv)
+                self.assertIn("GB free", str(ctx.exception.code))
+        with mock.patch.object(launch.shutil, "disk_usage", usage(30)), self.assertRaises(HandoffError):
+            launch.main(["probe"])  # low but usable: warned, still run
+        with mock.patch.object(launch.shutil, "disk_usage", usage(5)), self.assertRaises(HandoffError):
+            launch.main(["--on", "ray", "--", "train"])  # not this machine
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
