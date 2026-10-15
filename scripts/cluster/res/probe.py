@@ -427,21 +427,19 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
 
     for part in by_partition:
         report_for(part)
+    unparsable: list[str] = []
     for line in res.stdout.splitlines():
         f = line.split("|", 9)
         if len(f) < 10:
-            whole = reports.setdefault("", Report(label, "slurm", owner=owner))
-            whole.notes.append(f"unparsable squeue line: {line[:120]}")
-            whole.partial = True
+            unparsable.append(f"unparsable squeue line: {line[:120]}")
             continue
         jobid, part, acct, state, node, nnodes, left, start, gres, name = f
         report = report_for(part)
-        label = report.pool
         if state == "PENDING":
             report.notes.append(f"job {jobid} ({part}, {name}) PENDING, est. start {start}")
             continue
         if state != "RUNNING":
-            failed.append(Report(f"{label} job {jobid}", "slurm", error=f"job is {state}: its cards are unknown"))
+            failed.append(Report(f"{report.pool} job {jobid}", "slurm", error=f"job is {state}: its cards are unknown"))
             continue
         node = node.split(",")[0]
         # -p/-A because TACC refuses overlap steps without them on multi-project accounts, and -A as the profile
@@ -459,14 +457,14 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
                 cards = parse_gpu_query(step.stdout, report.pool, node)
                 break
             except subprocess.TimeoutExpired:
-                failed.append(Report(f"{label} job {jobid}", "slurm", error=f"GPU probe on {node} timed out"))
+                failed.append(Report(f"{report.pool} job {jobid}", "slurm", error=f"GPU probe on {node} timed out"))
                 break
             except ProbeError as exc:
                 if i + 1 < len(accts) and "Unknown project" in f"{exc} {step.stdout} {step.stderr}":
                     continue
                 tail = step.stderr.strip()[-160:]
                 error = f"GPU probe on {node}: {exc} {tail}".strip()
-                failed.append(Report(f"{label} job {jobid}", "slurm", error=error))
+                failed.append(Report(f"{report.pool} job {jobid}", "slurm", error=error))
                 break
         if cards is None:
             continue
@@ -474,11 +472,16 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
             card.job, card.wall_left = jobid, left
         report.cards.extend(cards)
         if nnodes.isdigit() and int(nnodes) > 1:
-            failed.append(Report(f"{label} job {jobid}", "slurm", error=f"probed 1 of {nnodes} nodes"))
+            failed.append(Report(f"{report.pool} job {jobid}", "slurm", error=f"probed 1 of {nnodes} nodes"))
         alloc = _gres_gpus(gres)
         if alloc is not None and alloc > len(cards):
             msg = f"saw {len(cards)} of {alloc} allocated cards; {alloc - len(cards)} unknown"
-            failed.append(Report(f"{label} job {jobid}", "slurm", error=msg))
+            failed.append(Report(f"{report.pool} job {jobid}", "slurm", error=msg))
+    # a line squeue garbled could be any partition's job, so no report of this login is complete
+    if unparsable:
+        for report in list(reports.values()) or [reports.setdefault("", Report(label, "slurm", owner=owner))]:
+            report.notes.extend(unparsable)
+            report.partial = True
     for part, report in reports.items():
         if (
             part

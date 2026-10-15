@@ -277,6 +277,17 @@ class PartialReportTest(unittest.TestCase):
     def test_unparsable_squeue_line_marks_the_report_partial(self) -> None:
         self.assertTrue(self.slurm("Welcome to Delta\n")[0].partial)
 
+    def test_a_truncated_squeue_releases_no_lease_on_the_login(self) -> None:
+        """A garbled line after a parsed one could be any partition's job: every report of the login is partial."""
+        import leases as ls
+
+        reports = self.slurm("43|gpuA40x4|acct|PENDING|(Priority)|1|1:00|N/A|gres/gpu:1|b\n42|gpuA40x4|ac\n")
+        self.assertEqual([r.partial for r in reports], [True])
+        gone = Card("delta", "gpub001", 0, "A40", 0, 46068, 0, "free", job="42", uuid="GPU-gone")
+        lease = ls.new_lease(gone, Report("delta (gpuA40x4)", "slurm", owner="u"), "s", "", 0)
+        self.assertEqual(ls.reconcile([lease], reports, now=1e6, idle_min=30), [])
+        self.assertEqual(ls.reconcile([lease], reports, now=1e6 + 31 * 60, idle_min=30), [])
+
     def test_completing_job_is_an_unknown_sub_report(self) -> None:
         reports = self.slurm("42|gpuA40x4|acct|COMPLETING|gpub001|1|0:00|N/A|gres/gpu:4|box\n")
         self.assertEqual([(r.pool, bool(r.error)) for r in reports[1:]], [("delta (gpuA40x4) job 42", True)])
