@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ SLURM_BACKEND = "scripts/cluster/cluster_interface.sh"
 DEV_BACKEND = "scripts/cluster/cluster_dev/cluster_dev.sh"
 CORE = "hcrl_isaaclab"
 HELP = ("-h", "--help")
+MIN_FREE_GB, LOW_FREE_GB = 10, 50  # a run here is refused below the first and warned below the second
 
 USAGE = """pls run <script> [args]
        pls run [--on TARGET] [--wt NAME] [card options] -- <script> [args]
@@ -116,6 +118,16 @@ def _local_file(script: str) -> str:
     return str(path.resolve())
 
 
+def _disk_guard() -> None:
+    """A run on this machine needs room: a full root disk kills every job and session writing to it."""
+    free = shutil.disk_usage(ROOT).free / 2**30
+    where = "free space first: du -xsh ~/tmp ~/.claude/jobs/*/tmp resources/*/worktrees/*"
+    if free < MIN_FREE_GB:
+        sys.exit(f"[pls] run: {free:.0f} GB free on this machine's disk (< {MIN_FREE_GB}); {where}")
+    if free < LOW_FREE_GB:
+        print(f"[pls] run: only {free:.0f} GB free on this machine's disk; {where}", file=sys.stderr)
+
+
 def _here(argv: list[str], wt: str, command: bool) -> None:
     """This machine, with the ilab venv; ``wt`` routes PYTHONPATH (and repo files) to a worktree set."""
     sys.path.insert(0, str(ROOT / "scripts"))
@@ -212,6 +224,7 @@ def main(argv: list[str]) -> None:
     if not ns.on:
         if extra:
             sys.exit(f"[pls] run: {' '.join(extra)} only apply with --on")
+        _disk_guard()
         _here(run, ns.wt, ns.cmd)
     elif ns.on == "ray":
         if extra or ns.cmd:
@@ -225,5 +238,7 @@ def main(argv: list[str]) -> None:
     else:
         script, *args = run
         wt = ["--wt", ns.wt] if ns.wt else []
+        if ns.on.startswith("local:"):
+            _disk_guard()
         target = ["--cmd", script] if ns.cmd else [_card_script(script)]
         handoff([*CARD_CMD, *extra, *_card_flags(ns.on), *wt, *target, "--", *args])

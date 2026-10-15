@@ -1074,6 +1074,34 @@ def _touch_lease(lease_id: str) -> None:
                 lease.last_active, lease.idle_since = time.time(), 0.0
 
 
+STAGING_TOUCH_S = 300.0  # well inside the lease windows, so a stage of any length never looks unused
+
+
+class _LeaseHeartbeat:
+    """Keeps a lease active from start() to stop() (staging leaves the card idle); stop() may be called twice."""
+
+    def __init__(self, lease_id: str) -> None:
+        self.lease_id, self._stop = lease_id, threading.Event()
+        self._thread = threading.Thread(target=self._beat, daemon=True)
+
+    def _beat(self) -> None:
+        while True:
+            with contextlib.suppress(ls.LeaseStoreError):
+                _touch_lease(self.lease_id)
+            if self._stop.wait(STAGING_TOUCH_S):
+                return
+
+    def start(self) -> _LeaseHeartbeat:
+        if self.lease_id:
+            self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5)
+
+
 def resolve_on(spec: str, pools: list[Pool]) -> str:
     """``--on`` with ``local`` as this machine's host name, refused when no pool eval runs on can hold it.
 
@@ -1196,12 +1224,13 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             pool, job, uuid = None, card.job, card.uuid
         else:
             pool = next(p for p in pools if p.name == rep.pool.split("/")[0])
-    rc, stage, detached = 1, None, False
+    rc, stage, detached, staging = 1, None, False, None
     handlers = {sig: signal.signal(sig, _interrupt) for sig in (signal.SIGTERM, signal.SIGHUP)}
     try:
         if pool is None:  # inside the try, so a refusal still releases the lease
             pool = slurm_profile(rep.pool, job, pools)
         t = make_target(pool, host, gpu, job, uuid)
+        staging = _LeaseHeartbeat(taken.id if taken is not None else args.lease or "").start()
         stage = Stage(t)
         stage.make()
         paths = {ref.name: container_path(t, stage.link_checkpoint(fetch_checkpoint(ref), ref.name)) for ref in refs}
@@ -1228,8 +1257,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         else:
             runner = runner_script(t, stage.dir, target_script, names, pythonpath, cwd, command=args.cmd)
         stage.write(runner, "run.sh", mode=0o700)
-        if taken is not None:
-            _touch_lease(taken.id)
+        staging.stop()
         if args.detach:
             stage.start_detached(fill_checkpoints(run_args, paths))
             detached = True
@@ -1245,6 +1273,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         rc = 130
         print(f"[res] interrupted ({exc or 'SIGINT'})", file=sys.stderr)
     finally:
+        if staging is not None:
+            staging.stop()
         for sig, old in handlers.items():
             signal.signal(sig, old)
         if detached:  # the run owns its stage and lease now

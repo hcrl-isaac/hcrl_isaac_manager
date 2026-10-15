@@ -95,6 +95,14 @@ SRUN_ACCT_OPT=""; [ -n "$DEV_ACCOUNT" ]   && SRUN_ACCT_OPT="-A ${DEV_ACCOUNT}"
 # included) ran pinned to core 0 of the whole allocation -- measured ~2.9x slower. Reuse the sentinel's
 # own --cpus-per-task so a step gets the same share the batch job asked for.
 SRUN_CPUS_OPT=""; [ -n "$DEV_CPUS" ]      && SRUN_CPUS_OPT="--cpus-per-task=${DEV_CPUS}"
+# squeue lowercases every account, and TACC's step filter refuses "cda26011" for CDA26011: the profile's spelling
+# when it names the same account, else a TACC project id (three letters, five digits) in upper case
+_acct_spelling() {
+    local a="$1"
+    if [ -n "$DEV_ACCOUNT" ] && [ "${a,,}" = "${DEV_ACCOUNT,,}" ]; then echo "$DEV_ACCOUNT"
+    elif [[ "$a" =~ ^[a-z]{3}[0-9]{5}$ ]]; then echo "${a^^}"
+    else echo "$a"; fi
+}
 _srun_opts() { DEV_SRUN_OPTS="${SRUN_PART_OPT} ${SRUN_ACCT_OPT} -N 1 -n 1 -t ${DEV_TIME:-48:00:00} ${SRUN_GRES_OPT} ${SRUN_CPUS_OPT} ${CLUSTER_SRUN_EXTRA:-}"; }
 _srun_opts
 
@@ -328,10 +336,7 @@ require_running() {
         part="$(echo "$row" | awk '{print $3}')"; acct="$(echo "$row" | awk '{print $4}')"
         gpus="$(echo "$row" | awk '{print $5}' | grep -oE 'gpu(:[A-Za-z0-9_-]+)?:[0-9]+' | grep -oE '[0-9]+$' | head -1 || true)"
         [ -n "$part" ] && SRUN_PART_OPT="-p ${part}"
-        # squeue reports the account lowercased (cda26011), which TACC's submit filter refuses: the profile's own
-        # spelling wins when it names the same account
-        [ -n "$DEV_ACCOUNT" ] && [ "${acct,,}" = "${DEV_ACCOUNT,,}" ] && acct="$DEV_ACCOUNT"
-        [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A ${acct}"
+        [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A $(_acct_spelling "$acct")"
         [ -n "$gpus" ] && SRUN_GRES_OPT="--gres=gpu:${gpus}"
         _srun_opts
         log "[override] targeting job ${DD_JOBID} on ${DD_NODE} via srun --overlap"
@@ -355,6 +360,10 @@ require_running() {
     DD_MODE="$CLUSTER_ATTACH_MODE"
     if [ "$DD_MODE" = "auto" ]; then
         [ "$(state_get SSH_NODE_OK)" = "yes" ] && [ -n "$DD_NODE" ] && DD_MODE="ssh" || DD_MODE="srun"
+    fi
+    if [ "$DD_MODE" = "srun" ]; then  # the job may have been moved to another account since it was submitted
+        local acct; acct="$(on_login "squeue -j ${DD_JOBID} -h -o %a 2>/dev/null")"
+        [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A $(_acct_spelling "$acct")" && _srun_opts
     fi
 }
 
@@ -403,7 +412,11 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     # every hop re-parses the command, so each one gets its own %q layer and the argv arrives intact
     local args; args="$(printf '%q ' "$@")"
     # resolved once, here: the step runs this tree for its whole life, whatever is staged after it starts
-    tree="$(resolve_tree "${tree:-default}")" || exit 1
+    if [ -z "$tree" ]; then
+        tree="$(resolve_tree default)" || { err "no --tree given and no tree named default: pass --tree <name> (develop trees lists them)"; exit 1; }
+    else
+        tree="$(resolve_tree "$tree")" || exit 1
+    fi
     log "Using tree ${tree}"
     local nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} NODE_EXEC_RESOURCES=${tree}/resources"
     nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
@@ -508,6 +521,8 @@ usage() {
 }
 
 source "${SCRIPT_DIR}/trees.sh"
+
+case "${1:-}:${2:-}" in stage:-h|stage:--help|trees:-h|trees:--help|exec:-h|exec:--help) usage; exit 0 ;; esac
 
 case "${1:-}" in
     stage)    shift; cmd_stage "$@" ;;

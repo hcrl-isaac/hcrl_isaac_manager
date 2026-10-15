@@ -435,6 +435,15 @@ class CommandTest(CommandBase):
             self.claim("mckennie:3", adopt=True)
         self.assertEqual(self.stored(), ["mckennie:0"])
 
+    def test_a_card_you_hold_names_its_lease_instead_of_waiting(self) -> None:
+        self.claim("mckennie:0")
+        [lease] = self.leases()
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim("mckennie:0")
+        self.assertNotIsInstance(ctx.exception, res.Busy, "--wait would never see it free")
+        self.assertIn(f"--on lease:{lease.id}", str(ctx.exception.code))
+        self.assertEqual(self.stored(), ["mckennie:0"])
+
     def test_transfer_moves_the_lease_and_records_the_previous_holder(self) -> None:
         self.claim("mckennie:0", note="seed 1")
         with contextlib.redirect_stdout(io.StringIO()):
@@ -560,6 +569,36 @@ class ReservationTest(CommandBase):
         self.assertIn("YIELD", evaluate.lease_notice(lease.id, "a"))
         self.claim_err("mckennie:2", holder="P")
         self.assertIn("PREEMPTED", evaluate.lease_notice(lease.id, "a"))
+
+
+class StagingHeartbeatTest(TempStore):
+    """A card run's stage can outlast the idle window; the lease stays active until the run starts."""
+
+    def test_the_heartbeat_keeps_the_lease_active_while_staging(self) -> None:
+        import evaluate
+
+        with ls.locked_store() as leases:
+            leases.append(lease_on(card(index=0), idle_since=T0, last_active=0.0))
+            lease_id = leases[0].id
+        saved = evaluate.STAGING_TOUCH_S
+        evaluate.STAGING_TOUCH_S = 0.05
+        try:
+            beat = evaluate._LeaseHeartbeat(lease_id).start()
+            ls.time.sleep(0.2)
+            beat.stop()
+            beat.stop()  # a second stop (the run's finally) is harmless
+        finally:
+            evaluate.STAGING_TOUCH_S = saved
+        with ls.locked_store() as leases:
+            self.assertEqual(leases[0].idle_since, 0.0)
+            self.assertGreater(leases[0].last_active, T0)
+
+    def test_no_lease_no_heartbeat(self) -> None:
+        import evaluate
+
+        beat = evaluate._LeaseHeartbeat("").start()
+        beat.stop()
+        self.assertFalse(beat._thread.is_alive())
 
 
 if __name__ == "__main__":

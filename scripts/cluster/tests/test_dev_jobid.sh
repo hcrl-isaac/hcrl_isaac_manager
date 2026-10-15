@@ -58,6 +58,8 @@ SQ_ROW="RUNNING n1 amd-rtx iri26004 gres/gpu:4" dev "$M" exec -- echo hi > "$T/o
 check "squeue's lowercased account takes the profile's spelling (TACC refuses cda26011)" "grep -q -- '-A IRI26004 ' '$T/srun_args'"
 SQ_ROW="RUNNING n1 amd-rtx otherproj gres/gpu:4" dev "$M" exec -- echo hi > "$T/out6" 2>&1
 check "a different account is kept as squeue gives it" "grep -q -- '-A otherproj ' '$T/srun_args'"
+SQ_ROW="RUNNING n1 amd-rtx cda26011 gres/gpu:4" dev "$M" exec -- echo hi > "$T/out7" 2>&1
+check "a job moved to another TACC project steps with it upper-cased" "grep -q -- '-A CDA26011 ' '$T/srun_args'"
 
 SQ_ROW="RUNNING n1 skx (null) N/A" dev "$M" exec -- echo hi > "$T/out2" 2>&1
 check "a job without an account keeps the profile's, and no GPU request adds none" \

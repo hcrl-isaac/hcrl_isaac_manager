@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Watchdog for a training run. Every exit is FINISHED, STALLED, DEAD or FAILED.
+# Watchdog for a training run. Every exit is FINISHED, STALLED, DEAD, FAILED or BLIND (no probe answered for stall_min).
 #
 #   watch_run.sh <label> <log> <target-iters> [stall_min] [report_every] [metric-grep]
 #
@@ -55,11 +55,13 @@ END { close_tb(); if (mode == "count") print bad + 0 }'
 
 CM=${WATCH_RUN_CONTROL_PATH:-$HOME/.ssh/cm/%C}
 mkdir -p "$(dirname "${CM/\%C/x}")" 2>/dev/null || true
+PROBE_S=90  # wall-clock limit per probe: a lost ControlMaster must fail, never wait on a 2FA prompt
 run_remote() {  # stdin: the probe script
     if [ -n "$HOST" ]; then
-        ssh -o ControlMaster=auto -o ControlPath="$CM" -o ConnectTimeout=25 "$HOST" bash -s 2>/dev/null
+        timeout "$PROBE_S" ssh -o BatchMode=yes -o ControlMaster=auto -o ControlPath="$CM" -o ConnectTimeout=25 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$HOST" bash -s 2>/dev/null
     else
-        bash -s 2>/dev/null
+        timeout "$PROBE_S" bash -s 2>/dev/null
     fi
 }
 
@@ -79,11 +81,18 @@ EOF
 }
 
 POLL_S=120  # seconds between probes
-started=$(date +%s); last_it=-1; last_change=$started; lastc=-1; booted=0
+started=$(date +%s); last_it=-1; last_change=$started; lastc=-1; booted=0; last_ok=$started
 while true; do
     st=$(probe)
     now=$(date +%s)
-    if [ -z "$st" ]; then sleep 120; continue; fi          # a transient ssh failure is not evidence
+    if [ -z "$st" ]; then  # one failed probe is not evidence, stall_min of them is
+        if [ $(( (now - last_ok) / 60 )) -ge "$STALL_MIN" ]; then
+            echo "[$LABEL] BLIND: no probe of $LOG_SPEC answered for $(( (now - last_ok) / 60 )) min, last iter ${last_it}"
+            exit 1
+        fi
+        sleep "${POLL_S:-120}"; continue
+    fi
+    last_ok=$now
     if [ "$st" = missing ]; then
         # a log that does not exist yet has not started
         if [ $(( (now - started) / 60 )) -ge "$STALL_MIN" ]; then

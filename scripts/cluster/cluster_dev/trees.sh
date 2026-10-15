@@ -63,7 +63,7 @@ _prune_trees() {  # _prune_trees NAME
         grep -E "^${1//./\\.}-[0-9a-f]{10}$" | tail -n +$((TREE_KEEP + 1)))
 }
 
-_tree_valid() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$1" != "." ] && [ "$1" != ".." ]; }
+_tree_valid() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }  # a leading letter/digit: never an option
 
 # The files a tree carries: tracked and untracked, not ignored, present on disk (NUL-separated, relative). A checkout's
 # session state (worktrees/, .claude/) and run output (the TREE_RW_DIRS, mounted over in a tree) never ship.
@@ -116,7 +116,7 @@ cmd_stage() {  # stage [--no-space-check] [NAME] [REPO=REF|REPO=PATH ...] : uplo
     local space_check=1 name=default whole=""
     [ "${1:-}" = --no-space-check ] && { space_check=""; shift; }
     if [ $# -gt 0 ] && [[ "$1" != *=* ]]; then name="$1"; shift; fi
-    _tree_valid "$name" || { err "tree name '${name}': use letters, digits, . _ -"; exit 1; }
+    _tree_valid "$name" || { err "tree name '${name}': letters, digits, . _ - (starting with a letter or digit)"; exit 1; }
     if [ $# -eq 0 ]; then  # the whole workspace as on disk, uncommitted work included
         whole=1
         local specs; mapfile -t specs < <(_default_specs)
@@ -278,6 +278,7 @@ _trees_rm() {
             [ -n \"\$(find \"\$p\" -mmin -60 -print -quit)\" ] && continue; echo \"\$p\"; rm -rf \"\$p\"; done"
         return
     fi
+    [ "${1:-}" = -- ] && shift
     local id="${1:-}" force="${2:-}" marker live=""
     _tree_valid "$id" && [[ "$id" =~ -[0-9a-f]{10}$ ]] || { err "usage: trees rm <name>-<fingerprint> [--force] | --partials"; exit 1; }
     on_login "[ -d '${TREES_DIR}/${id}' ]" || { err "no tree ${id}"; exit 1; }

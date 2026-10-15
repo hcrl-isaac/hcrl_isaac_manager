@@ -259,15 +259,16 @@ def _named(spec: str, seen: list[tuple[Card, Report]]) -> tuple[Card, Report]:
 
 def _choose(
     seen: list[tuple[Card, Report]],
-    taken: set[str],
+    taken: dict[str, ls.Lease],
     args: argparse.Namespace,
     yielding: frozenset[str] = frozenset(),
     rank: Callable[[Card, Report], int] = lambda c, r: 0,
 ) -> list[tuple[Card, Report]]:
     """The cards a claim takes: all named ones, or --any free ones packed onto partly used hosts first.
 
-    ``yielding`` are cards whose leases yield to the caller's reservation: the caller may take them although they
-    are leased and in use. ``rank`` orders --any candidates before the packing (lower first).
+    ``taken`` are the leases by card key. ``yielding`` are cards whose leases yield to the caller's reservation: the
+    caller may take them although they are leased and in use. ``rank`` orders --any candidates before the packing
+    (lower first).
     """
     adopt = getattr(args, "adopt", False)
     if args.any and adopt:
@@ -306,6 +307,10 @@ def _choose(
             if key not in {ls.card_key(c) for c, _ in chosen}:
                 chosen.append((card, rep))
             continue
+        if key in taken and taken[key].holder == args.holder:  # never frees by waiting: say how to use it
+            sys.exit(
+                f"[res] {spec} is already yours (lease {taken[key].id}); run on it with `--on lease:{taken[key].id}`"
+            )
         if key in taken:
             raise Busy(f"[res] {spec} is leased; move it with `pls res transfer {spec} --to <holder>`; nothing claimed")
         if card.state != "free" and not (adopt and card.state in ("busy", "held")):
@@ -376,7 +381,7 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
                 return 0 if res_.holder == args.holder else 2
 
             try:
-                chosen = _choose(seen, set(by_key) - yielding, args, yielding, rank)
+                chosen = _choose(seen, {k: x for k, x in by_key.items() if k not in yielding}, args, yielding, rank)
             except SystemExit as exc:  # keep the reconcile result even when the claim is refused
                 refused = exc
             else:

@@ -2,11 +2,13 @@
 
 import contextlib
 import io
+import os
 import shlex
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -124,6 +126,68 @@ class PreflightTest(unittest.TestCase):
 
         preflight._published_rel_paths = boom
         preflight.main()
+
+
+class WorktreeDataTest(unittest.TestCase):
+    """A --wt job whose artifact-only data differs from W&B's would train on W&B's copy: refused before submit."""
+
+    def setUp(self) -> None:
+        self.dir = tempfile.TemporaryDirectory()
+        self.wt = Path(self.dir.name) / "ssti_tasks" / "worktrees" / "momonly"
+        data = self.wt / "ssti_tasks" / "agile" / "style_data"
+        data.mkdir(parents=True)
+        (data / "traverse.pt").write_bytes(b"140 columns")
+        self.rel = "ssti_tasks/ssti_tasks/agile/style_data"
+        self.saved = (preflight.mounted_sources, preflight._published_rel_paths, preflight._published_digests)
+        preflight.mounted_sources = lambda wt: [(str(self.wt), "ssti_tasks")]
+        preflight._published_rel_paths = lambda: {self.rel}
+
+    def tearDown(self) -> None:
+        preflight.mounted_sources, preflight._published_rel_paths, preflight._published_digests = self.saved
+        self.dir.cleanup()
+
+    def run_main(self, published_bytes: bytes) -> tuple[int, str]:
+        digest = preflight.local_digests(self._file(published_bytes))
+        preflight._published_digests = lambda rels: {r: ("traverse:v3", digest) for r in rels}
+        err = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"WT": "momonly"}),
+            contextlib.redirect_stderr(err),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            try:
+                preflight.main()
+            except SystemExit as exc:
+                return exc.code, err.getvalue()
+        return 0, err.getvalue()
+
+    def _file(self, content: bytes) -> str:
+        path = Path(self.dir.name) / "published.pt"
+        path.write_bytes(content)
+        return str(path)
+
+    def test_differing_worktree_data_is_refused_naming_it(self) -> None:
+        code, err = self.run_main(b"134 columns")
+        self.assertEqual(code, 1)
+        self.assertIn(self.rel, err)
+        self.assertIn("traverse:v3", err)
+
+    def test_matching_worktree_data_passes(self) -> None:
+        self.assertEqual(self.run_main(b"140 columns")[0], 0)
+
+    def test_lfs_pointers_are_refused_with_the_pull(self) -> None:
+        pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:ab\nsize 9\n"
+        (self.wt / "ssti_tasks" / "agile" / "style_data" / "traverse.pt").write_bytes(pointer)
+        code, err = self.run_main(b"134 columns")
+        self.assertEqual(code, 1)
+        self.assertIn("git lfs pull", err)
+
+    def test_mounts_are_printed(self) -> None:
+        out = io.StringIO()
+        preflight._published_digests = lambda rels: {}
+        with mock.patch.dict(os.environ, {"WT": "momonly"}), contextlib.redirect_stdout(out):
+            preflight.main()
+        self.assertIn("WT=momonly mounts ssti_tasks from worktrees/momonly", out.getvalue())
 
 
 if __name__ == "__main__":

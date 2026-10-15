@@ -418,18 +418,28 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
         # -p/-A because TACC refuses overlap steps without them on multi-project accounts, and -A as the profile
         # spells it
         acct = spelling.get(acct.lower(), acct)
-        opts = f"--jobid={jobid} --overlap --immediate=10 --job-name=res-probe -N1 -n1 -t 00:02:00"
-        opts += (f" -p {part}" if part else "") + (f" -A {acct}" if acct and acct != "(null)" else "")
-        remote = f"timeout 45 srun {opts} {REMOTE_QUERY}"
-        try:
-            step = _run(["ssh", *MASTER_OPTS, *SSH_OPTS, login, remote], timeout=60)
-            cards = parse_gpu_query(step.stdout, report.pool, node)
-        except subprocess.TimeoutExpired:
-            failed.append(Report(f"{label} job {jobid}", "slurm", error=f"GPU probe on {node} timed out"))
-            continue
-        except ProbeError as exc:
-            tail = step.stderr.strip()[-160:]
-            failed.append(Report(f"{label} job {jobid}", "slurm", error=f"GPU probe on {node}: {exc} {tail}".strip()))
+        # an account no profile names (a job moved with scontrol) only has squeue's lowercase; TACC wants it upper
+        accts = [acct, acct.upper()] if acct and acct != "(null)" and acct != acct.upper() else [acct]
+        cards = None
+        for i, a in enumerate(accts):
+            opts = f"--jobid={jobid} --overlap --immediate=10 --job-name=res-probe -N1 -n1 -t 00:02:00"
+            opts += (f" -p {part}" if part else "") + (f" -A {a}" if a and a != "(null)" else "")
+            remote = f"timeout 45 srun {opts} {REMOTE_QUERY}"
+            try:
+                step = _run(["ssh", *MASTER_OPTS, *SSH_OPTS, login, remote], timeout=60)
+                cards = parse_gpu_query(step.stdout, report.pool, node)
+                break
+            except subprocess.TimeoutExpired:
+                failed.append(Report(f"{label} job {jobid}", "slurm", error=f"GPU probe on {node} timed out"))
+                break
+            except ProbeError as exc:
+                if i + 1 < len(accts) and "Unknown project" in f"{exc} {step.stdout} {step.stderr}":
+                    continue
+                tail = step.stderr.strip()[-160:]
+                error = f"GPU probe on {node}: {exc} {tail}".strip()
+                failed.append(Report(f"{label} job {jobid}", "slurm", error=error))
+                break
+        if cards is None:
             continue
         for card in cards:
             card.job, card.wall_left = jobid, left
