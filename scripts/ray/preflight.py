@@ -17,7 +17,9 @@ import sys
 from types import ModuleType
 
 MANAGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-RESOURCES = os.path.join(MANAGER_DIR, "resources")
+# per-user state (resources/, workspace.yaml): the main checkout's when run from a manager worktree
+WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR") or MANAGER_DIR
+RESOURCES = os.path.join(WORKSPACE_DIR, "resources")
 SKIP_DIRS = {".git", "worktrees", "logs", "outputs", "wandb", "__pycache__", ".claude"}
 # the excludes every job template must carry for artifact_only_dirs() to describe what the job leaves out
 ARTIFACT_EXCLUDES = ("**/policies/*/*/*", "**/style_data/**")
