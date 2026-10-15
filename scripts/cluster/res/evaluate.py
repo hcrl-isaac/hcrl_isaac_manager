@@ -1361,7 +1361,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         for name, src in siblings.items():  # a sibling repo's dirs, found through its variable, on no PYTHONPATH
             sib = SIBLINGS[name]
             if t.kind == "slurm":
-                sys.exit(f"[res] --with {name} ships to box cards only; a SLURM run finds it in the cluster's tree")
+                sys.exit(f"[res] --with {name} ships to box cards only; SLURM runs do not support it yet")
             if t.kind == "local":
                 env[sib.env] = src
                 manifest.append(f"{name} {src} {_describe(src)} (in place, {sib.env})")
