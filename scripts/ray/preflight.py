@@ -1,4 +1,5 @@
-"""Before a Ray submit: fail if an entry the job leaves to W&B artifacts has no artifact at its path.
+"""Before a Ray submit: fail if an entry the job leaves to W&B artifacts has no artifact at its path, or (from a
+worktree set) holds other data than that artifact, which the job would silently train on instead.
 
 Ray jobs exclude every exported policy (``policies/<task>/<robot>/<name>``, a dir or a file) and every
 ``style_data`` dir from their upload (scripts/ray/tools/*.template.yaml), which keeps the py_modules zip under Ray's
@@ -8,9 +9,12 @@ inside the job, so this checks every such entry in the sources the job mounts.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib.util
 import os
 import sys
+from types import ModuleType
 
 MANAGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 RESOURCES = os.path.join(MANAGER_DIR, "resources")
@@ -64,19 +68,66 @@ def mounted_sources(wt: str) -> list[tuple[str, str]]:
     return out
 
 
+def _artifacts_module() -> ModuleType:
+    if "hcrl_artifacts_preflight" not in sys.modules:
+        path = os.path.join(RESOURCES, "hcrl_isaaclab", "hcrl_isaaclab", "utils", "artifacts.py")
+        spec = importlib.util.spec_from_file_location("hcrl_artifacts_preflight", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    return sys.modules["hcrl_artifacts_preflight"]
+
+
 def _published_rel_paths() -> set[str]:
-    path = os.path.join(RESOURCES, "hcrl_isaaclab", "hcrl_isaaclab", "utils", "artifacts.py")
-    spec = importlib.util.spec_from_file_location("hcrl_artifacts_preflight", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    specs = module.discover()
+    specs = _artifacts_module().discover()
     return {s.rel_path for s in specs} | {r for s in specs for r in s.extra_rel_paths}
+
+
+def _published_digests(rels: list[str]) -> dict[str, tuple[str, list[str]]]:
+    """rel path -> (artifact ``name:version`` the job fetches, its files' W&B digests) for each published rel."""
+    import wandb
+
+    module = _artifacts_module()
+    by_rel = {r: s for s in module.discover() for r in (s.rel_path, *s.extra_rel_paths)}
+    api, out = wandb.Api(), {}
+    for rel in rels:
+        if rel in by_rel:
+            s = by_rel[rel]
+            art = api.artifact(f"{module._project()}/{s.key}:{s.version}")
+            out[rel] = (f"{s.key}:{s.version}", sorted(e.digest for e in art.manifest.entries.values()))
+    return out
+
+
+def has_lfs_pointer(path: str) -> bool:
+    """True if a file at ``path`` (or under it) is a git-lfs pointer rather than its content."""
+    files = [path] if os.path.isfile(path) else [os.path.join(r, f) for r, _, fs in os.walk(path) for f in fs]
+    for f in files:
+        with open(f, "rb") as fh:
+            if fh.read(40).startswith(b"version https://git-lfs.github.com/spec/"):
+                return True
+    return False
+
+
+def local_digests(path: str) -> list[str]:
+    """W&B-style digests (base64 md5) of every file at ``path`` (a file, or a dir walked recursively)."""
+    files = [path] if os.path.isfile(path) else [os.path.join(r, f) for r, _, fs in os.walk(path) for f in fs]
+    out = []
+    for f in files:
+        h = hashlib.md5()
+        with open(f, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+        out.append(base64.b64encode(h.digest()).decode())
+    return sorted(out)
 
 
 def main() -> None:
     """Exit 1 listing each artifact-only entry with no artifact; warn and pass if W&B cannot be read."""
-    sources = mounted_sources(os.environ.get("WT", ""))
+    wt = os.environ.get("WT", "")
+    sources = mounted_sources(wt)
+    from_wt = {repo for src, repo in sources if wt and src.endswith(os.path.join("worktrees", wt))}
+    if wt:
+        print(f"[INFO] preflight: WT={wt} mounts {', '.join(sorted(from_wt))} from worktrees/{wt}; others from main")
     wanted = [
         (rel, os.path.join(src, os.path.relpath(rel, repo)))
         for src, repo in sources
@@ -92,6 +143,7 @@ def main() -> None:
     missing = [(rel, local) for rel, local in wanted if rel not in published]
     if not missing:
         print(f"[INFO] preflight: all {len(wanted)} artifact-only entries are published.")
+        _check_worktree_data([(rel, local) for rel, local in wanted if rel.split("/")[0] in from_wt], wt)
         return
     print(
         "[ERROR] preflight: the job excludes these from its upload, but no W&B artifact provides them:",
@@ -99,6 +151,37 @@ def main() -> None:
     )
     for rel, local in missing:
         print(f"  {rel}\n    publish: pls upload-artifacts {local} --rel-path {rel} --tier cache", file=sys.stderr)
+    sys.exit(1)
+
+
+def _check_worktree_data(entries: list[tuple[str, str]], wt: str) -> None:
+    """Exit 1 if a worktree's artifact-only entry differs from the artifact the job fetches in its place."""
+    if not entries:
+        return
+    pointers = [rel for rel, local in entries if has_lfs_pointer(local)]
+    if pointers:  # pointers never match an artifact's bytes; the job would get the published data, unchecked
+        print(f"[ERROR] preflight: WT={wt} holds git-lfs pointers, not data, so it cannot be compared with W&B's:",
+              file=sys.stderr)  # fmt: skip
+        for rel in pointers:
+            print(f"  {rel}", file=sys.stderr)
+        print("  run `git lfs pull` in those worktrees, then submit again.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        published = _published_digests([rel for rel, _ in entries])
+    except Exception as exc:  # cannot verify: warn, as for the presence check
+        print(f"[WARN] preflight: could not read the artifacts' contents ({exc}); not comparing WT={wt} data.",
+              file=sys.stderr)  # fmt: skip
+        return
+    differ = [(rel, published[rel][0]) for rel, local in entries
+              if rel in published and local_digests(local) != published[rel][1]]  # fmt: skip
+    if not differ:
+        return
+    print(f"[ERROR] preflight: WT={wt} holds other data than the W&B artifact a Ray job fetches in its place:",
+          file=sys.stderr)  # fmt: skip
+    for rel, art in differ:
+        print(f"  {rel}  (the job would get {art})", file=sys.stderr)
+    print("  Ray excludes these from its upload; run this set where its files ship (a card: pls run --on <host:gpu>"
+          f" --wt {wt}, or a SLURM tree).", file=sys.stderr)  # fmt: skip
     sys.exit(1)
 
 
