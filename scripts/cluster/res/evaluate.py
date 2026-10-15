@@ -247,8 +247,12 @@ def lfs_pointers(src: str) -> list[str]:
     return found
 
 
+TOOL_REPOS = ("hcrl_sim2real",)  # package repos outside the worktree set that runs (and --venv tools) import
+
+
 def local_code(workspace: str, wt: str) -> dict[str, str]:
-    """The package repos a run imports (core, RL package, ``*_tasks``), as worktree-set or main checkout paths.
+    """The package repos a run imports (core, RL package, ``*_tasks``, ``TOOL_REPOS``), as worktree-set or main
+    checkout paths.
 
     Args:
         workspace: Manager checkout whose resources/ holds the repos.
@@ -262,7 +266,7 @@ def local_code(workspace: str, wt: str) -> dict[str, str]:
 
     resources = os.path.join(workspace, "resources")
     code, overridden = {}, False
-    for repo in workspace_repos(resources):
+    for repo in [*workspace_repos(resources), *TOOL_REPOS]:
         main = os.path.join(resources, repo)
         if repo.endswith("_robots") or not os.path.isdir(main):
             continue

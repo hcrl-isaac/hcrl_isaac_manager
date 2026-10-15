@@ -320,6 +320,13 @@ class LocalCodeTest(unittest.TestCase):
         self.assertTrue(code["ssti_tasks"].endswith("ssti_tasks/worktrees/wt"))
         self.assertTrue(code["robot_rl"].endswith("resources/robot_rl"))
 
+    def test_hcrl_sim2real_ships_and_its_worktree_alone_is_a_set(self) -> None:
+        (self.tmp / "resources" / "hcrl_sim2real" / "worktrees" / "mjx").mkdir(parents=True)
+        code = ev.local_code(str(self.tmp), "mjx")
+        self.assertTrue(code["hcrl_sim2real"].endswith("hcrl_sim2real/worktrees/mjx"))
+        self.assertTrue(code["ssti_tasks"].endswith("resources/ssti_tasks"))
+        self.assertTrue(ev.local_code(str(self.tmp), "")["hcrl_sim2real"].endswith("resources/hcrl_sim2real"))
+
     def test_unknown_worktree_set_is_refused(self) -> None:
         with self.assertRaises(SystemExit):
             ev.local_code(str(self.tmp), "nope")
