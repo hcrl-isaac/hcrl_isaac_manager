@@ -3,8 +3,12 @@
 import contextlib
 import io
 import json
+import os
+import signal
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -89,6 +93,44 @@ class RunBatchTest(unittest.TestCase):
         (self.out / "j1.log").write_text("kept")
         self.run_jobs(["j1", "bad1"], ["L1"])
         self.assertEqual((self.out / "j1.log").read_text(), "kept", "an ok job is not run again")
+
+    def test_a_sigint_to_the_batch_gives_a_running_job_exactly_one_signal(self) -> None:
+        signals = self.dir / "signals"
+        started = self.dir / "started"
+        (self.dir / "fake_evaluate.py").write_text(f"""import pathlib, signal, sys, time
+def note(signum, _frame):
+    with open({str(signals)!r}, "a") as f:
+        f.write(signal.Signals(signum).name + "\\n")
+signal.signal(signal.SIGINT, note)
+signal.signal(signal.SIGTERM, note)
+pathlib.Path({str(started)!r}).touch()
+end = time.time() + 20
+while time.time() < end and not pathlib.Path({str(signals)!r}).exists():
+    time.sleep(0.05)
+time.sleep(1.0)  # a second signal would land here, during cleanup
+sys.exit(1)
+""")
+
+        jobs = self.dir / "jobs.jsonl"
+        jobs.write_text(json.dumps({"id": "j1"}))
+        res_dir = str(Path(batch.__file__).parent)
+        driver = (  # the batch as a terminal's foreground job: its own process group, the stand-in as its runner
+            f"import sys; sys.path.insert(0, {res_dir!r}); import batch, pathlib; "
+            f"batch.EVALUATE = pathlib.Path({str(self.dir / 'fake_evaluate.py')!r}); "
+            f"sys.exit(batch.run_batch([], ['L1'], {str(jobs)!r}, {str(self.out)!r}, 's.py', []))"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", driver], start_new_session=True, stderr=subprocess.DEVNULL)
+        try:
+            end = time.time() + 20
+            while not started.exists() and time.time() < end:
+                time.sleep(0.05)
+            os.killpg(proc.pid, signal.SIGINT)  # what a terminal Ctrl-C does: the whole foreground group
+            self.assertEqual(proc.wait(timeout=30), 1)
+        finally:
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+        self.assertEqual(signals.read_text().split(), ["SIGTERM"])
+        self.assertEqual(self.status("j1"), "stopped")
 
     def test_a_card_failing_three_jobs_in_a_row_stops_taking_jobs(self) -> None:
         self.assertEqual(self.run_jobs(["bad1", "bad2", "bad3", "j4"], ["L1"]), 1)

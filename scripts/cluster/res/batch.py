@@ -142,8 +142,13 @@ def run_batch(argv: list[str], leases: list[str], jobs_file: str, out_dir: str, 
             (out / f"{job.id}.status").write_text(f"running on lease {lease}\n")
             start = time.time()
             with open(out / f"{job.id}.log", "w") as log:
+                # its own session: a terminal Ctrl-C reaches the batch only, which forwards one SIGTERM, so a job's
+                # cleanup is never interrupted by a second signal
                 proc = subprocess.Popen(
-                    job_argv(job, lease, shared, script, common), stdout=log, stderr=subprocess.STDOUT
+                    job_argv(job, lease, shared, script, common),
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
                 )
                 with lock:
                     procs[lease] = proc
