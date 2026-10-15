@@ -83,6 +83,24 @@ class ReconcileTest(unittest.TestCase):
         released = self.run_at(None, [report(card(index=3))], 31)
         self.assertEqual([why for _, why in released], ["card no longer exists"])
 
+    def test_a_combined_slurm_label_follows_its_card_to_the_partition_report(self) -> None:
+        c = card(state="busy", job="7")
+        self.leases = [lease_on(c, report="stampede3 (amd-rtx, rtx-small)")]
+        self.run_at(None, [report(c, label="stampede3 (rtx-small)"), report(label="stampede3 (amd-rtx)")], 5)
+        self.assertEqual(self.leases[0].report, "stampede3 (rtx-small)")
+
+    def test_a_combined_slurm_label_whose_card_is_gone_is_still_released(self) -> None:
+        self.leases = [lease_on(card(job="7"), report="stampede3 (amd-rtx, rtx-small)")]
+        reps = [report(label="stampede3 (rtx-small)"), report(label="stampede3 (amd-rtx)")]
+        self.assertEqual(self.run_at(None, reps, 1), [])
+        self.assertEqual([why for _, why in self.run_at(None, reps, 31)], ["card no longer exists"])
+
+    def test_a_combined_label_is_kept_while_a_site_report_failed(self) -> None:
+        self.leases = [lease_on(card(job="7"), report="stampede3 (amd-rtx, rtx-small)")]
+        reps = [report(label="stampede3 (rtx-small)"), report(label="stampede3 (amd-rtx)", error="ssh down")]
+        self.run_at(None, reps, 1)
+        self.assertEqual(self.run_at(None, reps, 31), [])
+
     def test_reappearing_card_resets_the_vanish_clock(self) -> None:
         self.leases = [lease_on(card())]
         self.run_at(None, [report(card(index=3))], 1)
