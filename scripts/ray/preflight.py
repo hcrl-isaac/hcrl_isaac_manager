@@ -143,7 +143,7 @@ def main() -> None:
     missing = [(rel, local) for rel, local in wanted if rel not in published]
     if not missing:
         print(f"[INFO] preflight: all {len(wanted)} artifact-only entries are published.")
-        _check_worktree_data([(rel, local) for rel, local in wanted if rel.split("/")[0] in from_wt], wt, sources)
+        _check_worktree_data([(rel, local) for rel, local in wanted if rel.split("/")[0] in from_wt], wt)
         return
     print(
         "[ERROR] preflight: the job excludes these from its upload, but no W&B artifact provides them:",
@@ -154,34 +154,8 @@ def main() -> None:
     sys.exit(1)
 
 
-CODE_SUFFIXES = (".py", ".yaml", ".yml", ".json", ".toml")
-
-
-def named_in_code(names: set[str], sources: list[tuple[str, str]]) -> set[str]:
-    """The ``names`` that a mounted source's code or config files mention (artifact-only dirs themselves excluded).
-
-    A task loads an exported policy or a style_data dir by a path its code or config spells out, so an entry no file
-    names cannot be what the job reads.
-    """
-    found: set[str] = set()
-    for src, _ in sources:
-        for root, dirs, files in os.walk(src):
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and d not in ("policies", "style_data")]
-            for f in files:
-                if not f.endswith(CODE_SUFFIXES) or found == names:
-                    continue
-                try:
-                    with open(os.path.join(root, f), errors="ignore") as fh:
-                        text = fh.read()
-                except OSError:
-                    continue
-                found |= {n for n in names - found if n in text}
-    return found
-
-
-def _check_worktree_data(entries: list[tuple[str, str]], wt: str, sources: list[tuple[str, str]] = ()) -> None:
-    """Exit 1 if a worktree's artifact-only entry that mounted code names differs from the artifact the job fetches
-    in its place; one nothing names only warns (the task cannot load it)."""
+def _check_worktree_data(entries: list[tuple[str, str]], wt: str) -> None:
+    """Exit 1 if a worktree's artifact-only entry differs from the artifact the job fetches in its place."""
     if not entries:
         return
     pointers = [rel for rel, local in entries if has_lfs_pointer(local)]
@@ -200,13 +174,11 @@ def _check_worktree_data(entries: list[tuple[str, str]], wt: str, sources: list[
         return
     differ = [(rel, published[rel][0]) for rel, local in entries
               if rel in published and local_digests(local) != published[rel][1]]  # fmt: skip
-    if differ and sources:
-        named = named_in_code({os.path.basename(rel) for rel, _ in differ}, sources)
-        unread = [(rel, art) for rel, art in differ if os.path.basename(rel) not in named]
-        for rel, art in unread:
-            print(f"[WARN] preflight: WT={wt} differs from {art} at {rel}, but no mounted code or config names it, so"
-                  " the job cannot load it; not blocking.", file=sys.stderr)  # fmt: skip
-        differ = [x for x in differ if x not in unread]
+    accepted = {r for r in os.environ.get("WT_DATA_OK", "").split(os.pathsep) if r}  # pls run --wt-data-ok
+    for rel, art in [x for x in differ if x[0] in accepted]:
+        print(f"[WARN] preflight: WT={wt} differs from {art} at {rel}; --wt-data-ok accepts it, so the job trains on"
+              " the published copy.", file=sys.stderr)  # fmt: skip
+    differ = [x for x in differ if x[0] not in accepted]
     if not differ:
         return
     print(f"[ERROR] preflight: WT={wt} holds other data than the W&B artifact a Ray job fetches in its place:",
@@ -214,7 +186,8 @@ def _check_worktree_data(entries: list[tuple[str, str]], wt: str, sources: list[
     for rel, art in differ:
         print(f"  {rel}  (the job would get {art})", file=sys.stderr)
     print("  Ray excludes these from its upload; run this set where its files ship (a card: pls run --on <host:gpu>"
-          f" --wt {wt}, or a SLURM tree).", file=sys.stderr)  # fmt: skip
+          f" --wt {wt}, or a SLURM tree), or, when the job does not read them, pass"
+          f" --wt-data-ok {' '.join(rel for rel, _ in differ)} to train on the published copy.", file=sys.stderr)  # fmt: skip
     sys.exit(1)
 
 

@@ -367,6 +367,10 @@ class RunTest(unittest.TestCase):
         self.assertEqual(h.cmd, [launch.RAY_BACKEND, "job_distributed", "--task", "T"])
         self._refused("--on", "ray", "--distributed", "--", "census")
         self._refused("--on", "any", "--holder", "me", "--distributed", "--", "train")
+        h = self._pls("--on", "ray", "--wt", "feat", "--wt-data-ok", "a/b", "c/d", "--", "train")
+        self.assertEqual(h.env, {"WT": "feat", "WT_DATA_OK": "a/b:c/d"})
+        self._refused("--on", "ray", "--wt-data-ok", "a/b", "--", "train")  # no worktree set: nothing to accept
+        self._refused("--on", "any", "--holder", "me", "--wt", "feat", "--wt-data-ok", "a/b", "--", "train")
 
     def test_help_before_the_double_dash_is_ours_after_it_the_scripts(self) -> None:
         self.assertEqual(self._pls("--on", "any", "--help").cmd, [*launch.CARD_CMD, "--help"])
