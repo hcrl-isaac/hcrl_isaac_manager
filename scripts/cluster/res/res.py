@@ -226,7 +226,9 @@ def _named(spec: str, seen: list[tuple[Card, Report]]) -> tuple[Card, Report]:
     return hits[0]
 
 
-def _choose(seen: list[tuple[Card, Report]], taken: set[str], args: argparse.Namespace) -> list[tuple[Card, Report]]:
+def _choose(
+    seen: list[tuple[Card, Report]], taken: dict[str, ls.Lease], args: argparse.Namespace
+) -> list[tuple[Card, Report]]:
     """The cards a claim takes: all named ones, or --any free ones packed onto partly used hosts first."""
     adopt = getattr(args, "adopt", False)
     if args.any and adopt:
@@ -258,6 +260,10 @@ def _choose(seen: list[tuple[Card, Report]], taken: set[str], args: argparse.Nam
     for spec in dict.fromkeys(args.cards):
         card, rep = _named(spec, seen)
         key = ls.card_key(card)
+        if key in taken and taken[key].holder == args.holder:  # never frees by waiting: say how to use it
+            sys.exit(
+                f"[res] {spec} is already yours (lease {taken[key].id}); run on it with `--on lease:{taken[key].id}`"
+            )
         if key in taken:
             raise Busy(f"[res] {spec} is leased; move it with `pls res transfer {spec} --to <holder>`; nothing claimed")
         if card.state != "free" and not (adopt and card.state in ("busy", "held")):
@@ -317,7 +323,7 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
         with ls.locked_store() as leases:
             _report_released(ls.reconcile(leases, reports, **windows))
             try:
-                chosen = _choose(seen, {lease.key for lease in leases}, args)
+                chosen = _choose(seen, {lease.key: lease for lease in leases}, args)
             except SystemExit as exc:  # keep the reconcile result even when the claim is refused
                 refused = exc
             else:
