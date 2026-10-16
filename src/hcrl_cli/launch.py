@@ -47,7 +47,8 @@ where you are, on a card from the box workspace (a SLURM card: the run's work di
 (the container's python on SLURM). Ray runs python scripts only.
 
 card options (--holder is required): --holder, --note, --pool, --min-free-gb, --checkpoint, --env, --timeout,
---stall, --detach, --venv, --with; `pls run --on any --help` describes them."""
+--stall, --detach, --venv, --with, --jobs/--out (a job list over lease:A,B,...); `pls run --on any --help`
+describes them."""
 
 
 def parser() -> argparse.ArgumentParser:
@@ -66,7 +67,9 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--cmd", action="store_true", help="the words after -- are a command, not a script")
     p.add_argument("--batch", action="store_true", help="submit a batch job on SLURM cluster TARGET (train only)")
-    p.add_argument("--tree", default="", metavar="N", help="(--batch) run staged tree N instead of staging")
+    p.add_argument(
+        "--tree", default="", metavar="N", help="(--batch or a SLURM card) run staged tree N instead of staging"
+    )
     p.add_argument("--distributed", action="store_true", help="(--on ray, train) a sub-job per GPU node")
     p.add_argument(
         "--wt-data-ok",
@@ -225,8 +228,8 @@ def main(argv: list[str]) -> None:
             sys.exit(f"[pls] run --batch: {' '.join([*extra, *(['--cmd'] if ns.cmd else [])])} only apply on a card")
         _batch(ns.on, ns.wt, ns.tree, run)
         return
-    if ns.tree:
-        sys.exit("[pls] run: --tree only applies with --batch")
+    if ns.tree and (not ns.on or ns.on == "ray" or ns.wt):
+        sys.exit("[pls] run: --tree runs a staged tree as is, with --batch or on a SLURM card; not with --wt")
     if ns.distributed and (ns.on != "ray" or run[0] != "train"):
         sys.exit("[pls] run: --distributed only applies to train on Ray (--on ray -- train)")
     if ns.wt_data_ok and (ns.on != "ray" or not ns.wt):
@@ -250,7 +253,7 @@ def main(argv: list[str]) -> None:
             handoff([RAY_BACKEND, "run", _ray_script(script), *args], env=env)
     else:
         script, *args = run
-        wt = ["--wt", ns.wt] if ns.wt else []
+        wt = ["--wt", ns.wt] if ns.wt else ["--tree", ns.tree] if ns.tree else []
         if ns.on.startswith("local:"):
             _disk_guard()
         target = ["--cmd", script] if ns.cmd else [_card_script(script)]

@@ -527,6 +527,30 @@ TREE_KEEP_DAYS = 14  # an unused res-eval tree older than this is removed when a
 SNAPSHOT_RW_DIRS = ("logs", "outputs", "wandb")
 
 
+def use_tree(t: Target, tree: str) -> str:
+    """Check that an already-staged code tree is complete on the cluster and mark it used, for ``--tree``.
+
+    Args:
+        t: The SLURM target.
+        tree: The tree id (``develop stage``'s name, e.g. ``legacy-96a4393458``).
+
+    Returns:
+        The MANIFEST line for the tree.
+    """
+    if not re.fullmatch(r"[\w.-]+", tree):
+        sys.exit(f"[res] --tree {tree!r}: a tree id is letters, digits, . _ -")
+    q = shlex.quote
+    path = f"{profile_value(t.pool, 'CLUSTER_TREES_DIR') or f'{t.workspace}/trees'}/{tree}"
+    # touched as a reused tree is (its mtime is its last use), so a concurrent prune keeps it
+    check = subprocess.run(["ssh", *t.ssh_opts, t.ssh, f"[ -f {q(path)}/.complete ] && touch {q(path)}"],
+                           capture_output=True, text=True)  # fmt: skip
+    if check.returncode == 255:
+        sys.exit(f"[res] could not reach {t.pool} to check the code tree: {check.stderr.strip()[:200]}")
+    if check.returncode != 0:
+        sys.exit(f"[res] --tree {tree}: no complete tree at {path} on {t.pool} (`pls cluster {t.pool} develop trees`)")
+    return f"code: staged tree {tree} on {t.pool} (as staged; nothing shipped from here)"
+
+
 def stage_tree(t: Target, code: dict[str, str]) -> str:
     """Stage ``code`` on the cluster as a code tree (deduplicated against earlier trees) and return its id.
 
@@ -1337,6 +1361,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if not repo and not os.path.isfile(script):
             sys.exit(f"[res] no script {args.script}")
     run_args = [args.script, *args.script_args] if args.cmd else args.script_args
+    if args.lease and "," in args.lease:
+        sys.exit("[res] several leases (lease:A,B) run a job list: add --jobs FILE --out DIR")
     if sum(map(bool, (args.on, args.any, args.lease))) != 1:
         sys.exit("[res] pick the card with exactly one of --on host:gpu, --any or --lease <id>")
     env = parse_env(args.env or [])
@@ -1383,8 +1409,13 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         stage.make()
         paths = {ref.name: container_path(t, stage.link_checkpoint(fetch_checkpoint(ref), ref.name)) for ref in refs}
         source = t.workspace if t.kind == "local" else local_workspace()
-        code = local_code(source, args.wt)
-        pythonpath, manifest = stage.sync_code(code, local_data(source, args.wt))
+        if args.tree:  # an already-staged tree, every repo as it was staged
+            if t.kind != "slurm":
+                sys.exit("[res] --tree runs in a cluster's staged code tree: a SLURM card (box cards ship --wt)")
+            pythonpath, manifest, stage.tree = [], [use_tree(t, args.tree)], args.tree
+        else:
+            code = local_code(source, args.wt)
+            pythonpath, manifest = stage.sync_code(code, local_data(source, args.wt))
         for name, src in siblings.items():  # a sibling repo's dirs, found through its variable, on no PYTHONPATH
             sib = SIBLINGS[name]
             if t.kind == "slurm":
@@ -1402,7 +1433,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if args.cmd:  # from the box workspace (its manager root), or the run's work dir in a SLURM container
             target_script, cwd = "", work if t.kind == "slurm" else ""
         elif repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
-            root = dict(zip(code, pythonpath, strict=True))[repo]
+            root = f"/workspace/ext/{repo}" if args.tree else dict(zip(code, pythonpath, strict=True))[repo]
             target_script, cwd = f"{root}/{rel}", work
         else:
             put = stage.put(script, os.path.basename(script), mode=0o644)
@@ -1498,6 +1529,12 @@ def parser() -> argparse.ArgumentParser:
     )
     ev.add_argument("--note", default="", help="lease note")
     ev.add_argument(
+        "--tree",
+        metavar="NAME",
+        help="SLURM card: run in this already-staged code tree (`develop trees` lists them) instead of staging"
+        " the workspace or --wt; every repo is as staged",
+    )
+    ev.add_argument(
         "--with",
         dest="with_",
         action="append",
@@ -1511,6 +1548,13 @@ def parser() -> argparse.ArgumentParser:
         help="run with a uv venv built on the card's box from <repo>[<extra>], a shipped repo's optional dependencies"
         " (e.g. hcrl_sim2real[mjx]), instead of ilab; built once per requirement set",
     )
+    ev.add_argument(
+        "--jobs",
+        metavar="FILE",
+        help="run the script once per job (JSON array or lines of {id, args, checkpoint, env}) across the leases"
+        " lease:A,B,...: one worker per card, a job's args after the common ones",
+    )
+    ev.add_argument("--out", metavar="DIR", help="with --jobs: each job's <id>.log and <id>.status (rerun skips ok)")
     ev.add_argument(
         "--checkpoint",
         action="append",
@@ -1539,7 +1583,16 @@ def main(argv: list[str] | None = None) -> None:
     """Entry point of `pls run --on <card>`: claim the card through res, run the script, release."""
     import res
 
-    args = parse_args(sys.argv[1:] if argv is None else argv)
+    argv = sys.argv[1:] if argv is None else argv
+    args = parse_args(argv)
+    if args.jobs:
+        import batch
+
+        if not args.lease or args.on or args.any or args.detach or not args.out:
+            sys.exit("[res] --jobs runs on held cards: --on lease:A,B,... and --out DIR (no --any, --detach)")
+        pre = argv[: argv.index("--")] if "--" in argv else argv
+        pre = pre[:-1] if pre and pre[-1] == args.script else pre  # the script comes after the shared options
+        sys.exit(batch.run_batch(pre, args.lease.split(","), args.jobs, args.out, args.script, args.script_args))
     try:
         pools = res.load_pools()
     except Exception as exc:  # a broken inventory must say so, not print a traceback

@@ -228,7 +228,14 @@ class BatchTest(unittest.TestCase):
         self._refused("--on", "delta", "--batch", "--cmd", "--", "nvidia-smi")
         self._refused("--on", "delta", "--batch", "--holder", "me", "--", "train")
         self._refused("--on", "delta", "--batch", "--tree", "t", "--wt", "feat", "--", "train")
-        self._refused("--on", "delta", "--tree", "t", "--", "train")
+
+    def test_a_card_run_takes_a_staged_tree_but_not_with_a_worktree_set(self) -> None:
+        h = self._pls("--on", "delta", "--tree", "t", "--holder", "me", "--", "census")
+        self.assertEqual(h.cmd[h.cmd.index("--tree") + 1], "t")
+        self.assertIn("--any", h.cmd)
+        self._refused("--tree", "t", "--", "census")
+        self._refused("--on", "ray", "--tree", "t", "--", "train")
+        self._refused("--on", "delta", "--tree", "t", "--wt", "feat", "--", "census")
 
 
 class RunTest(unittest.TestCase):

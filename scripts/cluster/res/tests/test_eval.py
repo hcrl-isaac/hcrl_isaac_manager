@@ -266,6 +266,21 @@ class SlurmTest(unittest.TestCase):
         self.assertIn("/workspace/artifacts/res-eval/x/stop", runner)
         self.assertIn("> /workspace/artifacts/res-eval/x/status", runner)
 
+    def test_a_named_tree_is_checked_complete_and_touched(self) -> None:
+        t = ev.Target("horizon", "slurm", "c101-035", 1, "u@login", "/w", "/w/artifacts", job="57902", uuid="GPU-ab")
+        with mock.patch.object(ev, "profile_value", return_value=""), \
+                mock.patch.object(ev.subprocess, "run", return_value=mock.Mock(returncode=0, stderr="")) as run:  # fmt: skip
+            self.assertIn("legacy-96a4393458", ev.use_tree(t, "legacy-96a4393458"))
+        remote = run.call_args.args[0][-1]
+        self.assertIn("[ -f /w/trees/legacy-96a4393458/.complete ] && touch /w/trees/legacy-96a4393458", remote)
+        for rc, msg in ((1, "no complete tree"), (255, "could not reach")):
+            with mock.patch.object(ev, "profile_value", return_value=""), \
+                    mock.patch.object(ev.subprocess, "run", return_value=mock.Mock(returncode=rc, stderr="x")), \
+                    self.assertRaisesRegex(SystemExit, msg):  # fmt: skip
+                ev.use_tree(t, "legacy-96a4393458")
+        with self.assertRaises(SystemExit):
+            ev.use_tree(t, "../etc")
+
     def test_a_staged_tree_id_is_read_from_develop_stage(self) -> None:
         out = "  robot_rl /p abc worktree 123\nRun with: pls cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
         done = mock.Mock(returncode=0, stdout=out)
