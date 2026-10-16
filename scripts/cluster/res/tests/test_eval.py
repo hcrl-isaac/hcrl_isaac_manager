@@ -173,6 +173,42 @@ class TargetTest(unittest.TestCase):
         cvd = ev.runner_script(ev.make_target(Pool("a", "ssh", {"user": "u"}), "h", 2), "/s", "x.py", [], [])
         self.assertIn("export CUDA_VISIBLE_DEVICES=2 RES_EVAL_DEVICE=cuda:0", cvd)
 
+    def test_a_tool_venv_is_keyed_by_its_extras_requirements(self) -> None:
+        repo = Path(tempfile.mkdtemp())
+        pyproject = repo / "pyproject.toml"
+        pyproject.write_text('[project]\nname = "s"\n[project.optional-dependencies]\nmjx = ["jax==0.11.2", "optax"]\n')
+        path, reqs, python = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")
+        self.assertTrue(path.startswith("/var/local/u/res-eval/venvs/hcrl_sim2real-mjx-"))
+        self.assertEqual((reqs, python), (["jax==0.11.2", "optax"], ev.TOOL_VENV_PYTHON))
+        pyproject.write_text(pyproject.read_text().replace("0.11.2", "0.11.3"))
+        bumped = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")[0]
+        self.assertNotEqual(bumped, path)
+        with mock.patch.object(ev, "TOOL_VENV_PYTHON", "3.12"):  # the interpreter version is part of the key
+            other = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")[0]
+        self.assertNotEqual(other, bumped)
+        pyproject.write_text(pyproject.read_text() + '[tool.pls.venv.mjx]\npython = "3.12"\n')
+        path12, _, python = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")
+        self.assertEqual(python, "3.12")
+        self.assertNotEqual(path12, bumped)
+        pyproject.write_text(pyproject.read_text().replace('"3.12"', '"latest"'))
+        with self.assertRaises(SystemExit):
+            ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")
+        for spec, code in (("hcrl_sim2real", {}), ("x[mjx]", {"hcrl_sim2real": str(repo)}),
+                           ("hcrl_sim2real[cuda]", {"hcrl_sim2real": str(repo)})):  # fmt: skip
+            with self.assertRaises(SystemExit):
+                ev.tool_venv(spec, code, "/var/local/u")
+
+    def test_a_tool_venv_run_builds_once_and_runs_its_python(self) -> None:
+        t = ev.make_target(Pool("larg", "ssh", {"user": "u"}), "hazard", 1)
+        venv = ("/var/local/u/res-eval/venvs/r-mjx-abc", ["jax[cuda12]==0.11.2", "scipy"], "3.12")
+        runner = ev.runner_script(t, "/s", "", [], ["/s/code/r"], command=True, venv=venv)
+        self.assertIn("py=/var/local/u/res-eval/venvs/r-mjx-abc/bin/python", runner)
+        self.assertIn("'jax[cuda12]==0.11.2' scipy", runner)
+        self.assertIn("venv -q --python 3.12 ", runner)
+        self.assertNotIn("ilab/bin/python", runner)
+        self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
+        self.assertIn("ilab/bin/python", ev.runner_script(t, "/s", "x.py", [], []))
+
     def test_a_bad_pin_is_refused(self) -> None:
         with self.assertRaises(SystemExit):
             ev.make_target(Pool("a", "ssh", {"user": "u", "pin": "maybe"}), "h", 0)
@@ -247,15 +283,18 @@ class SlurmTest(unittest.TestCase):
         [stage_call] = [c for c in run.call_args_list if c.args[0][2:3] == ["stage"]]
         self.assertEqual(stage_call.args[0][2:], ["stage", "res-eval", "robot_rl=/p"], "asset repos stay shared")
         self.assertEqual(stage_call.kwargs["env"]["CLUSTER"], "amd-rtx")
-        prune = run.call_args_list[-1].args[0][-1]
-        self.assertIn("/w/trees/res-eval-*", prune)
-        self.assertIn("res-eval-0123456789", prune, "the tree just staged is never pruned")
+        check, prune = (c.args[0][-1] for c in run.call_args_list[-2:])
         self.assertTrue(
-            prune.startswith("[ -d /w/trees/res-eval-0123456789 ] && touch /w/trees/res-eval-0123456789;"),
+            check.startswith("[ -d /w/trees/res-eval-0123456789 ] && touch /w/trees/res-eval-0123456789;"),
             "a reused tree counts as just used, and a pruned one is never recreated as a file",
         )
+        self.assertTrue(check.endswith("[ -f /w/trees/res-eval-0123456789/.complete ]"), "the tree must still exist")
+        self.assertNotIn("rm -rf", check, "the run never waits on a prune")
+        self.assertIn("/w/trees/res-eval-*", prune)
+        self.assertIn("res-eval-0123456789", prune, "the tree just staged is never pruned")
         self.assertIn(".in-use", prune, "a tree a running step uses is never pruned")
-        self.assertTrue(prune.endswith("[ -f /w/trees/res-eval-0123456789/.complete ]"), "the tree must still exist")
+        self.assertTrue(prune.startswith("nohup setsid flock -n /w/trees/.prune.lock "), "detached, one at a time")
+        self.assertTrue(prune.endswith(">> /w/trees/.prune.log 2>&1 < /dev/null &"))
 
     def test_a_reused_tree_pruned_before_the_run_is_staged_again(self) -> None:
         out = "Run with: pls cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
@@ -264,7 +303,11 @@ class SlurmTest(unittest.TestCase):
 
         def runs(*prunes: int) -> Callable[..., mock.Mock]:  # stages report the tree; prune checks return the next code
             left = list(prunes)
-            return lambda cmd, **kw: mock.Mock(returncode=left.pop(0), stderr="timeout") if cmd[0] == "ssh" else staged
+            return (
+                lambda cmd, **kw: mock.Mock(returncode=left.pop(0) if left else 0, stderr="timeout")
+                if cmd[0] == "ssh"
+                else staged
+            )
 
         with (
             mock.patch.object(ev.subprocess, "run", side_effect=runs(1, 0)) as run,
@@ -305,6 +348,13 @@ class LocalCodeTest(unittest.TestCase):
         self.assertEqual(sorted(code), ["hcrl_isaaclab", "robot_rl", "ssti_tasks"])
         self.assertTrue(code["ssti_tasks"].endswith("ssti_tasks/worktrees/wt"))
         self.assertTrue(code["robot_rl"].endswith("resources/robot_rl"))
+
+    def test_hcrl_sim2real_ships_and_its_worktree_alone_is_a_set(self) -> None:
+        (self.tmp / "resources" / "hcrl_sim2real" / "worktrees" / "mjx").mkdir(parents=True)
+        code = ev.local_code(str(self.tmp), "mjx")
+        self.assertTrue(code["hcrl_sim2real"].endswith("hcrl_sim2real/worktrees/mjx"))
+        self.assertTrue(code["ssti_tasks"].endswith("resources/ssti_tasks"))
+        self.assertTrue(ev.local_code(str(self.tmp), "")["hcrl_sim2real"].endswith("resources/hcrl_sim2real"))
 
     def test_unknown_worktree_set_is_refused(self) -> None:
         with self.assertRaises(SystemExit):
@@ -660,7 +710,7 @@ class SlurmEvalTest(Isolated):
         self.assertEqual([x.card for x in self._leases()], ["c571-003:3 (job 3557743)"], "a detached run keeps it")
         calls = self.calls.read_text().splitlines()
         self.assertEqual(calls[0], "JOB=3557743 CLUSTER=amd-rtx")
-        self.assertEqual(calls[1:6], ["exec", "--tree", "res-eval-0123456789", "--detach", "--log"])
+        self.assertEqual(calls[1:7], ["exec", "--tree", "res-eval-0123456789", "--own-tmp", "--detach", "--log"])
         self.assertIn("ControlPath", out, "the printed stop command goes over the master")
         ev.stage_tree.assert_called_once()
         self.assertEqual(ev.stage_tree.call_args.args[1], {"robot_rl": str(self.src)}, "only the --wt repo is staged")
