@@ -74,6 +74,13 @@ if [ $# -eq 1 ]; then cmd="bash -c $(printf %q "$1")"; elif [ $# -gt 1 ]; then c
 # in-repo resource symlinks need the asset repos mounted. The entrypoint PYTHONPATHs only the packages.
 # NODE_EXEC_RESOURCES (set by `exec --tree`) points at a staged tree's resources/ instead of the shared one.
 RESOURCES="${NODE_EXEC_RESOURCES:-${CLUSTER_ISAACLAB_DIR}/resources}"
+IN_USE="" OWN_TMP=""
+cleanup() {  # one EXIT trap for both: the tree's in-use marker and a step's own /tmp
+    [ -n "$IN_USE" ] && rm -f "$IN_USE"
+    [ -n "$OWN_TMP" ] && rm -rf "$OWN_TMP"
+    return 0
+}
+trap cleanup EXIT
 # run logs and checkpoints; a profile points CLUSTER_LOGS_DIR off a quota'd home
 LOGS_DIR="${CLUSTER_LOGS_DIR:-${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs}"
 if [ -n "${NODE_EXEC_RESOURCES:-}" ]; then
@@ -84,7 +91,6 @@ if [ -n "${NODE_EXEC_RESOURCES:-}" ]; then
         IN_USE="$(dirname "$RESOURCES")/.in-use/$(hostname -s).$$"
     fi
     mkdir -p "$(dirname "$IN_USE")" && touch "$IN_USE"
-    trap 'rm -f "$IN_USE"' EXIT
     trap 'exit 143' TERM INT HUP
 fi
 EXT_BINDS=""
@@ -134,6 +140,14 @@ if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ] && [ "$(uname -m)" = x86_64 ]; then  # 
     VK_BINDS="-B ${VKCLAMP_DIR}:/opt/vkclamp:ro"
     export APPTAINERENV_XDG_CONFIG_DIRS="/opt/vkclamp/conf:/etc/xdg"
 fi
+# NODE_EXEC_OWN_TMP=1 (develop exec --own-tmp): this step's /tmp is its own, not the job's shared one, so steps on
+# one node never meet in Isaac Lab's hard-coded /tmp/IsaacLab (its URDF->USD conversions race); /tmp/cache stays the
+# job's, so caches kept there persist across steps
+STEP_TMP="${STAGE}/tmp" CACHE_BIND=""
+if [ "${NODE_EXEC_OWN_TMP:-}" = 1 ]; then
+    OWN_TMP="$(mktemp -d "${STAGE}/step-tmp.XXXXXX")" && STEP_TMP="$OWN_TMP"
+    mkdir -p "${STAGE}/tmp/cache" && CACHE_BIND="-B ${STAGE}/tmp/cache:/tmp/cache:rw"
+fi
 run_container() {
 apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
@@ -146,7 +160,7 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/docker-isaac-sim/documents:${DOCKER_USER_HOME}/Documents:rw \
     -B ${STAGE}/home:/u/esturman:rw \
     ${EXT_BINDS} ${VK_BINDS} \
-    -B ${STAGE}/tmp:/tmp:rw \
+    -B ${STEP_TMP}:/tmp:rw ${CACHE_BIND} \
     --nv --writable-tmpfs --containall --no-home "$SIF" \
     bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
 }
