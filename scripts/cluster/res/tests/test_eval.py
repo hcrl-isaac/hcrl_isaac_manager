@@ -232,15 +232,18 @@ class SlurmTest(unittest.TestCase):
         [stage_call] = [c for c in run.call_args_list if c.args[0][2:3] == ["stage"]]
         self.assertEqual(stage_call.args[0][2:], ["stage", "res-eval", "robot_rl=/p"], "asset repos stay shared")
         self.assertEqual(stage_call.kwargs["env"]["CLUSTER"], "amd-rtx")
-        prune = run.call_args_list[-1].args[0][-1]
-        self.assertIn("/w/trees/res-eval-*", prune)
-        self.assertIn("res-eval-0123456789", prune, "the tree just staged is never pruned")
+        check, prune = (c.args[0][-1] for c in run.call_args_list[-2:])
         self.assertTrue(
-            prune.startswith("[ -d /w/trees/res-eval-0123456789 ] && touch /w/trees/res-eval-0123456789;"),
+            check.startswith("[ -d /w/trees/res-eval-0123456789 ] && touch /w/trees/res-eval-0123456789;"),
             "a reused tree counts as just used, and a pruned one is never recreated as a file",
         )
+        self.assertTrue(check.endswith("[ -f /w/trees/res-eval-0123456789/.complete ]"), "the tree must still exist")
+        self.assertNotIn("rm -rf", check, "the run never waits on a prune")
+        self.assertIn("/w/trees/res-eval-*", prune)
+        self.assertIn("res-eval-0123456789", prune, "the tree just staged is never pruned")
         self.assertIn(".in-use", prune, "a tree a running step uses is never pruned")
-        self.assertTrue(prune.endswith("[ -f /w/trees/res-eval-0123456789/.complete ]"), "the tree must still exist")
+        self.assertTrue(prune.startswith("nohup setsid flock -n /w/trees/.prune.lock "), "detached, one at a time")
+        self.assertTrue(prune.endswith(">> /w/trees/.prune.log 2>&1 < /dev/null &"))
 
     def test_a_reused_tree_pruned_before_the_run_is_staged_again(self) -> None:
         out = "Run with: pls cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
@@ -249,7 +252,11 @@ class SlurmTest(unittest.TestCase):
 
         def runs(*prunes: int) -> Callable[..., mock.Mock]:  # stages report the tree; prune checks return the next code
             left = list(prunes)
-            return lambda cmd, **kw: mock.Mock(returncode=left.pop(0), stderr="timeout") if cmd[0] == "ssh" else staged
+            return (
+                lambda cmd, **kw: mock.Mock(returncode=left.pop(0) if left else 0, stderr="timeout")
+                if cmd[0] == "ssh"
+                else staged
+            )
 
         with (
             mock.patch.object(ev.subprocess, "run", side_effect=runs(1, 0)) as run,

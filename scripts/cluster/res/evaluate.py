@@ -445,20 +445,44 @@ def stage_tree(t: Target, code: dict[str, str]) -> str:
         tree = found.group(1)
         # the tree's mtime is its last use: a reused (deduplicated) tree is touched, so a concurrent prune keeps it;
         # the closing test tells whether it still exists
-        prune = (
+        check_tree = (
             f"[ -d {trees}/{q(tree)} ] && touch {trees}/{q(tree)}; "  # never a file in its place, if a prune won
-            f'for d in {trees}/res-eval-*; do [ "$(basename "$d")" = {q(tree)} ] && continue; '
-            f'[ -n "$(find "$d" -maxdepth 0 -mtime +{TREE_KEEP_DAYS})" ] || continue; '
-            '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; chmod -R u+w "$d" && rm -rf "$d"; done; '
             f"[ -f {trees}/{q(tree)}/.complete ]"
         )
-        check = subprocess.run(["ssh", *t.ssh_opts, t.ssh, prune], capture_output=True, text=True)
+        check = subprocess.run(["ssh", *t.ssh_opts, t.ssh, check_tree], capture_output=True, text=True)
         if check.returncode == 0:
+            prune_old_trees(t, trees, tree)
             return tree
         if check.returncode == 255:  # ssh's own failure: the tree's state is unknown, not gone
             sys.exit(f"[res] could not reach {t.pool} to check the code tree: {check.stderr.strip()[:200]}")
         print(f"[res] tree {tree} was pruned before the run could use it; staging it again", file=sys.stderr)
     sys.exit(f"[res] the code tree on {t.pool} was removed again before the run; nothing was run")
+
+
+def prune_old_trees(t: Target, trees: str, keep: str) -> None:
+    """Remove unused ``res-eval`` trees older than ``TREE_KEEP_DAYS``, detached on the login so a run never waits on it.
+
+    Deleting a tree on a slow shared filesystem can take most of an hour; one prune runs at a time (a lock in the trees
+    dir) and its log is ``<trees>/.prune.log``.
+
+    Args:
+        t: The SLURM target.
+        trees: The trees dir on the cluster, shell-quoted.
+        keep: The tree this run uses.
+    """
+    q = shlex.quote
+    sweep = (
+        f'for d in {trees}/res-eval-*; do [ "$(basename "$d")" = {q(keep)} ] && continue; '
+        f'[ -n "$(find "$d" -maxdepth 0 -mtime +{TREE_KEEP_DAYS})" ] || continue; '
+        '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; '
+        'echo "$(date -u +%FT%TZ) removing $d"; chmod -R u+w "$d" && rm -rf "$d"; done'
+    )
+    detached = f"nohup setsid flock -n {trees}/.prune.lock bash -c {q(sweep)} >> {trees}/.prune.log 2>&1 < /dev/null &"
+    if subprocess.run(["ssh", *t.ssh_opts, t.ssh, detached], capture_output=True).returncode == 0:
+        print(
+            f"[res] pruning res-eval trees older than {TREE_KEEP_DAYS} days on {t.pool} in the background",
+            file=sys.stderr,
+        )
 
 
 def container_path(t: Target, path: str) -> str:
