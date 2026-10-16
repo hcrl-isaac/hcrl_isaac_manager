@@ -47,7 +47,7 @@ where you are, on a card from the box workspace (a SLURM card: the run's work di
 (the container's python on SLURM). Ray runs python scripts only.
 
 card options (--holder is required): --holder, --note, --pool, --min-free-gb, --checkpoint, --env, --timeout,
---stall, --detach, --venv; `pls run --on any --help` describes them."""
+--stall, --detach, --venv, --with; `pls run --on any --help` describes them."""
 
 
 def parser() -> argparse.ArgumentParser:

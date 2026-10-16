@@ -36,7 +36,7 @@ SUPPORTED = ("local", "ssh", "slurm")
 # where node_exec binds the cluster checkout's artifacts/ inside the container, and the container's interpreter
 CONTAINER_ARTIFACTS = "/workspace/artifacts"
 CONTAINER_PYTHON = "/isaac-sim/python.sh"
-CONTAINER_TMP = "/tmp/res-eval"  # in the container's /tmp, the job's node-local dir
+CONTAINER_TMP = "/tmp/res-eval"  # in the container's /tmp, the step's own node-local dir (develop exec --own-tmp)
 CKPT_CACHE = Path.home() / ".cache" / "hcrl_res" / "checkpoints"
 TRACEBACK = "Traceback (most recent call last)"
 TIMED_OUT = 124
@@ -552,20 +552,45 @@ def stage_tree(t: Target, code: dict[str, str]) -> str:
         tree = found.group(1)
         # the tree's mtime is its last use: a reused (deduplicated) tree is touched, so a concurrent prune keeps it;
         # the closing test tells whether it still exists
-        prune = (
+        check_tree = (
             f"[ -d {trees}/{q(tree)} ] && touch {trees}/{q(tree)}; "  # never a file in its place, if a prune won
-            f'for d in {trees}/res-eval-*; do [ "$(basename "$d")" = {q(tree)} ] && continue; '
-            f'[ -n "$(find "$d" -maxdepth 0 -mtime +{TREE_KEEP_DAYS})" ] || continue; '
-            '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; chmod -R u+w "$d" && rm -rf "$d"; done; '
             f"[ -f {trees}/{q(tree)}/.complete ]"
         )
-        check = subprocess.run(["ssh", *t.ssh_opts, t.ssh, prune], capture_output=True, text=True)
+        check = subprocess.run(["ssh", *t.ssh_opts, t.ssh, check_tree], capture_output=True, text=True)
         if check.returncode == 0:
+            prune_old_trees(t, trees, tree)
             return tree
         if check.returncode == 255:  # ssh's own failure: the tree's state is unknown, not gone
             sys.exit(f"[res] could not reach {t.pool} to check the code tree: {check.stderr.strip()[:200]}")
         print(f"[res] tree {tree} was pruned before the run could use it; staging it again", file=sys.stderr)
     sys.exit(f"[res] the code tree on {t.pool} was removed again before the run; nothing was run")
+
+
+def prune_old_trees(t: Target, trees: str, keep: str) -> None:
+    """Remove unused ``res-eval`` trees older than ``TREE_KEEP_DAYS``, detached on the login so a run never waits on it.
+
+    Deleting a tree on a slow shared filesystem can take most of an hour; one prune runs at a time (a lock in the trees
+    dir) and its log is ``<trees>/.prune.log``.
+
+    Args:
+        t: The SLURM target.
+        trees: The trees dir on the cluster, shell-quoted.
+        keep: The tree this run uses.
+    """
+    q = shlex.quote
+    sweep = (
+        f'for d in {trees}/res-eval-*; do [ "$(basename "$d")" = {q(keep)} ] && continue; '
+        f'[ -n "$(find "$d" -maxdepth 0 -mtime +{TREE_KEEP_DAYS})" ] || continue; '
+        '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; '
+        'echo "$(date -u +%FT%TZ) removing $d"; chmod -R u+w "$d" && rm -rf "$d"; done'
+    )
+    detached = f"nohup setsid flock -n {trees}/.prune.lock bash -c {q(sweep)} >> {trees}/.prune.log 2>&1 < /dev/null &"
+    if subprocess.run(["ssh", *t.ssh_opts, t.ssh, detached], capture_output=True).returncode == 0:
+        print(
+            f"[res] started a background prune of res-eval trees older than {TREE_KEEP_DAYS} days on {t.pool}"
+            f" (a no-op if one is already running; log: {trees}/.prune.log)",
+            file=sys.stderr,
+        )
 
 
 def container_path(t: Target, path: str) -> str:
@@ -603,10 +628,10 @@ def slurm_runner_script(
     python = python or CONTAINER_PYTHON
     launch = '"$@"' if command else f'{q(python)} {q(script)} "$@"'
     s = {k: q(f"{stage}/{k}") for k in ("log", "env", "status", "stop", "heartbeat", "MANIFEST")}
-    # node-local: the container's /tmp is the job's per-node dir, shared by every step of the sentinel, so the run
-    # takes its own TMPDIR and per-card Kit caches inside it (one lease per card)
-    run_id, local = os.path.basename(stage), CONTAINER_TMP
-    tmp, cache = q(f"{local}/{run_id}"), q(f"{local}/cache/{t.host}-gpu{t.gpu}")
+    # node-local: the run's TMPDIR is in this step's own /tmp (develop exec --own-tmp); its per-card Kit caches are in
+    # /tmp/cache, the job's dir that persists across runs (one lease per card)
+    run_id = os.path.basename(stage)
+    tmp, cache = q(f"{CONTAINER_TMP}/{run_id}"), q(f"/tmp/cache/res-eval/{t.host}-gpu{t.gpu}")
     apps = f"nvidia-smi -i {q(t.uuid)} --query-compute-apps=pid --format=csv,noheader 2>/dev/null"
     return f"""#!/usr/bin/env bash
 set -u
@@ -991,7 +1016,9 @@ class Stage:
         """`develop exec` of this stage's run.sh in the staged tree, on the target's job."""
         run_sh = container_path(self.t, f"{self.dir}/run.sh")
         tree = ["--tree", self.tree] if self.tree else []
-        return cluster_dev_cmd(self.t.pool, self.t.job, "exec", *tree, *opts, "--", "bash", run_sh, *argv)
+        # --own-tmp: runs sharing a node never meet in the container's /tmp (Isaac Lab's /tmp/IsaacLab conversions)
+        own = ["--own-tmp"]
+        return cluster_dev_cmd(self.t.pool, self.t.job, "exec", *tree, *own, *opts, "--", "bash", run_sh, *argv)
 
     def kill(self) -> bool:
         """Kill the runner's process group on the target (TERM, then KILL) and report whether it is gone."""
