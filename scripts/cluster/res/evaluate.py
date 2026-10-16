@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -35,7 +36,7 @@ SUPPORTED = ("local", "ssh", "slurm")
 # where node_exec binds the cluster checkout's artifacts/ inside the container, and the container's interpreter
 CONTAINER_ARTIFACTS = "/workspace/artifacts"
 CONTAINER_PYTHON = "/isaac-sim/python.sh"
-CONTAINER_TMP = "/tmp/res-eval"  # in the container's /tmp, the job's node-local dir
+CONTAINER_TMP = "/tmp/res-eval"  # in the container's /tmp, the step's own node-local dir (develop exec --own-tmp)
 CKPT_CACHE = Path.home() / ".cache" / "hcrl_res" / "checkpoints"
 TRACEBACK = "Traceback (most recent call last)"
 TIMED_OUT = 124
@@ -246,8 +247,12 @@ def lfs_pointers(src: str) -> list[str]:
     return found
 
 
+TOOL_REPOS = ("hcrl_sim2real",)  # package repos outside the worktree set that runs (and --venv tools) import
+
+
 def local_code(workspace: str, wt: str) -> dict[str, str]:
-    """The package repos a run imports (core, RL package, ``*_tasks``), as worktree-set or main checkout paths.
+    """The package repos a run imports (core, RL package, ``*_tasks``, ``TOOL_REPOS``), as worktree-set or main
+    checkout paths.
 
     Args:
         workspace: Manager checkout whose resources/ holds the repos.
@@ -261,7 +266,7 @@ def local_code(workspace: str, wt: str) -> dict[str, str]:
 
     resources = os.path.join(workspace, "resources")
     code, overridden = {}, False
-    for repo in workspace_repos(resources):
+    for repo in [*workspace_repos(resources), *TOOL_REPOS]:
         main = os.path.join(resources, repo)
         if repo.endswith("_robots") or not os.path.isdir(main):
             continue
@@ -345,6 +350,44 @@ def _describe(src: str) -> str:
         return "(not a git checkout)"
 
 
+TOOL_VENV_PYTHON = "3.11"  # ilab's version: a tool venv's python unless its repo's [tool.pls.venv.<extra>] sets one
+
+
+def tool_venv(spec: str, code: dict[str, str], scratch: str) -> tuple[str, list[str], str]:
+    """The target dir and requirements of a ``<repo>[<extra>]`` tool venv, read from the local repo's pyproject.
+
+    Only the extra's list is installed, not the repo's ``[project] dependencies`` (hcrl_sim2real's pull torch, whose
+    CUDA wheels the tool venv exists to keep apart), so the extra lists everything the tool imports. The python
+    version is ``[tool.pls.venv.<extra>] python`` in the same pyproject, else ``TOOL_VENV_PYTHON``.
+
+    Args:
+        spec: ``<repo>[<extra>]``: a shipped repo and one of its optional dependency groups.
+        code: Repo name -> local checkout or worktree path, as shipped.
+        scratch: The target's scratch dir.
+
+    Returns:
+        The venv dir on the target (keyed by the python version and requirements, so a change builds a new one), the
+        requirements and the python version.
+    """
+    m = re.fullmatch(r"([\w.-]+)\[([\w.-]+)\]", spec)
+    if not m:
+        sys.exit(f"[res] --venv takes <repo>[<extra>], e.g. hcrl_sim2real[mjx]; got {spec!r}")
+    repo, extra = m.groups()
+    if repo not in code:
+        sys.exit(f"[res] --venv {spec}: {repo} is not a shipped repo ({', '.join(sorted(code))})")
+    pyproject = Path(code[repo]) / "pyproject.toml"
+    try:
+        meta = tomllib.loads(pyproject.read_text())
+        reqs = meta["project"]["optional-dependencies"][extra]
+    except (OSError, KeyError, tomllib.TOMLDecodeError):
+        sys.exit(f"[res] --venv {spec}: {pyproject} has no [project.optional-dependencies] {extra}")
+    python = str(meta.get("tool", {}).get("pls", {}).get("venv", {}).get(extra, {}).get("python", TOOL_VENV_PYTHON))
+    if not re.fullmatch(r"3\.\d+(\.\d+)?", python):
+        sys.exit(f"[res] --venv {spec}: [tool.pls.venv.{extra}] python must be a version like 3.12; got {python!r}")
+    key = hashlib.sha256("\n".join([f"python {python}", *sorted(reqs)]).encode()).hexdigest()[:12]
+    return f"{scratch}/res-eval/venvs/{repo}-{extra}-{key}", list(reqs), python
+
+
 def runner_script(
     t: Target,
     stage: str,
@@ -353,6 +396,7 @@ def runner_script(
     pythonpath: list[str],
     cwd: str = "",
     command: bool = False,
+    venv: tuple[str, list[str], str] | None = None,
 ) -> str:
     """The bash that runs on the target: a stage log, isolated caches, the given PYTHONPATH, the script's status.
 
@@ -364,6 +408,7 @@ def runner_script(
         pythonpath: PYTHONPATH entries on the target.
         cwd: Directory to run the script from (default: the target workspace).
         command: Run the arguments as a command line, the ilab venv first on PATH, instead of the script.
+        venv: A tool venv (dir, requirements, python version) to run with instead of ilab, built on first use.
 
     Returns:
         The run.sh text.
@@ -387,15 +432,42 @@ export TMPDIR={q(stage + "/tmp")} XDG_CACHE_HOME={q(cache + "/xdg")} OMNI_CACHE_
 export HCRL_ARTIFACT_ROOT={q(t.scratch + "/res-eval/artifacts")}
 export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y PYTHONUNBUFFERED=1 PYTHONPYCACHEPREFIX="$TMPDIR/pycache"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR" "$HCRL_ARTIFACT_ROOT"
-gomp="$(ls ilab/lib/python3.11/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)"
-[ -n "$gomp" ] && export LD_PRELOAD="$gomp${{LD_PRELOAD:+:$LD_PRELOAD}}"
+{_venv_lines(t, venv) if venv else _ilab_lines()}
 export PYTHONPATH={q(":".join(pythonpath))}"${{PYTHONPATH:+:$PYTHONPATH}}"
 cat {q(stage + "/MANIFEST")}
-py="$PWD/ilab/bin/python"
 echo "[res] {t.host}:gpu{t.gpu} ({t.pin}) python=$py env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
 {launch}
 """
+
+
+def _ilab_lines() -> str:
+    """run.sh lines selecting the workspace's ilab python (with torch's libgomp preloaded)."""
+    return (
+        'gomp="$(ls ilab/lib/python3.11/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)"\n'
+        '[ -n "$gomp" ] && export LD_PRELOAD="$gomp${LD_PRELOAD:+:$LD_PRELOAD}"\n'
+        'py="$PWD/ilab/bin/python"'
+    )
+
+
+def _venv_lines(t: Target, venv: tuple[str, list[str], str]) -> str:
+    """run.sh lines building (once, under a lock) and selecting a tool venv's python."""
+    q = shlex.quote
+    path, reqs, python = venv
+    return f"""uv="$(command -v uv || echo "$HOME/.local/bin/uv")"
+export UV_CACHE_DIR={q(t.scratch + "/res-eval/cache/uv")}
+if [ ! -f {q(path + "/.complete")} ]; then
+    [ -x "$uv" ] || {{ echo "[res] --venv needs uv on {t.host} (not on PATH or in ~/.local/bin)"; exit 97; }}
+    mkdir -p {q(os.path.dirname(path))}
+    (
+        flock 9
+        [ -f {q(path + "/.complete")} ] && exit 0
+        rm -rf {q(path)} && "$uv" venv -q --python {q(python)} {q(path)} \\
+            && "$uv" pip install -q --python {q(path + "/bin/python")} \\
+            {" ".join(q(r) for r in reqs)} && touch {q(path + "/.complete")}
+    ) 9>{q(path + ".lock")} || {{ echo "[res] building the tool venv {path} failed"; exit 97; }}
+fi
+py={q(path + "/bin/python")}"""
 
 
 def cluster_dev_cmd(profile: str, job: str, *args: str) -> tuple[list[str], dict[str, str]]:
@@ -445,20 +517,45 @@ def stage_tree(t: Target, code: dict[str, str]) -> str:
         tree = found.group(1)
         # the tree's mtime is its last use: a reused (deduplicated) tree is touched, so a concurrent prune keeps it;
         # the closing test tells whether it still exists
-        prune = (
+        check_tree = (
             f"[ -d {trees}/{q(tree)} ] && touch {trees}/{q(tree)}; "  # never a file in its place, if a prune won
-            f'for d in {trees}/res-eval-*; do [ "$(basename "$d")" = {q(tree)} ] && continue; '
-            f'[ -n "$(find "$d" -maxdepth 0 -mtime +{TREE_KEEP_DAYS})" ] || continue; '
-            '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; chmod -R u+w "$d" && rm -rf "$d"; done; '
             f"[ -f {trees}/{q(tree)}/.complete ]"
         )
-        check = subprocess.run(["ssh", *t.ssh_opts, t.ssh, prune], capture_output=True, text=True)
+        check = subprocess.run(["ssh", *t.ssh_opts, t.ssh, check_tree], capture_output=True, text=True)
         if check.returncode == 0:
+            prune_old_trees(t, trees, tree)
             return tree
         if check.returncode == 255:  # ssh's own failure: the tree's state is unknown, not gone
             sys.exit(f"[res] could not reach {t.pool} to check the code tree: {check.stderr.strip()[:200]}")
         print(f"[res] tree {tree} was pruned before the run could use it; staging it again", file=sys.stderr)
     sys.exit(f"[res] the code tree on {t.pool} was removed again before the run; nothing was run")
+
+
+def prune_old_trees(t: Target, trees: str, keep: str) -> None:
+    """Remove unused ``res-eval`` trees older than ``TREE_KEEP_DAYS``, detached on the login so a run never waits on it.
+
+    Deleting a tree on a slow shared filesystem can take most of an hour; one prune runs at a time (a lock in the trees
+    dir) and its log is ``<trees>/.prune.log``.
+
+    Args:
+        t: The SLURM target.
+        trees: The trees dir on the cluster, shell-quoted.
+        keep: The tree this run uses.
+    """
+    q = shlex.quote
+    sweep = (
+        f'for d in {trees}/res-eval-*; do [ "$(basename "$d")" = {q(keep)} ] && continue; '
+        f'[ -n "$(find "$d" -maxdepth 0 -mtime +{TREE_KEEP_DAYS})" ] || continue; '
+        '[ -z "$(ls -A "$d/.in-use" 2>/dev/null)" ] || continue; '
+        'echo "$(date -u +%FT%TZ) removing $d"; chmod -R u+w "$d" && rm -rf "$d"; done'
+    )
+    detached = f"nohup setsid flock -n {trees}/.prune.lock bash -c {q(sweep)} >> {trees}/.prune.log 2>&1 < /dev/null &"
+    if subprocess.run(["ssh", *t.ssh_opts, t.ssh, detached], capture_output=True).returncode == 0:
+        print(
+            f"[res] started a background prune of res-eval trees older than {TREE_KEEP_DAYS} days on {t.pool}"
+            f" (a no-op if one is already running; log: {trees}/.prune.log)",
+            file=sys.stderr,
+        )
 
 
 def container_path(t: Target, path: str) -> str:
@@ -496,10 +593,10 @@ def slurm_runner_script(
     python = python or CONTAINER_PYTHON
     launch = '"$@"' if command else f'{q(python)} {q(script)} "$@"'
     s = {k: q(f"{stage}/{k}") for k in ("log", "env", "status", "stop", "heartbeat", "MANIFEST")}
-    # node-local: the container's /tmp is the job's per-node dir, shared by every step of the sentinel, so the run
-    # takes its own TMPDIR and per-card Kit caches inside it (one lease per card)
-    run_id, local = os.path.basename(stage), CONTAINER_TMP
-    tmp, cache = q(f"{local}/{run_id}"), q(f"{local}/cache/{t.host}-gpu{t.gpu}")
+    # node-local: the run's TMPDIR is in this step's own /tmp (develop exec --own-tmp); its per-card Kit caches are in
+    # /tmp/cache, the job's dir that persists across runs (one lease per card)
+    run_id = os.path.basename(stage)
+    tmp, cache = q(f"{CONTAINER_TMP}/{run_id}"), q(f"/tmp/cache/res-eval/{t.host}-gpu{t.gpu}")
     apps = f"nvidia-smi -i {q(t.uuid)} --query-compute-apps=pid --format=csv,noheader 2>/dev/null"
     return f"""#!/usr/bin/env bash
 set -u
@@ -881,7 +978,9 @@ class Stage:
         """`develop exec` of this stage's run.sh in the staged tree, on the target's job."""
         run_sh = container_path(self.t, f"{self.dir}/run.sh")
         tree = ["--tree", self.tree] if self.tree else []
-        return cluster_dev_cmd(self.t.pool, self.t.job, "exec", *tree, *opts, "--", "bash", run_sh, *argv)
+        # --own-tmp: runs sharing a node never meet in the container's /tmp (Isaac Lab's /tmp/IsaacLab conversions)
+        own = ["--own-tmp"]
+        return cluster_dev_cmd(self.t.pool, self.t.job, "exec", *tree, *own, *opts, "--", "bash", run_sh, *argv)
 
     def kill(self) -> bool:
         """Kill the runner's process group on the target (TERM, then KILL) and report whether it is gone."""
@@ -1263,9 +1362,12 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         stage.write("\n".join(lines) + "\n", "env")
         names = sorted({**env, **paths})
         if t.kind == "slurm":
+            if args.venv:
+                sys.exit("[res] --venv runs on box cards only; a SLURM run uses the cluster's container")
             runner = slurm_runner_script(t, container_path(t, stage.dir), target_script, names, cwd, command=args.cmd)
         else:
-            runner = runner_script(t, stage.dir, target_script, names, pythonpath, cwd, command=args.cmd)
+            venv = tool_venv(args.venv, code, t.scratch) if args.venv else None
+            runner = runner_script(t, stage.dir, target_script, names, pythonpath, cwd, command=args.cmd, venv=venv)
         stage.write(runner, "run.sh", mode=0o700)
         staging.stop()
         if args.detach:
@@ -1346,6 +1448,12 @@ def parser() -> argparse.ArgumentParser:
         help="when the card (or every --any match) is taken, wait for one to free (optionally at most this long)",
     )
     ev.add_argument("--note", default="", help="lease note")
+    ev.add_argument(
+        "--venv",
+        default="",
+        help="run with a uv venv built on the card's box from <repo>[<extra>], a shipped repo's optional dependencies"
+        " (e.g. hcrl_sim2real[mjx]), instead of ilab; built once per requirement set",
+    )
     ev.add_argument(
         "--jobs",
         metavar="FILE",
