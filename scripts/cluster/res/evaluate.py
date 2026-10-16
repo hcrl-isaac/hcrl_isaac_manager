@@ -480,7 +480,8 @@ def prune_old_trees(t: Target, trees: str, keep: str) -> None:
     detached = f"nohup setsid flock -n {trees}/.prune.lock bash -c {q(sweep)} >> {trees}/.prune.log 2>&1 < /dev/null &"
     if subprocess.run(["ssh", *t.ssh_opts, t.ssh, detached], capture_output=True).returncode == 0:
         print(
-            f"[res] pruning res-eval trees older than {TREE_KEEP_DAYS} days on {t.pool} in the background",
+            f"[res] started a background prune of res-eval trees older than {TREE_KEEP_DAYS} days on {t.pool}"
+            f" (a no-op if one is already running; log: {trees}/.prune.log)",
             file=sys.stderr,
         )
 
