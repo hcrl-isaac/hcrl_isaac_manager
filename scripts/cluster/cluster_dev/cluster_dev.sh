@@ -32,7 +32,9 @@
 #                           ./cluster_dev.sh kill --all | <step>...   (scancel steps; the job,
 #                                                                      sentinel, and SSH master
 #                                                                      all keep running)
-# Tear down:                ./cluster_dev.sh stop
+# Tear down:                ./cluster_dev.sh stop [JOBID]    (cancel one sentinel: JOBID, DEV_JOBID, or this
+#                                                                      user's only one; the SSH master stays up)
+#                           ./cluster_dev.sh close            (close the SSH master: every session's link)
 #
 # Everything except the first 2FA is non-interactive, so a Claude session can drive
 # `status` / `exec` / `attach` over the live master without any credentials.
@@ -507,14 +509,32 @@ cmd_kill() {  # cluster_dev.sh kill [--all | STEP...] : scancel launched run ste
     on_login "scancel ${targets[*]}"
 }
 
-cmd_stop() {
-    local jobid; jobid="$(state_get JOBID)"
-    [ -f "$WATCH_PID" ] && kill "$(cat "$WATCH_PID")" 2>/dev/null || true; rm -f "$WATCH_PID"
-    if [ -n "$jobid" ] && master_alive; then
-        log "Cancelling job $jobid..."; on_login "scancel $jobid" || true
+cmd_stop() {  # stop [JOBID]: cancel one sentinel. Several sessions share the state file and the master, so the
+    # job is named (argument or DEV_JOBID) unless this user has exactly one; the master stays up (`close` ends it)
+    master_alive || { err "SSH master is down: open it first (pls cluster ${CLUSTER} develop open)"; exit 1; }
+    local jobid="${1:-${DEV_JOBID:-}}" live
+    live="$(on_login "squeue -u \$USER -h -n cluster-dev-box -o '%i %T %N' 2>/dev/null" || true)"
+    if [ -z "$jobid" ]; then
+        if [ "$(printf '%s\n' "$live" | grep -c .)" -ne 1 ]; then
+            err "Name the sentinel to cancel: stop <JOBID> (or DEV_JOBID=<id>). This user's sentinels:"
+            printf '%s\n' "${live:-  (none)}" | sed 's/^/    /' >&2; exit 1
+        fi
+        jobid="${live%% *}"
     fi
-    state_set JOB_STATE "STOPPED"
-    log "Cancelled. Closing SSH master."; ssh "${SSH_OPTS[@]}" -O exit "$CLUSTER_LOGIN" 2>/dev/null || true
+    [[ "$jobid" =~ ^[0-9]+$ ]] || { err "stop: '$jobid' is not a job id"; exit 1; }
+    printf '%s\n' "$live" | grep -q "^${jobid} " \
+        || { err "Job ${jobid} is not one of this user's sentinels (cluster-dev-box):"; printf '%s\n' "${live:-  (none)}" | sed 's/^/    /' >&2; exit 1; }
+    log "Cancelling sentinel ${jobid}..."; on_login "scancel ${jobid}"
+    if [ "$(state_get JOBID)" = "$jobid" ]; then  # the tracked job: its watcher and state go with it
+        [ -f "$WATCH_PID" ] && kill "$(cat "$WATCH_PID")" 2>/dev/null || true; rm -f "$WATCH_PID"
+        state_set JOB_STATE "STOPPED"
+    fi
+    log "Cancelled ${jobid}. The SSH master stays up for other sessions (close it with: develop close)."
+}
+
+cmd_close() {  # close the SSH master: ends every session's link to this cluster until the next `open`
+    log "Closing the SSH master to ${CLUSTER_LOGIN} (every session's)."
+    ssh "${SSH_OPTS[@]}" -O exit "$CLUSTER_LOGIN" 2>/dev/null || true
 }
 
 usage() {
@@ -538,6 +558,7 @@ case "${1:-}" in
     tail)     shift; cmd_tail "$@" ;;
     kill)     shift; cmd_kill "$@" ;;
     stop)     shift; cmd_stop "$@" ;;
+    close)    shift; cmd_close "$@" ;;
     __watch)  shift; cmd_watch_loop "$@" ;;   # internal (used by nohup)
     ""|-h|--help|help) usage ;;
     *) err "Unknown command '${1}'."; usage; exit 1 ;;
