@@ -26,7 +26,8 @@ pls cluster rtx-small develop status      # job id / state / node / master+watch
 pls cluster rtx-small develop attach      # interactive shell on the compute node (once RUNNING)
 pls cluster rtx-small develop exec -- <cmd>  # run <cmd> inside the Apptainer container, on the newest `default`
 pls cluster rtx-small develop stage       # ship local edits: the workspace as on disk -> a new `default`
-pls cluster rtx-small develop stop        # scancel the job + close the master
+pls cluster rtx-small develop stop [JOBID]  # scancel one sentinel (JOBID, DEV_JOBID, or your only one); master stays up
+pls cluster rtx-small develop close       # close the SSH master: every session's link, until the next `open`
 ```
 The watcher writes `~/.cluster_dev/<cluster>/state` (and `watch.log` next to it); when
 `JOB_STATE=RUNNING` and `NODE` is set, the box is ready. A Claude session can poll `status` and
@@ -127,7 +128,7 @@ access). If not (some sites, e.g. Delta, block this without re-auth) → they us
 - Compute nodes need outbound internet for live W&B logging.
 
 ## Files
-- `cluster_dev.sh` — control script (start/status/attach/exec/stage/trees/stop + internal watcher); `trees.sh` stages.
+- `cluster_dev.sh` — control script (start/status/attach/exec/stage/trees/stop/close + internal watcher); `trees.sh` stages.
 - `sentinel.sbatch` — node-holding job (envsubst template; resource directives come from the
   profile's `submit_job_slurm.sh`; does no heavy setup so a staging bug can't waste the allocation).
 - `node_exec.sh` — runs on the node; stages SIF+caches+code once, then `apptainer exec`s
