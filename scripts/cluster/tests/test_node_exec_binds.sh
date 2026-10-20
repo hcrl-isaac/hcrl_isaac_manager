@@ -73,6 +73,19 @@ check "CLUSTER_LOGS_DIR is bound over the shared repo's logs" "$T/work_logs:/wor
 NODE_EXEC_RESOURCES="$TREE/resources" run > "$T/out" 2>&1
 check "and over a staged repo's logs" "$T/work_logs:/workspace/ext/hcrl_isaaclab/logs:rw"
 
+# Kit boot crashes: an immediate segfault (exit 139) is retried once; other failures are not
+boots() { run > /dev/null 2>&1; echo "$?:$(wc -l < "$T/calls")"; }
+crash_with() { printf '#!/usr/bin/env bash\necho x >> "%s/calls"\n%s\n' "$T" "$1" > "$T/bin/apptainer"; : > "$T/calls"; }
+crash_with '[ "$(wc -l < '"$T"'/calls)" -eq 1 ] && exit 139; exit 0'
+r=$(boots)
+if [ "$r" = "0:2" ]; then echo "PASS a boot segfault is retried once and the retry's exit code returned"; else echo "FAIL boot segfault retry ($r)"; fails=$((fails + 1)); fi
+crash_with 'exit 139'
+r=$(boots)
+if [ "$r" = "139:2" ]; then echo "PASS a second segfault is not retried again"; else echo "FAIL second segfault ($r)"; fails=$((fails + 1)); fi
+crash_with 'exit 1'
+r=$(boots)
+if [ "$r" = "1:1" ]; then echo "PASS other failures are not retried"; else echo "FAIL other failure ($r)"; fails=$((fails + 1)); fi
+
 if [ "$fails" -ne 0 ]; then
     echo "--- apptainer args"; cat "$T/out"
     exit 1

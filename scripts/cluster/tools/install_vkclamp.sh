@@ -9,6 +9,8 @@ cluster="${1:?usage: install_vkclamp.sh <cluster>}"
 env_file="$HERE/../config/$cluster/.env.cluster"
 [ -f "$env_file" ] || { echo "[vkclamp] no profile $env_file"; exit 1; }
 source "$env_file"
+# the layer is built on this x86 machine, so aarch64 nodes cannot load it
+[ "${CLUSTER_ARCH:-amd64}" = amd64 ] || { echo "[vkclamp] $cluster is ${CLUSTER_ARCH}: the layer is x86-only"; exit 1; }
 dest="${CLUSTER_VKCLAMP_DIR:-${CLUSTER_SIF_PATH}/vkclamp}"
 ssh_opts=(-o ControlMaster=auto -o "ControlPath=$HOME/.ssh/cm/%C" -o ControlPersist=48h -o ConnectTimeout=60)
 build="$(mktemp -d)"

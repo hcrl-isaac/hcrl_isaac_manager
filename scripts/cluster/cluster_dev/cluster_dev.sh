@@ -12,16 +12,17 @@
 # Cluster-agnostic: all site specifics (login host, account, partition, resources) come from
 # config/<cluster>/.env.cluster, selected with CLUSTER=<name>. Nothing here is Delta-specific.
 #
-# Open master only:         ./cluster_dev.sh open             (approve ONE 2FA prompt; no sync)
-# Queue a job:              ./cluster_dev.sh start [--no-sync]   (approve ONE 2FA prompt)
+# Open master only:         ./cluster_dev.sh open             (approve ONE 2FA prompt; no staging)
+# Queue a job:              ./cluster_dev.sh start [--no-stage]   (approve ONE 2FA prompt; stages `default` first)
 # Then it self-tracks the (possibly multi-hour) queue wait in the background.
 # Check anytime:            ./cluster_dev.sh status
-# Mirror code:              ./cluster_dev.sh sync [--dry-run] (--dry-run lists what would change or be deleted)
-# Stage a code tree:        ./cluster_dev.sh stage <name> <repo>=<ref|/path/to/worktree> ...  (no --delete)
-#                           ./cluster_dev.sh exec --tree <name>[-<fp>] -- <cmd>   (run against that tree)
+# Ship code (a tree):       ./cluster_dev.sh stage            (the workspace as on disk -> tree `default`)
+#                           ./cluster_dev.sh stage <name> <repo>=<ref|/path/to/worktree> ...  (those repos; the
+#                                                                      rest from the newest `default`)
 #                           ./cluster_dev.sh trees [rm <name>-<fp> | rm --partials]   (list / remove trees)
 # Use it:                   ./cluster_dev.sh attach           (interactive shell on the node)
-#                           ./cluster_dev.sh exec -- <cmd>    (run in container, SSH-tethered)
+#                           ./cluster_dev.sh exec [--tree <name>[-<fp>]] -- <cmd>   (run in container against the
+#                                                                      newest `default`, or that tree; SSH-tethered)
 #                           ./cluster_dev.sh exec --detach -- <cmd>   (run in container, detached
 #                                                                      from SSH master; survives
 #                                                                      master drops; log on login
@@ -31,7 +32,9 @@
 #                           ./cluster_dev.sh kill --all | <step>...   (scancel steps; the job,
 #                                                                      sentinel, and SSH master
 #                                                                      all keep running)
-# Tear down:                ./cluster_dev.sh stop
+# Tear down:                ./cluster_dev.sh stop [JOBID]    (cancel one sentinel: JOBID, DEV_JOBID, or this
+#                                                                      user's only one; the SSH master stays up)
+#                           ./cluster_dev.sh close            (close the SSH master: every session's link)
 #
 # Everything except the first 2FA is non-interactive, so a Claude session can drive
 # `status` / `exec` / `attach` over the live master without any credentials.
@@ -47,6 +50,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # cluster_interface.sh, which sets CLUSTER when invoked as `cluster_interface.sh develop`.
 CLUSTER="${CLUSTER:-default}"
 ENV_FILE="${SCRIPT_DIR}/../config/${CLUSTER}/.env.cluster"
+# profiles are gitignored and per user, so a manager worktree has none: it borrows the main checkout's for the
+# commands that leave the shared sentinel state alone (see MAIN_PROFILE_COMMANDS)
+MAIN_CHECKOUT=""
+if [ ! -f "$ENV_FILE" ]; then
+    _common="$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    _main_env="$(dirname "${_common:-/nonexistent}")/scripts/cluster/config/${CLUSTER}/.env.cluster"
+    if [ -n "$_common" ] && [ -f "$_main_env" ]; then
+        ENV_FILE="$_main_env"; MAIN_CHECKOUT="$(dirname "$_common")"
+        echo "[cluster_dev] using the main checkout's profile ${ENV_FILE}" >&2
+    fi
+fi
+MAIN_PROFILE_COMMANDS=" stage trees exec status tail open attach __resolve_tree __free_gb help -h --help "
+if [ -n "$MAIN_CHECKOUT" ] && [[ "$MAIN_PROFILE_COMMANDS" != *" ${1:-help} "* ]]; then
+    echo "[cluster_dev] '${1}' changes the shared sentinel state; run it from the main checkout ${MAIN_CHECKOUT}" >&2
+    exit 1
+fi
 # shellcheck disable=SC1090
 [ -f "$ENV_FILE" ] && source "$ENV_FILE"
 
@@ -78,11 +97,20 @@ SRUN_ACCT_OPT=""; [ -n "$DEV_ACCOUNT" ]   && SRUN_ACCT_OPT="-A ${DEV_ACCOUNT}"
 # included) ran pinned to core 0 of the whole allocation -- measured ~2.9x slower. Reuse the sentinel's
 # own --cpus-per-task so a step gets the same share the batch job asked for.
 SRUN_CPUS_OPT=""; [ -n "$DEV_CPUS" ]      && SRUN_CPUS_OPT="--cpus-per-task=${DEV_CPUS}"
-DEV_SRUN_OPTS="${SRUN_PART_OPT} ${SRUN_ACCT_OPT} -N 1 -n 1 -t ${DEV_TIME:-48:00:00} ${SRUN_GRES_OPT} ${SRUN_CPUS_OPT} ${CLUSTER_SRUN_EXTRA:-}"
+# squeue lowercases every account, and TACC's step filter refuses "cda26011" for CDA26011: the profile's spelling
+# when it names the same account, else a TACC project id (three letters, five digits) in upper case
+_acct_spelling() {
+    local a="$1"
+    if [ -n "$DEV_ACCOUNT" ] && [ "${a,,}" = "${DEV_ACCOUNT,,}" ]; then echo "$DEV_ACCOUNT"
+    elif [[ "$a" =~ ^[a-z]{3}[0-9]{5}$ ]]; then echo "${a^^}"
+    else echo "$a"; fi
+}
+_srun_opts() { DEV_SRUN_OPTS="${SRUN_PART_OPT} ${SRUN_ACCT_OPT} -N 1 -n 1 -t ${DEV_TIME:-48:00:00} ${SRUN_GRES_OPT} ${SRUN_CPUS_OPT} ${CLUSTER_SRUN_EXTRA:-}"; }
+_srun_opts
 
 # Local code to mirror to the cluster (the manager workspace root -- flat layout: scripts/ + the
 # resources/<pkg> repos; the shared .sif provides isaacsim + Isaac Lab so no IsaacLab tree is required).
-LOCAL_ISAACLAB_DIR="${LOCAL_ISAACLAB_DIR:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
+LOCAL_ISAACLAB_DIR="${LOCAL_ISAACLAB_DIR:-${MAIN_CHECKOUT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}}"
 
 # Local state -- keyed by CLUSTER so concurrent dev sessions on different clusters (e.g. a
 # Delta box and a TACC box at the same time) keep separate state and don't clobber each other.
@@ -145,15 +173,6 @@ refresh_job_state() {
     [ -n "$state" ] && state_set JOB_STATE "$state"
 }
 
-# node_exec.sh must live inside the synced workspace so it rides the rsync to the cluster.
-stage_node_exec() {
-    local dst_file="${LOCAL_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh"
-    [ -e "$dst_file" ] && [ "${SCRIPT_DIR}/node_exec.sh" -ef "$dst_file" ] && return 0
-    mkdir -p "$(dirname "$dst_file")"
-    cp "${SCRIPT_DIR}/node_exec.sh" "$dst_file"
-    chmod +x "$dst_file"
-}
-
 # The selected config's env goes straight to its remote config dir, where node_exec.sh reads it
 # (NODE_EXEC_ENV); no local or remote slot is shared between configs.
 REMOTE_ENV_FILE="${REMOTE_ISAACLAB_DIR}/scripts/cluster/config/${CLUSTER}/.env.cluster"
@@ -161,68 +180,6 @@ push_env_cluster() {
     [ -f "$ENV_FILE" ] || { err "Cluster env file not found: $ENV_FILE"; return 1; }
     on_login "mkdir -p '$(dirname "$REMOTE_ENV_FILE")'"
     rsync -t -e "ssh ${SSH_OPTS[*]}" "$ENV_FILE" "${CLUSTER_LOGIN}:${REMOTE_ENV_FILE}"
-}
-
-rsync_code() {
-    # Honor .dockerignore + prune git/venv/logs/wandb/exports/sif. No -z (assets are incompressible);
-    # -t preserves mtimes so re-syncs skip unchanged assets; --info=progress2 shows overall progress.
-    # A per-cluster config/<name>/.rsync-exclude (rsync exclude patterns, one per line) prunes repos that
-    # must not deploy to THIS cluster (e.g. another session's *_pbfm forks, which shadow package names).
-    local extra_excludes=() cfg dest remote_only name
-    # Every config that syncs to this destination contributes its .rsync-exclude, so a sync through one
-    # config cannot delete what a sibling config protects. Destinations compare as expanded values.
-    for cfg in "${SCRIPT_DIR}"/../config/*/; do
-        dest=""
-        [ -f "${cfg}.env.cluster" ] && \
-            dest="$(bash -c 'source "$1" >/dev/null 2>&1; printf %s "${CLUSTER_ISAACLAB_DIR:-}"' _ "${cfg}.env.cluster")"
-        [ "$dest" = "$REMOTE_ISAACLAB_DIR" ] || [ "$(basename "$cfg")" = "$CLUSTER" ] || continue
-        [ -f "${cfg}.rsync-exclude" ] && extra_excludes+=(--exclude-from="${cfg}.rsync-exclude")
-    done
-    # resources/* repos that exist only on the remote (cluster-only forks, or retired here with only
-    # worktrees/ left) are never deleted.
-    remote_only="$(on_login "[ ! -d '${REMOTE_ISAACLAB_DIR}/resources' ] || ls -1 '${REMOTE_ISAACLAB_DIR}/resources'")" || {
-        err "cannot list ${REMOTE_ISAACLAB_DIR}/resources on the remote; refusing to sync with --delete"; return 1; }
-    while IFS= read -r name; do
-        [ -n "$name" ] || continue
-        if [ ! -e "${LOCAL_ISAACLAB_DIR}/resources/${name}" ] || \
-           [ -z "$(ls -A "${LOCAL_ISAACLAB_DIR}/resources/${name}" 2>/dev/null | grep -vx worktrees)" ]; then
-            extra_excludes+=(--exclude="/resources/${name}")
-        fi
-    done <<< "$remote_only"
-    # extra rsync args from the caller, e.g. `sync --dry-run` -> -n --itemize-changes
-    rsync -rlptvh --delete --info=progress2 "$@" \
-        `# worktrees are per-session state: local ones never ship, remote ones are never deleted` \
-        --exclude='**/worktrees/' \
-        `# hydra run dirs are run output, like logs/` \
-        --exclude='/outputs/' --exclude='/resources/*/outputs/' \
-        `# local working docs and session worktrees never ship` \
-        --exclude='/.claude/' --exclude='/resources/*/.claude/' \
-        `# the selected config's env is read from config/<name>/ on the node, not from a shared slot` \
-        --exclude='/scripts/cluster/.env.cluster' \
-        `# legacy pre-reorg tree: un-protect it so --delete can clear it despite excluded contents` \
-        --filter='R /source/***' \
-        `# artifacts/ is the out-of-sync tree both ways: local exports never ship, and cluster-only data` \
-        `# lives under the remote artifacts/ where --delete cannot touch it -- put new excludable data there` \
-        --exclude='/artifacts' \
-        `# staged code trees live only on the remote` \
-        --exclude='/trees/' \
-        `# FIRST match wins, so per-cluster protection must precede the allowlist below -- an include` \
-        `# that matched first would mark cluster-only state as syncable and --delete would erase it` \
-        "${extra_excludes[@]}" \
-        --filter=':- .dockerignore' \
-        --exclude='*.git*' --exclude='ilab/' --exclude='.venv/' \
-        --exclude='wandb/' --exclude='logs/' --exclude='.vscode/' \
-        --filter='-p **/__pycache__/' --exclude='scripts/cluster/exports/' --exclude='*.sif' --exclude='*.tar' --exclude='.backup/' \
-        `# motion_datasets ALLOWLIST: sync only training .pt + sidecars; any new intermediate type is dropped by default` \
-        `# remote-only bundles are protected: P is receiver-side, so the allowlist still decides what ships` \
-        --filter='P /resources/motion_datasets/**' \
-        --include='resources/motion_datasets/**/' \
-        --include='resources/motion_datasets/**.pt' \
-        --include='resources/motion_datasets/**.arena.json' --include='resources/motion_datasets/**.courts.json' \
-        --include='resources/motion_datasets/**.manifest.json' \
-        --exclude='resources/motion_datasets/**' \
-        -e "ssh ${SSH_OPTS[*]}" \
-        "${LOCAL_ISAACLAB_DIR}/" "${CLUSTER_LOGIN}:${REMOTE_ISAACLAB_DIR}/"
 }
 
 # Resolve the node of the current sentinel job from squeue (authoritative).
@@ -235,25 +192,19 @@ job_state() { on_login "squeue -j $1 -h -o '%T'" 2>/dev/null | tr -d '[:space:]'
 # Subcommands
 #============================================================================
 cmd_start() {
-    local sync=1
+    local stage=1
     while [ $# -gt 0 ]; do
         case "$1" in
-            --no-sync) sync=""; shift ;;
-            *) err "start: unknown argument '$1' (usage: start [--no-sync])"; exit 1 ;;
+            --no-stage) stage=""; shift ;;
+            *) err "start: unknown argument '$1' (usage: start [--no-stage])"; exit 1 ;;
         esac
     done
     ensure_master
-    # 1) mirror local code up first so the node has the latest on attach.
-    if [ -z "$sync" ]; then
-        log "Skipping the code sync: run from staged trees (develop stage / exec --tree) or 'develop sync' later."
-        local remote_sha
-        remote_sha="$(on_login "sha256sum '${REMOTE_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh' 2>/dev/null" | cut -c1-64 || true)"
-        [ "$remote_sha" = "$(sha256sum "${SCRIPT_DIR}/node_exec.sh" | cut -c1-64)" ] ||
-            log "WARNING: the remote shared node_exec.sh differs from this one; shared-mode exec runs the remote copy."
-    elif [ -d "$LOCAL_ISAACLAB_DIR" ]; then
-        log "Syncing code -> ${REMOTE_ISAACLAB_DIR} (excludes git/venv/logs/wandb)..."
-        stage_node_exec
-        rsync_code || err "rsync failed (continuing; you can re-run './cluster_dev.sh sync')."
+    # 1) stage the workspace as `default` first, so the node runs the latest on attach.
+    if [ -z "$stage" ]; then
+        log "Skipping the stage: exec runs the newest staged \`default\` (or --tree); stage one with 'develop stage'."
+    else
+        ( cmd_stage default ) || err "staging failed (continuing; re-run './cluster_dev.sh stage')."
     fi
     push_env_cluster || err "could not push ${ENV_FILE} (exec falls back to scripts/cluster/.env.cluster)."
     # 2) render + submit the sentinel sbatch from the template. Only $SBATCH_DIRECTIVES is substituted;
@@ -378,10 +329,18 @@ require_running() {
     if [ -n "${DEV_JOBID:-}" ]; then
         DD_JOBID="$DEV_JOBID"
         master_alive || { err "SSH master is down -- re-run './cluster_dev.sh start' (needs 2FA)."; exit 1; }
-        local row state; row="$(on_login "squeue -j ${DD_JOBID} -h -o '%T %N' 2>/dev/null")"
+        local row state part acct gpus; row="$(on_login "squeue -j ${DD_JOBID} -h -o '%T %N %P %a %b' 2>/dev/null")"
         state="$(echo "$row" | awk '{print $1}')"
         [ "$state" = "RUNNING" ] || { err "Job ${DD_JOBID} not RUNNING (state=${state:-gone})."; exit 1; }
         DD_NODE="$(echo "$row" | awk '{print $2}')"; DD_MODE="srun"
+        # step with the job's own partition, account and GPU request: a site with several projects (TACC) refuses a
+        # step without -A, and this profile's sbatch need not be the one that submitted the job
+        part="$(echo "$row" | awk '{print $3}')"; acct="$(echo "$row" | awk '{print $4}')"
+        gpus="$(echo "$row" | awk '{print $5}' | grep -oE 'gpu(:[A-Za-z0-9_-]+)?:[0-9]+' | grep -oE '[0-9]+$' | head -1 || true)"
+        [ -n "$part" ] && SRUN_PART_OPT="-p ${part}"
+        [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A $(_acct_spelling "$acct")"
+        [ -n "$gpus" ] && SRUN_GRES_OPT="--gres=gpu:${gpus}"
+        _srun_opts
         log "[override] targeting job ${DD_JOBID} on ${DD_NODE} via srun --overlap"
         return
     fi
@@ -404,6 +363,10 @@ require_running() {
     if [ "$DD_MODE" = "auto" ]; then
         [ "$(state_get SSH_NODE_OK)" = "yes" ] && [ -n "$DD_NODE" ] && DD_MODE="ssh" || DD_MODE="srun"
     fi
+    if [ "$DD_MODE" = "srun" ]; then  # the job may have been moved to another account since it was submitted
+        local acct; acct="$(on_login "squeue -j ${DD_JOBID} -h -o %a 2>/dev/null")"
+        [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A $(_acct_spelling "$acct")" && _srun_opts
+    fi
 }
 
 cmd_attach() {  # interactive shell on the compute node
@@ -420,7 +383,7 @@ cmd_attach() {  # interactive shell on the compute node
     fi
 }
 
-cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
+cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tmp] -- <command...>
     #
     # Default (foreground): run the container command tethered to this SSH master. Stdout/stderr
     # stream back to the caller; exit code propagates. Good for short ops (smoke tests, status
@@ -432,12 +395,13 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     # redirected to a log file on the login node (default: $HOME/cluster_dev_run_<ts>.log).
     # Follow it with `cluster_dev.sh tail`. The latest --detach log path is recorded in
     # ~/.cluster_dev/state (LAST_RUN_LOG) so `tail` finds it without args.
-    local detach="" logfile="" tree="" space_check=1
+    local detach="" logfile="" tree="" space_check=1 own_tmp=""
     while [ $# -gt 0 ]; do
         case "${1:-}" in
             --detach) detach="1"; shift;;
             --no-space-check) space_check=""; shift;;
             --log) logfile="$2"; shift 2;;
+            --own-tmp) own_tmp="NODE_EXEC_OWN_TMP=1 "; shift;;  # a /tmp of the step's own, not the job's
             --tree) [ -n "${2:-}" ] || { err "--tree needs a tree name or <name>-<fingerprint>"; exit 1; }
                     tree="$2"; shift 2;;
             --) shift; break;;
@@ -446,17 +410,19 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] -- <command...>
     done
     require_running
     [ -n "$space_check" ] && check_space "${CLUSTER_LOGS_DIR:-${REMOTE_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs}" "run logs"
-    # exec always runs with the current local config, even on a destination that hasn't been synced
+    # exec always runs with the current local config, pushed before every run
     push_env_cluster || { err "could not push ${ENV_FILE} to ${REMOTE_ENV_FILE}"; exit 1; }
     # every hop re-parses the command, so each one gets its own %q layer and the argv arrives intact
     local args; args="$(printf '%q ' "$@")"
-    local nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} bash ${REMOTE_ISAACLAB_DIR}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
-    if [ -n "$tree" ]; then
+    # resolved once, here: the step runs this tree for its whole life, whatever is staged after it starts
+    if [ -z "$tree" ]; then
+        tree="$(resolve_tree default)" || { err "no --tree given and no tree named default: pass --tree <name> (develop trees lists them)"; exit 1; }
+    else
         tree="$(resolve_tree "$tree")" || exit 1
-        log "Using tree ${tree}"
-        nodecmd="NODE_EXEC_ENV=${REMOTE_ENV_FILE} NODE_EXEC_RESOURCES=${tree}/resources"
-        nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
     fi
+    log "Using tree ${tree}"
+    local nodecmd="${own_tmp}NODE_EXEC_ENV=${REMOTE_ENV_FILE} NODE_EXEC_RESOURCES=${tree}/resources"
+    nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
     if [ -z "$detach" ]; then
         log "[${DD_MODE}] container exec on job ${DD_JOBID}: ${args}"
         if [ "$DD_MODE" = "ssh" ]; then
@@ -506,27 +472,15 @@ cmd_tail() {  # cluster_dev.sh tail [LOGFILE]  : follow a detached --detach log 
     ssh "${SSH_OPTS[@]}" -t "$CLUSTER_LOGIN" "tail -F ${logfile}"
 }
 
-cmd_sync() {  # sync [--dry-run] : re-mirror local code -> cluster isaaclab dir (and onto the live node workspace)
-    ensure_master
-    if [ "${1:-}" = "--dry-run" ]; then
-        rsync_code -n --itemize-changes
-        log "Dry run: nothing was transferred or deleted (lines starting '*deleting' would be removed)."
-        return
-    fi
-    stage_node_exec
-    rsync_code
-    push_env_cluster
-    log "Synced to ${REMOTE_ISAACLAB_DIR}."
-}
-
-cmd_open() {  # open (or confirm) the SSH control master only -- no sync, no job actions
+cmd_open() {  # open (or confirm) the SSH control master only -- no staging, no job actions
     ensure_master
 }
 
 cmd_kill() {  # cluster_dev.sh kill [--all | STEP...] : scancel launched run steps, keep the dev job alive
     # `exec` runs live in their own SLURM step but a fresh container (own PID namespace), so pkill
     # from a later exec can NOT see them -- step-scoped scancel from the login node is the reliable kill.
-    local jobid; jobid="$(state_get JOBID)"
+    # DEV_JOBID names a job other than the tracked one, as for exec (two dev jobs on one profile)
+    local jobid; jobid="${DEV_JOBID:-$(state_get JOBID)}"
     [ -z "$jobid" ] && { err "No dev job on record. Use 'start' first."; exit 1; }
     ensure_master
     # every step except batch (the sentinel holding the node) and extern (slurm bookkeeping) is a launched run
@@ -546,33 +500,55 @@ cmd_kill() {  # cluster_dev.sh kill [--all | STEP...] : scancel launched run ste
         while read -r sid _; do [ -n "$sid" ] && targets+=("$sid"); done <<< "$steps"
     else
         local s
-        for s in "$@"; do targets+=("${jobid}.${s#"${jobid}".}"); done
+        for s in "$@"; do  # a full <job>.<step> as given, a bare step on this job
+            if [[ "$s" =~ ^[0-9]+\.[0-9]+$ ]]; then targets+=("$s"); else targets+=("${jobid}.${s}"); fi
+        done
     fi
     [ ${#targets[@]} -eq 0 ] && { log "Nothing to cancel."; return 0; }
     log "Cancelling step(s): ${targets[*]} (job $jobid and its SSH master stay up)"
     on_login "scancel ${targets[*]}"
 }
 
-cmd_stop() {
-    local jobid; jobid="$(state_get JOBID)"
-    [ -f "$WATCH_PID" ] && kill "$(cat "$WATCH_PID")" 2>/dev/null || true; rm -f "$WATCH_PID"
-    if [ -n "$jobid" ] && master_alive; then
-        log "Cancelling job $jobid..."; on_login "scancel $jobid" || true
+cmd_stop() {  # stop [JOBID]: cancel one sentinel. Several sessions share the state file and the master, so the
+    # job is named (argument or DEV_JOBID) unless this user has exactly one; the master stays up (`close` ends it)
+    master_alive || { err "SSH master is down: open it first (pls cluster ${CLUSTER} develop open)"; exit 1; }
+    local jobid="${1:-${DEV_JOBID:-}}" live
+    live="$(on_login "squeue -u \$USER -h -n cluster-dev-box -o '%i %T %N' 2>/dev/null" || true)"
+    if [ -z "$jobid" ]; then
+        if [ "$(printf '%s\n' "$live" | grep -c .)" -ne 1 ]; then
+            err "Name the sentinel to cancel: stop <JOBID> (or DEV_JOBID=<id>). This user's sentinels:"
+            printf '%s\n' "${live:-  (none)}" | sed 's/^/    /' >&2; exit 1
+        fi
+        jobid="${live%% *}"
     fi
-    state_set JOB_STATE "STOPPED"
-    log "Cancelled. Closing SSH master."; ssh "${SSH_OPTS[@]}" -O exit "$CLUSTER_LOGIN" 2>/dev/null || true
+    [[ "$jobid" =~ ^[0-9]+$ ]] || { err "stop: '$jobid' is not a job id"; exit 1; }
+    printf '%s\n' "$live" | grep -q "^${jobid} " \
+        || { err "Job ${jobid} is not one of this user's sentinels (cluster-dev-box):"; printf '%s\n' "${live:-  (none)}" | sed 's/^/    /' >&2; exit 1; }
+    log "Cancelling sentinel ${jobid}..."; on_login "scancel ${jobid}"
+    if [ "$(state_get JOBID)" = "$jobid" ]; then  # the tracked job: its watcher and state go with it
+        [ -f "$WATCH_PID" ] && kill "$(cat "$WATCH_PID")" 2>/dev/null || true; rm -f "$WATCH_PID"
+        state_set JOB_STATE "STOPPED"
+    fi
+    log "Cancelled ${jobid}. The SSH master stays up for other sessions (close it with: develop close)."
+}
+
+cmd_close() {  # close the SSH master: ends every session's link to this cluster until the next `open`
+    log "Closing the SSH master to ${CLUSTER_LOGIN} (every session's)."
+    ssh "${SSH_OPTS[@]}" -O exit "$CLUSTER_LOGIN" 2>/dev/null || true
 }
 
 usage() {
-    sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 source "${SCRIPT_DIR}/trees.sh"
 
+case "${1:-}:${2:-}" in stage:-h|stage:--help|trees:-h|trees:--help|exec:-h|exec:--help) usage; exit 0 ;; esac
+
 case "${1:-}" in
     stage)    shift; cmd_stage "$@" ;;
     trees)    shift; cmd_trees "$@" ;;
-    __resolve_tree) shift; ensure_master; resolve_tree "$@" ;;   # internal (tests)
+    __resolve_tree) shift; ensure_master >&2; resolve_tree "$@" ;;   # internal: tests, `pls run --batch`
     __free_gb) shift; ensure_master >/dev/null; remote_free_gb "$1" ;;   # internal (tests)
     start)    shift; cmd_start "$@" ;;
     open)     shift; cmd_open "$@" ;;
@@ -580,9 +556,9 @@ case "${1:-}" in
     attach)   shift; cmd_attach "$@" ;;
     exec)     shift; cmd_exec "$@" ;;
     tail)     shift; cmd_tail "$@" ;;
-    sync)     shift; cmd_sync "$@" ;;
     kill)     shift; cmd_kill "$@" ;;
     stop)     shift; cmd_stop "$@" ;;
+    close)    shift; cmd_close "$@" ;;
     __watch)  shift; cmd_watch_loop "$@" ;;   # internal (used by nohup)
     ""|-h|--help|help) usage ;;
     *) err "Unknown command '${1}'."; usage; exit 1 ;;

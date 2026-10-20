@@ -1,4 +1,4 @@
-"""Unit tests for card leases (run all script tests: just test-scripts). Every test uses a temporary store."""
+"""Unit tests for card leases (run all script tests: pls test-scripts). Every test uses a temporary store."""
 
 import argparse
 import contextlib
@@ -9,9 +9,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-COMPUTE = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(COMPUTE))
+RES = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(RES))
 import leases as ls
 import res
 from inventory import Pool
@@ -81,6 +82,24 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.run_at(None, [report(card(index=3))], 30), [])
         released = self.run_at(None, [report(card(index=3))], 31)
         self.assertEqual([why for _, why in released], ["card no longer exists"])
+
+    def test_a_combined_slurm_label_follows_its_card_to_the_partition_report(self) -> None:
+        c = card(state="busy", job="7")
+        self.leases = [lease_on(c, report="stampede3 (amd-rtx, rtx-small)")]
+        self.run_at(None, [report(c, label="stampede3 (rtx-small)"), report(label="stampede3 (amd-rtx)")], 5)
+        self.assertEqual(self.leases[0].report, "stampede3 (rtx-small)")
+
+    def test_a_combined_slurm_label_whose_card_is_gone_is_still_released(self) -> None:
+        self.leases = [lease_on(card(job="7"), report="stampede3 (amd-rtx, rtx-small)")]
+        reps = [report(label="stampede3 (rtx-small)"), report(label="stampede3 (amd-rtx)")]
+        self.assertEqual(self.run_at(None, reps, 1), [])
+        self.assertEqual([why for _, why in self.run_at(None, reps, 31)], ["card no longer exists"])
+
+    def test_a_combined_label_is_kept_while_a_site_report_failed(self) -> None:
+        self.leases = [lease_on(card(job="7"), report="stampede3 (amd-rtx, rtx-small)")]
+        reps = [report(label="stampede3 (rtx-small)"), report(label="stampede3 (amd-rtx)", error="ssh down")]
+        self.run_at(None, reps, 1)
+        self.assertEqual(self.run_at(None, reps, 31), [])
 
     def test_reappearing_card_resets_the_vanish_clock(self) -> None:
         self.leases = [lease_on(card())]
@@ -192,9 +211,7 @@ class StoreTest(TempStore):
             "    with ls.locked_store() as leases:\n"
             "        leases.append(ls.Lease(id=f'{sys.argv[3]}{i}', key='k', card='c', report='r', holder='h'))\n"
         )
-        procs = [
-            subprocess.Popen([sys.executable, "-c", code, str(COMPUTE), str(ls.STORE), f"p{n}-"]) for n in range(4)
-        ]
+        procs = [subprocess.Popen([sys.executable, "-c", code, str(RES), str(ls.STORE), f"p{n}-"]) for n in range(4)]
         self.assertEqual([p.wait() for p in procs], [0, 0, 0, 0])
         with ls.locked_store() as leases:
             self.assertEqual(len({x.id for x in leases}), 100)
@@ -228,7 +245,7 @@ class StoreTest(TempStore):
                 ls.parse_duration(bad)
 
 
-class CommandTest(TempStore):
+class CommandBase(TempStore):
     def setUp(self) -> None:
         super().setUp()
         self.saved_probe = res.probe_all
@@ -258,6 +275,8 @@ class CommandTest(TempStore):
         with ls.locked_store() as leases:
             return sorted(x.card for x in leases)
 
+
+class CommandTest(CommandBase):
     def test_duplicate_names_give_one_lease(self) -> None:
         self.claim("mckennie:0", "mckennie:0")
         self.assertEqual(self.stored(), ["mckennie:0"])
@@ -299,6 +318,78 @@ class CommandTest(TempStore):
         with self.assertRaises(SystemExit):
             self.claim("mckennie:2")  # busy card: refused
         self.assertEqual(self.stored(), [])
+
+    def _probes(self, *rounds: list) -> list[int]:
+        """Each probe returns the next round's cards (the last repeats); returns a probe counter."""
+        calls = [0]
+
+        def probe(pools: list) -> list:
+            cards = rounds[min(calls[0], len(rounds) - 1)]
+            calls[0] += 1
+            return [report(*cards)]
+
+        res.probe_all = probe
+        return calls
+
+    def test_wait_leases_the_card_once_it_frees(self) -> None:
+        calls = self._probes([card(index=2, state="busy")], [card(index=2, state="busy")], [card(index=2)])
+        with mock.patch.object(res, "WAIT_POLL_S", 0.01), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.claim("mckennie:2", wait=0.0)
+        self.assertEqual(self.stored(), ["mckennie:2"])
+        self.assertEqual(calls[0], 3)
+        self.assertEqual(err.getvalue().count("waiting for one to free"), 1, "it says so once, not every poll")
+
+    def test_a_wait_on_named_cards_probes_only_their_pools(self) -> None:
+        """Retries for named cards probe the pools those cards were found in, not every login and box."""
+        self.pools = [Pool("larg-a100", "ssh", {}), Pool("delta", "slurm", {}), Pool("horizon", "slurm", {})]
+        rounds = [[card(index=2, state="busy")], [card(index=2)]]
+        probed = []
+
+        def probe(pools: list) -> list:
+            probed.append(sorted(p.name for p in pools))
+            return [report(*rounds[min(len(probed) - 1, 1)], label="larg-a100/mckennie")]
+
+        res.probe_all = probe
+        with mock.patch.object(res, "WAIT_POLL_S", 0.01), contextlib.redirect_stderr(io.StringIO()):
+            self.claim("mckennie:2", wait=0.0)
+        self.assertEqual(probed[0], ["delta", "horizon", "larg-a100"])
+        self.assertEqual(probed[1], ["larg-a100"])
+
+    def test_report_labels_name_their_pools(self) -> None:
+        self.assertEqual(res._report_pools("larg-a100/mckennie"), {"larg-a100"})
+        self.assertEqual(
+            res._report_pools("stampede3 (amd-rtx, rtx-small, stampede)"), {"amd-rtx", "rtx-small", "stampede"}
+        )
+
+    def test_wait_takes_the_first_free_any_match(self) -> None:
+        self._probes([card(index=0, state="busy")], [card(index=0), card(index=1)])
+        with mock.patch.object(res, "WAIT_POLL_S", 0.01), contextlib.redirect_stderr(io.StringIO()):
+            self.claim(any=True, wait=0.0)
+        self.assertEqual(len(self.stored()), 1)
+
+    def test_wait_gives_up_at_its_limit(self) -> None:
+        self._probes([card(index=2, state="busy")])
+        with (
+            mock.patch.object(res, "WAIT_POLL_S", 0.05),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            self.claim("mckennie:2", wait=0.12)
+        self.assertIn("gave up waiting", str(ctx.exception.code))
+        self.assertEqual(self.stored(), [])
+
+    def test_without_wait_a_taken_card_is_refused_at_once(self) -> None:
+        calls = self._probes([card(index=2, state="busy")])
+        with self.assertRaises(SystemExit):
+            self.claim("mckennie:2")
+        self.assertEqual(calls[0], 1)
+
+    def test_wait_never_retries_a_card_that_does_not_exist(self) -> None:
+        calls = self._probes([card(index=0)])
+        with mock.patch.object(res, "WAIT_POLL_S", 0.01), self.assertRaises(SystemExit) as ctx:
+            self.claim("nosuch:0", wait=0.0)
+        self.assertIn("not found", str(ctx.exception.code))
+        self.assertEqual(calls[0], 1)
 
     def test_any_packs_onto_hosts_already_in_use(self) -> None:
         self.cards = [card(host="solo", index=0), card(index=0), card(index=1, state="busy")]
@@ -356,10 +447,19 @@ class CommandTest(TempStore):
         self.claim("mckennie:0")
         with self.assertRaises(SystemExit) as ctx:
             self.claim("mckennie:0", adopt=True, holder="b")
-        self.assertIn("just res transfer", str(ctx.exception.code))
+        self.assertIn("pls res transfer", str(ctx.exception.code))
         self.cards = [card(index=3, state="unknown")]
         with self.assertRaises(SystemExit):
             self.claim("mckennie:3", adopt=True)
+        self.assertEqual(self.stored(), ["mckennie:0"])
+
+    def test_a_card_you_hold_names_its_lease_instead_of_waiting(self) -> None:
+        self.claim("mckennie:0")
+        [lease] = self.leases()
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim("mckennie:0")
+        self.assertNotIsInstance(ctx.exception, res.Busy, "--wait would never see it free")
+        self.assertIn(f"--on lease:{lease.id}", str(ctx.exception.code))
         self.assertEqual(self.stored(), ["mckennie:0"])
 
     def test_transfer_moves_the_lease_and_records_the_previous_holder(self) -> None:
@@ -387,6 +487,136 @@ class CommandTest(TempStore):
         self.assertEqual(self.stored(), ["mckennie:0"])
         res.cmd_release(argparse.Namespace(targets=["mckennie:0"], holder="other", force=True), self.pools)
         self.assertEqual(self.stored(), [])
+
+
+class ReservationTest(CommandBase):
+    """Priority on cards: others may use them meanwhile, and their leases yield when the priority holder claims."""
+
+    def reserve(self, *cards: str, **kw: object) -> str:
+        args = {"cards": list(cards), "pool": None, "count": 1, "holder": "P", "eta": "10m-60m",
+                "for_": 24 * 3600.0, "note": "BFM-Zero retrain", "end": None}  # fmt: skip
+        args.update(kw)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            res.cmd_reserve(argparse.Namespace(**args), self.pools)
+        return out.getvalue()
+
+    def claim_err(self, *cards: str, **kw: object) -> str:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.claim(*cards, **kw)
+        return err.getvalue()
+
+    def state(self) -> tuple[list[ls.Lease], list[ls.Reservation]]:
+        with ls.locked_state() as (leases, reservations):
+            return list(leases), list(reservations)
+
+    def test_a_pool_reservation_marks_current_leases_and_names_their_holders(self) -> None:
+        self.claim_err("mckennie:0", holder="a")
+        out = self.reserve(pool="larg", count=2)
+        [lease], [r] = self.state()
+        self.assertEqual(lease.yield_to, r.id)
+        self.assertIn("a: mckennie:0", out)
+
+    def test_others_may_lease_a_reserved_card_and_are_told_it_yields(self) -> None:
+        self.reserve("mckennie:1")
+        err = self.claim_err("mckennie:1", holder="b")
+        [lease], [r] = self.state()
+        self.assertEqual((lease.holder, lease.yield_to), ("b", r.id))
+        self.assertIn("reserved by P", err)
+
+    def test_the_priority_holder_takes_a_yielding_card_even_while_its_run_is_busy(self) -> None:
+        self.claim_err("mckennie:2", holder="a", adopt=True)  # a's run is on the busy card
+        self.reserve("mckennie:2", eta="now")
+        err = self.claim_err("mckennie:2", holder="P", for_=2 * 3600.0)
+        [lease], [r] = self.state()
+        self.assertEqual((lease.holder, lease.previous, lease.yield_to), ("P", "a", ""))
+        self.assertAlmostEqual(lease.expires, ls.time.time() + 2 * 3600.0, delta=60)  # the claim's --for applies
+        self.assertTrue(r.used)
+        self.assertIn("TOOK mckennie:2 from a", err)
+
+    def test_others_take_unreserved_cards_first(self) -> None:
+        self.reserve("mckennie:0")
+        self.claim_err(any=True, holder="b")
+        self.assertEqual(self.stored(), ["mckennie:1"])
+
+    def test_a_used_reservation_ends_when_its_cards_are_released(self) -> None:
+        self.reserve("mckennie:0")
+        self.claim_err("mckennie:0", holder="P")
+        lease = self.state()[0][0]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            res.cmd_release(argparse.Namespace(targets=[lease.id], holder="P", force=False), self.pools)
+        self.assertEqual(self.state(), ([], []))
+
+    def test_a_reservation_ends_at_its_time_box_and_its_leases_stop_yielding(self) -> None:
+        r = ls.Reservation("r1", "P", pool="larg", count=1, expires=T0 + 10 * MIN)
+        lease = lease_on(card(index=0), holder="a", yield_to="r1")
+        reservations = [r]
+        self.assertEqual(ls.settle(reservations, [lease], now=T0), [])
+        self.assertEqual([why for _, why in ls.settle(reservations, [lease], now=T0 + 11 * MIN)], ["time box ended"])
+        self.assertEqual((reservations, lease.yield_to), ([], ""))
+
+    def test_ending_a_reservation_frees_its_leases(self) -> None:
+        self.claim_err("mckennie:0", holder="a")
+        self.reserve(pool="larg")
+        self.reserve(end="")
+        [lease], reservations = self.state()
+        self.assertEqual((lease.yield_to, reservations), ("", []))
+
+    def test_updating_the_eta_keeps_one_reservation(self) -> None:
+        self.reserve(pool="larg", eta="1h")
+        self.reserve(pool="larg", eta="now")
+        [r] = self.state()[1]
+        self.assertLessEqual(r.eta_hi, ls.time.time() + 1)
+
+    def test_parse_eta(self) -> None:
+        self.assertEqual(ls.parse_eta("now", now=T0), (T0, T0))
+        self.assertEqual(ls.parse_eta("10m-60m", now=T0), (T0 + 10 * MIN, T0 + 60 * MIN))
+        self.assertEqual(ls.parse_eta("30m", now=T0), (T0 + 30 * MIN, T0 + 30 * MIN))
+        for bad in ("60m-10m", "soon", "-5m"):
+            with self.assertRaises(ValueError):
+                ls.parse_eta(bad, now=T0)
+
+    def test_a_card_run_announces_the_yield_then_the_takeover(self) -> None:
+        import evaluate
+
+        self.claim_err("mckennie:2", holder="a", adopt=True)
+        lease = self.state()[0][0]
+        self.assertEqual(evaluate.lease_notice(lease.id, "a"), "")
+        self.reserve("mckennie:2", eta="now")
+        self.assertIn("YIELD", evaluate.lease_notice(lease.id, "a"))
+        self.claim_err("mckennie:2", holder="P")
+        self.assertIn("PREEMPTED", evaluate.lease_notice(lease.id, "a"))
+
+
+class StagingHeartbeatTest(TempStore):
+    """A card run's stage can outlast the idle window; the lease stays active until the run starts."""
+
+    def test_the_heartbeat_keeps_the_lease_active_while_staging(self) -> None:
+        import evaluate
+
+        with ls.locked_store() as leases:
+            leases.append(lease_on(card(index=0), idle_since=T0, last_active=0.0))
+            lease_id = leases[0].id
+        saved = evaluate.STAGING_TOUCH_S
+        evaluate.STAGING_TOUCH_S = 0.05
+        try:
+            beat = evaluate._LeaseHeartbeat(lease_id).start()
+            ls.time.sleep(0.2)
+            beat.stop()
+            beat.stop()  # a second stop (the run's finally) is harmless
+        finally:
+            evaluate.STAGING_TOUCH_S = saved
+        with ls.locked_store() as leases:
+            self.assertEqual(leases[0].idle_since, 0.0)
+            self.assertGreater(leases[0].last_active, T0)
+
+    def test_no_lease_no_heartbeat(self) -> None:
+        import evaluate
+
+        beat = evaluate._LeaseHeartbeat("").start()
+        beat.stop()
+        self.assertFalse(beat._thread.is_alive())
 
 
 if __name__ == "__main__":

@@ -2,11 +2,13 @@
 
 import contextlib
 import io
+import os
 import shlex
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -126,5 +128,113 @@ class PreflightTest(unittest.TestCase):
         preflight.main()
 
 
+class WorktreeDataTest(unittest.TestCase):
+    """A --wt job whose artifact-only data differs from W&B's would train on W&B's copy: refused before submit."""
+
+    def setUp(self) -> None:
+        self.dir = tempfile.TemporaryDirectory()
+        self.wt = Path(self.dir.name) / "ssti_tasks" / "worktrees" / "momonly"
+        data = self.wt / "ssti_tasks" / "agile" / "style_data"
+        data.mkdir(parents=True)
+        (data / "traverse.pt").write_bytes(b"140 columns")
+        self.rel = "ssti_tasks/ssti_tasks/agile/style_data"
+        self.saved = (preflight.mounted_sources, preflight._published_rel_paths, preflight._published_digests)
+        preflight.mounted_sources = lambda wt: [(str(self.wt), "ssti_tasks")]
+        preflight._published_rel_paths = lambda: {self.rel}
+
+    def tearDown(self) -> None:
+        preflight.mounted_sources, preflight._published_rel_paths, preflight._published_digests = self.saved
+        self.dir.cleanup()
+
+    def run_main(self, published_bytes: bytes, accepted: str = "") -> tuple[int, str]:
+        digest = preflight.local_digests(self._file(published_bytes))
+        preflight._published_digests = lambda rels: {r: ("traverse:v3", digest) for r in rels}
+        err = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"WT": "momonly", "WT_DATA_OK": accepted}),
+            contextlib.redirect_stderr(err),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            try:
+                preflight.main()
+            except SystemExit as exc:
+                return exc.code, err.getvalue()
+        return 0, err.getvalue()
+
+    def _file(self, content: bytes) -> str:
+        path = Path(self.dir.name) / "published.pt"
+        path.write_bytes(content)
+        return str(path)
+
+    def test_differing_worktree_data_is_refused_naming_it(self) -> None:
+        code, err = self.run_main(b"134 columns")
+        self.assertEqual(code, 1)
+        self.assertIn(self.rel, err)
+        self.assertIn("traverse:v3", err)
+
+    def test_matching_worktree_data_passes(self) -> None:
+        self.assertEqual(self.run_main(b"140 columns")[0], 0)
+
+    def test_lfs_pointers_are_refused_with_the_pull(self) -> None:
+        pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:ab\nsize 9\n"
+        (self.wt / "ssti_tasks" / "agile" / "style_data" / "traverse.pt").write_bytes(pointer)
+        code, err = self.run_main(b"134 columns")
+        self.assertEqual(code, 1)
+        self.assertIn("git lfs pull", err)
+
+    def test_a_differing_readme_alone_is_not_a_difference(self) -> None:
+        data = self.wt / "ssti_tasks" / "agile" / "style_data"
+        (data / "README.md").write_text("an older description")  # docs never reach the comparison
+        self.assertEqual(self.run_main(b"140 columns")[0], 0)
+
+    def test_the_refusal_names_the_opt_out(self) -> None:
+        self.assertIn(f"--wt-data-ok {self.rel}", self.run_main(b"134 columns")[1])
+
+    def test_an_accepted_entry_warns_and_passes(self) -> None:
+        code, err = self.run_main(b"134 columns", accepted=self.rel)
+        self.assertEqual(code, 0)
+        self.assertIn("--wt-data-ok accepts it", err)
+
+    def test_mounts_are_printed(self) -> None:
+        out = io.StringIO()
+        preflight._published_digests = lambda rels: {}
+        with mock.patch.dict(os.environ, {"WT": "momonly"}), contextlib.redirect_stdout(out):
+            preflight.main()
+        self.assertIn("WT=momonly mounts ssti_tasks from worktrees/momonly", out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExtScriptTest(unittest.TestCase):
+    def test_a_repo_script_maps_to_its_worker_mount(self) -> None:
+        from job_args import ext_script
+
+        self.assertEqual(
+            ext_script("hcrl_isaaclab/scripts/video_logger.py"), "/workspace/ext/hcrl_isaaclab/scripts/video_logger.py"
+        )
+
+    def test_paths_outside_a_shipped_repo_are_refused(self) -> None:
+        from job_args import ext_script
+
+        for bad in ("/abs/x.py", "hcrl_isaaclab/../x.py", "video_logger.py", "hcrl_isaaclab/scripts/run.sh", "a//b.py"):
+            with self.assertRaises(ValueError, msg=bad):
+                ext_script(bad)
+
+
+class SubmitPreparationTest(unittest.TestCase):
+    def test_every_submitting_subcommand_renders_and_syncs_first(self) -> None:
+        """A subcommand that submits without re-rendering ships whatever job config another session left behind."""
+        import re
+
+        text = (Path(__file__).resolve().parents[1] / "ray_interface.sh").read_text()
+        prepare = re.search(r"^\s+([\w|]+)\)\n\s+prepare_submit", text, re.M)
+        self.assertIsNotNone(prepare)
+        prepared = set(prepare.group(1).split("|"))
+        submitting = set()
+        for m in re.finditer(r"^    ([\w|]+)\)\n(.*?)^        ;;", text, re.M | re.S):
+            if "submit_job.py" in m.group(2):
+                submitting.update(m.group(1).split("|"))
+        self.assertTrue(submitting)
+        self.assertEqual(submitting - prepared, set())

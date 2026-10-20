@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Create or regenerate a per-user cluster profile (scripts/cluster/config/<name>/, gitignored) from the
-# templates. Invoked by `just cluster add [--update] [name]`.
+# templates. Invoked by `pls cluster add [--update] [name]`.
 set -euo pipefail
 cd "$(dirname "$0")/.."  # scripts/
 source cluster/tools/restore_profiles.sh

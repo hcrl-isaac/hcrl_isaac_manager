@@ -53,7 +53,7 @@ def _default_selection(defaults: dict) -> dict:
 
 
 _HEADER = (
-    "# Per-user workspace selection (gitignored). Written by `just setup` (or `just setup reconfigure`).\n"
+    "# Per-user workspace selection (gitignored). Written by `pls setup` (or `pls setup reconfigure`).\n"
     "# Merged with the committed workspace.defaults.yaml by resolve_workspace.py.\n"
 )
 
