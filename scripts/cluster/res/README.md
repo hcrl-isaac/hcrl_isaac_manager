@@ -125,6 +125,11 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   MANIFEST gives each one's commit. On an ssh card they are read-only snapshots under `<scratch>/res-eval/code/`;
   output a script writes inside one (`logs/`, `outputs/`, `wandb/`, e.g. video_logger's checkpoints and videos) lands
   in the box workspace's copy of that repo.
+- `--root DIR` runs the script with the venv of an Isaac Lab install root on a box card (`<DIR>/venv/bin/python`)
+  instead of ilab, e.g. pogba's Isaac Lab 3 root: `pls run --on pogba:2 --root /var/local/sturman/isaac3 --wt res_masked
+  --holder <you> -- <script>`. The code ships as for any run (`--wt` picks the worktree set, so pick 3.x-ported
+  branches), never the root's own `resources/` copies; PATH is `/usr/bin:/bin` behind the venv, since an unreadable dir
+  on a LARG default PATH breaks `torch.compile`. Box cards only; not with `--venv`.
 - `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
   owns its stage dir, and its lease stays held until the card goes idle (or `pls res release <id>`). `--timeout`
   and `--stall` do not apply to a detached run.

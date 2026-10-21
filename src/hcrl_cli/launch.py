@@ -47,7 +47,8 @@ where you are, on a card from the box workspace (a SLURM card: the run's work di
 (the container's python on SLURM). Ray runs python scripts only.
 
 card options (--holder is required): --holder, --note, --pool, --min-free-gb, --checkpoint, --env, --timeout,
---stall, --detach, --venv, --with, --jobs/--out (a job list over lease:A,B,...); `pls run --on any --help`
+--stall, --detach, --venv, --root (an Isaac Lab install root's venv, e.g. pogba's 3.x root), --with, --jobs/--out
+(a job list over lease:A,B,...); `pls run --on any --help`
 describes them."""
 
 
