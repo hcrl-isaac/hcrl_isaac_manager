@@ -1100,6 +1100,17 @@ class EvalRunTest(Isolated):
         self.assertEqual(self._leases(), [], "the lease is released once the run is gone")
         self.assertTrue((stage / "log").exists(), "a stopped run keeps its log")
 
+    def test_a_scripts_own_stop_flag_is_passed_through(self) -> None:
+        """--stop after -- belongs to the script: main() runs the script instead of stopping a lease."""
+        with (
+            mock.patch.object(ev, "cmd_eval") as run,
+            mock.patch.object(ev, "cmd_stop") as stop,
+            mock.patch.object(res, "load_pools", return_value=[self.pool]),
+        ):
+            ev.main([str(self.script), "--holder", "me", "--any", "--", "--stop", "5"])
+        stop.assert_not_called()
+        self.assertEqual(run.call_args.args[0].script_args, ["--stop", "5"])
+
     def test_stop_refuses_another_holders_lease_and_keeps_a_live_runs(self) -> None:
         rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
         self.assertEqual(rc, 0, out)

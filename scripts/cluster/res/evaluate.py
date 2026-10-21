@@ -1647,7 +1647,8 @@ def main(argv: list[str] | None = None) -> None:
     import res
 
     argv = sys.argv[1:] if argv is None else argv
-    if "--stop" in argv:  # `pls run --stop <lease> --holder <you>`: no script, no card to claim
+    # `pls run --stop <lease> --holder <you>`: no script, no card to claim; a script's own --stop (after --) is its own
+    if "--stop" in (argv[: argv.index("--")] if "--" in argv else argv):
         sp = argparse.ArgumentParser(prog="pls run --stop", description="stop a detached run and release its lease")
         sp.add_argument("--stop", required=True, metavar="LEASE", help="the lease the detached run holds")
         sp.add_argument("--holder", required=True, help="your session name (must match the lease)")
