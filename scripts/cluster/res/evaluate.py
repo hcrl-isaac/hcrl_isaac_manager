@@ -1573,8 +1573,8 @@ def parser() -> argparse.ArgumentParser:
         "--root",
         default="",
         metavar="DIR",
-        help="run with the venv of an Isaac Lab install root on the box (<DIR>/venv) instead of ilab, e.g. pogba's Isaac"
-        " Lab 3 root /var/local/sturman/isaac3; --wt picks the code, which ships as usual",
+        help="run with the venv of an Isaac Lab install root on the box (<DIR>/venv) instead of ilab, e.g. an Isaac Lab 3"
+        " root made by scripts/isaac3/bench/deploy.sh; --wt picks the code, which ships as usual",
     )
     ev.add_argument(
         "--jobs",

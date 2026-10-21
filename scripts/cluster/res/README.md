@@ -126,7 +126,7 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   output a script writes inside one (`logs/`, `outputs/`, `wandb/`, e.g. video_logger's checkpoints and videos) lands
   in the box workspace's copy of that repo.
 - `--root DIR` runs the script with the venv of an Isaac Lab install root on a box card (`<DIR>/venv/bin/python`)
-  instead of ilab, e.g. pogba's Isaac Lab 3 root: `pls run --on pogba:2 --root /var/local/sturman/isaac3 --wt res_masked
+  instead of ilab, e.g. a box's Isaac Lab 3 root: `pls run --on <host>:<gpu> --root <isaac-lab-root> --wt <set>
   --holder <you> -- <script>`. The code ships as for any run (`--wt` picks the worktree set, so pick 3.x-ported
   branches), never the root's own `resources/` copies; PATH is `/usr/bin:/bin` behind the venv, since an unreadable dir
   on a LARG default PATH breaks `torch.compile`. Box cards only; not with `--venv`.
