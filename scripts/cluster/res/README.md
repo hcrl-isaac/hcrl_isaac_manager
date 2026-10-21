@@ -126,8 +126,11 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   output a script writes inside one (`logs/`, `outputs/`, `wandb/`, e.g. video_logger's checkpoints and videos) lands
   in the box workspace's copy of that repo.
 - `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
-  owns its stage dir, and its lease stays held until the card goes idle (or `pls res release <id>`). `--timeout`
+  owns its stage dir, which its lease records, and the lease stays held until the card goes idle. `--timeout`
   and `--stall` do not apply to a detached run.
+- `pls run --stop <lease> --holder <you>` stops a detached run: the process group (a SLURM run's `stop` file), then,
+  once it is gone, removes the stage but its log and releases the lease. A run that may still be alive keeps the
+  lease. A lease that records no run (one taken before `--stop` existed) is just released.
 
 - The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
   several jobs), `--on any`, `--on <pool>` or `--on lease:<id>`. A busy card is refused (`--wait [limit]` waits for
@@ -147,8 +150,8 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
 - The container hides a SLURM run's processes from the node, so it reports through files in its stage dir:
   `heartbeat` (touched every 2 s while it runs), `stop` (create it to end the run: TERM, then KILL after 10 s) and
   `status` (its exit status, written once the card's processes are gone or after 60 s; a Python traceback with exit
-  0 counts as 1). `--detach` waits for the first heartbeat, prints the follow and stop commands over the SSH
-  master, and logs the step's wrapper to `<stage>/wrapper.log`. A detached run that does not start within 20 min
+  0 counts as 1). `--detach` waits for the first heartbeat, prints the follow command over the SSH master and
+  the `pls run --stop` command, and logs the step's wrapper to `<stage>/wrapper.log`. A detached run that does not start within 20 min
   (a job's first step copies the .sif to the node) is stopped and its credentials removed; a run whose `stop`
   exists before it starts exits 130 without launching. Each new SLURM stage prunes earlier ones: credentials of
   runs that never started after 30 min, and stages and work dirs older than 7 days whose run is not alive;
