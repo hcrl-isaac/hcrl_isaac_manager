@@ -33,9 +33,8 @@ PROFILE="${PROFILE:-hcrl-isaac}"
 # Persistent per-job staging dir on node-local scratch (reused across exec calls).
 STAGE="${TMPDIR:-/tmp}/cluster_dev_${SLURM_JOB_ID:-box}"
 SIF="${STAGE}/${PROFILE}.sif"
-# NODE_EXEC_ROOT (develop exec --root): an Isaac Lab install root (e.g. Isaac Lab 3, made by scripts/isaac3/bench/
-# deploy.sh) runs the command instead of the hcrl-isaac image: its venv in a stock Debian bookworm container, since
-# the 3.x wheels need glibc >= 2.35 and the HPC hosts have older ones
+# NODE_EXEC_ROOT (develop exec --root): run an Isaac Lab install root's venv in a stock bookworm image instead of
+# the hcrl-isaac one, since the 3.x wheels need glibc >= 2.35 and the HPC hosts are older
 ROOT_DIR="${NODE_EXEC_ROOT:-}"
 
 root_sif() {  # <root>/bookworm.sif, pulled once; a concurrent pull lands under its own name and is renamed
