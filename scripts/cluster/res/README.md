@@ -125,11 +125,14 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   MANIFEST gives each one's commit. On an ssh card they are read-only snapshots under `<scratch>/res-eval/code/`;
   output a script writes inside one (`logs/`, `outputs/`, `wandb/`, e.g. video_logger's checkpoints and videos) lands
   in the box workspace's copy of that repo.
-- `--root DIR` runs the script with the venv of an Isaac Lab install root on a box card (`<DIR>/venv/bin/python`)
-  instead of ilab, e.g. a box's Isaac Lab 3 root: `pls run --on <host>:<gpu> --root <isaac-lab-root> --wt <set>
-  --holder <you> -- <script>`. The code ships as for any run (`--wt` picks the worktree set, so pick 3.x-ported
-  branches), never the root's own `resources/` copies; PATH is `/usr/bin:/bin` behind the venv, since an unreadable dir
-  on a LARG default PATH breaks `torch.compile`. Box cards only; not with `--venv`.
+- `--root DIR` runs the script with the venv of an Isaac Lab install root (`<DIR>/venv/bin/python`) instead of ilab,
+  e.g. an Isaac Lab 3 root: `pls run --on <host>:<gpu> --root <isaac-lab-root> --wt <set> --holder <you> -- <script>`.
+  The code ships as for any run (`--wt` picks the worktree set, so pick 3.x-ported branches), never the root's own
+  `resources/` copies. On a box card PATH is `/usr/bin:/bin` behind the venv, since an unreadable dir on a LARG
+  default PATH breaks `torch.compile`. On a SLURM card the step runs the venv in a stock Debian bookworm image,
+  `<DIR>/bookworm.sif` (pulled on first use; the 3.x wheels need glibc >= 2.35, newer than the clusters' hosts), with
+  the same `/workspace/ext` mounts, stop file and heartbeat as any SLURM run, and the staged package repos on
+  PYTHONPATH. Not with `--venv`.
 - `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
   owns its stage dir, and its lease stays held until the card goes idle (or `pls res release <id>`). `--timeout`
   and `--stall` do not apply to a detached run.

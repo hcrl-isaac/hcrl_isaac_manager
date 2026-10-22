@@ -383,7 +383,7 @@ cmd_attach() {  # interactive shell on the compute node
     fi
 }
 
-cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tmp] -- <command...>
+cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tmp] [--root DIR] -- <command...>
     #
     # Default (foreground): run the container command tethered to this SSH master. Stdout/stderr
     # stream back to the caller; exit code propagates. Good for short ops (smoke tests, status
@@ -395,13 +395,16 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tm
     # redirected to a log file on the login node (default: $HOME/cluster_dev_run_<ts>.log).
     # Follow it with `cluster_dev.sh tail`. The latest --detach log path is recorded in
     # ~/.cluster_dev/state (LAST_RUN_LOG) so `tail` finds it without args.
-    local detach="" logfile="" tree="" space_check=1 own_tmp=""
+    local detach="" logfile="" tree="" space_check=1 own_tmp="" root=""
     while [ $# -gt 0 ]; do
         case "${1:-}" in
             --detach) detach="1"; shift;;
             --no-space-check) space_check=""; shift;;
             --log) logfile="$2"; shift 2;;
             --own-tmp) own_tmp="NODE_EXEC_OWN_TMP=1 "; shift;;  # a /tmp of the step's own, not the job's
+            # an Isaac Lab install root's venv in a bookworm image instead of the hcrl-isaac image (node_exec.sh)
+            --root) [ -n "${2:-}" ] || { err "--root needs an Isaac Lab install root on the cluster"; exit 1; }
+                    root="NODE_EXEC_ROOT=$(printf %q "$2") "; shift 2;;
             --tree) [ -n "${2:-}" ] || { err "--tree needs a tree name or <name>-<fingerprint>"; exit 1; }
                     tree="$2"; shift 2;;
             --) shift; break;;
@@ -421,7 +424,7 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tm
         tree="$(resolve_tree "$tree")" || exit 1
     fi
     log "Using tree ${tree}"
-    local nodecmd="${own_tmp}NODE_EXEC_ENV=${REMOTE_ENV_FILE} NODE_EXEC_RESOURCES=${tree}/resources"
+    local nodecmd="${own_tmp}${root}NODE_EXEC_ENV=${REMOTE_ENV_FILE} NODE_EXEC_RESOURCES=${tree}/resources"
     nodecmd+=" bash ${tree}/scripts/cluster/cluster_dev/node_exec.sh ${args}"
     if [ -z "$detach" ]; then
         log "[${DD_MODE}] container exec on job ${DD_JOBID}: ${args}"

@@ -33,6 +33,20 @@ PROFILE="${PROFILE:-hcrl-isaac}"
 # Persistent per-job staging dir on node-local scratch (reused across exec calls).
 STAGE="${TMPDIR:-/tmp}/cluster_dev_${SLURM_JOB_ID:-box}"
 SIF="${STAGE}/${PROFILE}.sif"
+# NODE_EXEC_ROOT (develop exec --root): an Isaac Lab install root (e.g. Isaac Lab 3, made by scripts/isaac3/bench/
+# deploy.sh) runs the command instead of the hcrl-isaac image: its venv in a stock Debian bookworm container, since
+# the 3.x wheels need glibc >= 2.35 and the HPC hosts have older ones
+ROOT_DIR="${NODE_EXEC_ROOT:-}"
+
+root_sif() {  # <root>/bookworm.sif, pulled once; a concurrent pull lands under its own name and is renamed
+    SIF="${ROOT_DIR}/bookworm.sif"
+    [ -f "$SIF" ] && return 0
+    mkdir -p "${ROOT_DIR}/tmp" "${ROOT_DIR}/apptainer-cache"
+    echo "[node_exec] pulling python:3.12-bookworm into ${SIF}..."
+    APPTAINER_CACHEDIR="${ROOT_DIR}/apptainer-cache" APPTAINER_TMPDIR="${ROOT_DIR}/tmp" \
+        apptainer pull "${SIF}.partial.$$" docker://python:3.12-bookworm || { rm -f "${SIF}.partial.$$"; exit 1; }
+    mv -f "${SIF}.partial.$$" "$SIF"
+}
 
 stage_once() {
     # Copy the .sif to node-local scratch once; re-copy if a newer one was pushed, so `pls cluster <name>
@@ -53,7 +67,12 @@ stage_once() {
     echo "[node_exec] staged."
 }
 
-stage_once
+if [ -n "$ROOT_DIR" ]; then
+    [ -x "${ROOT_DIR}/venv/bin/python" ] || { echo "[node_exec] no Isaac Lab root venv at ${ROOT_DIR}/venv"; exit 97; }
+    root_sif
+else
+    stage_once
+fi
 # Pre-create every bind source on each call (idempotent): on a fresh node the cache cp in stage_once
 # is a no-op, so the cache subdirs would be missing and the binds would fail.
 mkdir -p \
@@ -69,6 +88,7 @@ mkdir -p \
     "${STAGE}/docker-isaac-sim/documents"
 # one argument is a shell command string (run whole by bash -c), several are an argv passed through verbatim
 if [ $# -eq 1 ]; then cmd="bash -c $(printf %q "$1")"; elif [ $# -gt 1 ]; then cmd="$(printf '%q ' "$@")"; else cmd=""; fi
+[ -n "$cmd" ] || cmd="${ROOT_DIR:+${ROOT_DIR}/venv/bin/python --version}"
 [ -n "$cmd" ] || cmd="/isaac-sim/python.sh --version"
 # Bind all workspace repos into /workspace/ext -- packages AND asset repos (e.g. hcrl_robots), since the
 # in-repo resource symlinks need the asset repos mounted. The entrypoint PYTHONPATHs only the packages.
@@ -164,6 +184,27 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     --nv --writable-tmpfs --containall --no-home "$SIF" \
     bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
 }
+
+run_root() {  # the root's venv in the bookworm image, with the same /workspace/ext mounts as the hcrl-isaac image
+    # the hcrl-isaac entrypoint is not there, so the package repos go on PYTHONPATH here (asset and data repos not)
+    local pkgs="" d name
+    for d in "${RESOURCES}"/*/; do
+        name="$(basename "$d")"
+        case "$name" in IsaacLab | motion_datasets | *_robots) continue ;; esac
+        pkgs="${pkgs:+$pkgs:}/workspace/ext/${name}"
+    done
+    export APPTAINERENV_PYTHONPATH="$pkgs"
+    # TACC's XALT preloads a library that needs glibc 2.38 through these (bookworm has 2.36), so every exec would die
+    unset LD_PRELOAD SINGULARITYENV_LD_PRELOAD APPTAINERENV_LD_PRELOAD SINGULARITY_BINDPATH APPTAINER_BINDPATH
+    apptainer exec \
+        -B "${ROOT_DIR}" -B /dev/shm \
+        -B ${STAGE}/home:/u/esturman:rw \
+        ${EXT_BINDS} ${VK_BINDS} \
+        -B ${STEP_TMP}:/tmp:rw ${CACHE_BIND} \
+        --nv --containall --no-home "$SIF" \
+        bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} HOME=/u/esturman OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec ${cmd}"
+}
+[ -n "$ROOT_DIR" ] && run_container() { run_root; }
 
 # A segfault (exit 139) within KIT_BOOT_S of start is Kit crashing during boot (seen on Delta in libX11's getenv),
 # before any run registers with W&B, so it is retried once.
