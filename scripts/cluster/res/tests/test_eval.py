@@ -212,7 +212,8 @@ class TargetTest(unittest.TestCase):
     def test_device_placeholder_follows_the_hosts_pinning(self) -> None:
         cvd = ev.make_target(Pool("a100", "ssh", {"user": "u", "pin": "cvd"}), "mckennie", 2)
         dev = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pepi", 2)
-        slurm = ev.make_target(Pool("amd-rtx", "slurm", {"login": "u@login"}), "c571-003", 3, "1", "GPU-ab")
+        with mock.patch.object(ev, "profile_value", return_value="/work/u/isaaclab"):  # no cluster profile in CI
+            slurm = ev.make_target(Pool("amd-rtx", "slurm", {"login": "u@login"}), "c571-003", 3, "1", "GPU-ab")
         args = ["--device", "{DEVICE}", "agent.device={DEVICE}"]
         self.assertEqual(ev.fill_device(args, cvd), ["--device", "cuda:0", "agent.device=cuda:0"])
         self.assertEqual(ev.fill_device(args, dev), ["--device", "cuda:2", "agent.device=cuda:2"])
