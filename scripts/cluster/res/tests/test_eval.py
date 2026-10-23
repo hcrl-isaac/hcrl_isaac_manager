@@ -1090,13 +1090,40 @@ class EvalRunTest(Isolated):
         pid = self._pid((stage / "log").read_text())
         self.assertTrue(_alive(pid))
         self.assertFalse((stage / "env").exists(), "credentials removed once the run read them")
-        stop = next(line.split("stop:", 1)[1].strip() for line in out.splitlines() if "stop:" in line)
-        subprocess.run(["bash", "-c", stop], check=True)
-        for _ in range(50):
-            if not _alive(pid):
-                break
-            time.sleep(0.2)
-        self.assertFalse(_alive(pid))
+        [lease] = self._leases()
+        self.assertEqual(lease.stage, str(stage), "the lease records the detached run's stage")
+        self.assertIn(f"pls run --stop {lease.id} --holder me", out)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(ev.cmd_stop(f"lease:{lease.id}", "me", [self.pool]), 0, err.getvalue())
+        self.assertFalse(_alive(pid), "the run's process group is gone")
+        self.assertEqual(self._leases(), [], "the lease is released once the run is gone")
+        self.assertTrue((stage / "log").exists(), "a stopped run keeps its log")
+
+    def test_a_scripts_own_stop_flag_is_passed_through(self) -> None:
+        """--stop after -- belongs to the script: main() runs the script instead of stopping a lease."""
+        with (
+            mock.patch.object(ev, "cmd_eval") as run,
+            mock.patch.object(ev, "cmd_stop") as stop,
+            mock.patch.object(res, "load_pools", return_value=[self.pool]),
+        ):
+            ev.main([str(self.script), "--holder", "me", "--any", "--", "--stop", "5"])
+        stop.assert_not_called()
+        self.assertEqual(run.call_args.args[0].script_args, ["--stop", "5"])
+
+    def test_stop_refuses_another_holders_lease_and_keeps_a_live_runs(self) -> None:
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        [lease] = self._leases()
+        with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(io.StringIO()):
+            ev.cmd_stop(lease.id, "someone-else", [self.pool])
+        self.assertIn("held by me", str(cm.exception.code))
+        with mock.patch.object(ev.Stage, "kill", return_value=False), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 1, "a run that may still live keeps the lease")
+        self.assertEqual(len(self._leases()), 1)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 0)
+        self.assertEqual(self._leases(), [])
 
     def test_exactly_one_card_selector(self) -> None:
         rc, _ = self._eval("--any", "--on", "box:1")

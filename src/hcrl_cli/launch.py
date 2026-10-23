@@ -23,7 +23,8 @@ MIN_FREE_GB, LOW_FREE_GB = 10, 50  # a run here is refused below the first and w
 USAGE = """pls run <script> [args]
        pls run [--on TARGET] [--wt NAME] [card options] -- <script> [args]
        pls run [--on TARGET] [--wt NAME] [card options] --cmd -- <command> [args]
-       pls run --on CLUSTER --batch [--tree N | --wt NAME] -- train [args]"""
+       pls run --on CLUSTER --batch [--tree N | --wt NAME] -- train [args]
+       pls run --stop LEASE --holder YOU    (stop a --detach run on that lease and release the lease)"""
 EPILOG = """targets (--on):
   (none)           this machine, with the ilab venv
   host:gpu         that card (host:job:gpu on a SLURM node running several jobs; local:<gpu> = this machine)
@@ -220,6 +221,9 @@ def _batch(on: str, wt: str, tree: str, run: list[str]) -> None:
 
 
 def main(argv: list[str]) -> None:
+    if "--stop" in (argv[: argv.index("--")] if "--" in argv else argv):  # stop a detached run: no script
+        handoff([*CARD_CMD, *argv])
+        return
     opts, run = _split(argv)
     ns, extra = parser().parse_known_args(opts)
     os.environ.pop("WT", None)  # --wt is the only worktree selector
