@@ -56,6 +56,7 @@ class Lease:
         run: The run the lease covers (W&B id, job.step, ...), when known.
         previous: Holder the lease came from (transfer) or the run was adopted from.
         yield_to: Id of the reservation this lease gives way to ("" = none).
+        stage: Stage dir of the detached `pls run` holding the card, which `pls run --stop` stops ("" = none).
     """
 
     id: str
@@ -75,6 +76,7 @@ class Lease:
     run: str = ""
     previous: str = ""
     yield_to: str = ""
+    stage: str = ""
 
 
 @dataclass
