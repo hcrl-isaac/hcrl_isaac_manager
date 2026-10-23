@@ -125,6 +125,11 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   MANIFEST gives each one's commit. On an ssh card they are read-only snapshots under `<scratch>/res-eval/code/`;
   output a script writes inside one (`logs/`, `outputs/`, `wandb/`, e.g. video_logger's checkpoints and videos) lands
   in the box workspace's copy of that repo.
+- A `--wt` worktree with uncommitted changes is refused before a lease, since its recorded commit would not restage
+  the code that ran; `--allow-dirty` ships it anyway and says so in the MANIFEST. A run whose working dir is its own
+  (a repo script, or any SLURM run) also gets a `config-defaults.yaml` there, which `wandb.init` loads, so its W&B
+  config holds `pls_refs`: each repo's full commit and dirty count, the staged tree (`--tree` reruns it), `--wt`,
+  `--root` and the MANIFEST lines.
 - `--root DIR` runs the script with the venv of an Isaac Lab install root (`<DIR>/venv/bin/python`) instead of ilab,
   e.g. an Isaac Lab 3 root: `pls run --on <host>:<gpu> --root <isaac-lab-root> --wt <set> --holder <you> -- <script>`.
   The code ships as for any run (`--wt` picks the worktree set, so pick 3.x-ported branches), never the root's own

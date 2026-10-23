@@ -5,6 +5,7 @@ commands are real."""
 import argparse
 import contextlib
 import io
+import json
 import os
 import shutil
 import signal
@@ -649,6 +650,7 @@ SLURM_SCRIPT = """import os, sys, time
 for k in ("CUDA_VISIBLE_DEVICES", "RES_EVAL_DEVICE", "TMPDIR", "N"):
     print(k, os.environ.get(k, "-"))
 print("CWD", os.getcwd())
+print("DEFAULTS", open("config-defaults.yaml").read() if os.path.exists("config-defaults.yaml") else "-")
 print("PID", os.getpid(), flush=True)
 if os.environ.get("CKPT_A"):
     print("CKPT_A_CONTENT", open(os.environ["CKPT_A"]).read())
@@ -829,6 +831,33 @@ class SlurmEvalTest(Isolated):
         calls = self.calls.read_text().splitlines()
         self.assertEqual(calls[calls.index("--root") + 1], str(root), "develop exec runs the step in the root's image")
         self.assertIn(f"python {root}/venv (--root)", out, "the MANIFEST names the root")
+
+    def test_the_runs_refs_reach_its_wandb_config(self) -> None:
+        rc, out = self._eval("--detach")
+        self.assertEqual(rc, 0, out)
+        stage = self._stage()
+        self._status(stage)
+        config = (stage / "wandb_config.yaml").read_text()
+        self.assertIn(f"DEFAULTS {config}", (stage / "log").read_text(), "the run's cwd has it, where wandb.init looks")
+        refs = json.loads(config)["pls_refs"]["value"]
+        head = subprocess.run(["git", "-C", str(self.src), "rev-parse", "HEAD"], capture_output=True, text=True)
+        self.assertEqual(refs["repos"], {"robot_rl": {"commit": head.stdout.strip(), "dirty": 0}})
+        self.assertEqual(refs["tree"], "res-eval-0123456789", "a replay can reuse the staged tree")
+        self.assertEqual(refs["manifest"], (stage / "MANIFEST").read_text().splitlines())
+
+    def test_a_dirty_worktree_is_refused_before_a_lease(self) -> None:
+        (self.src / "mod.py").write_text("x = 2\n")
+        rc, _ = self._eval("--wt", "wt")
+        self.assertIn("robot_rl (1 changed)", str(rc))
+        self.assertIn("--allow-dirty", str(rc))
+        self.assertEqual(self._leases(), [])
+        rc, out = self._eval("--wt", "wt", "--allow-dirty", "--detach")
+        self.assertEqual(rc, 0, out)
+        stage = self._stage()
+        self._status(stage)
+        self.assertIn("--allow-dirty", (stage / "MANIFEST").read_text())
+        refs = json.loads((stage / "wandb_config.yaml").read_text())["pls_refs"]["value"]
+        self.assertEqual(refs["repos"]["robot_rl"]["dirty"], 1)
 
     def test_venv_is_refused_on_a_slurm_card(self) -> None:
         rc, _ = self._eval("--venv", "hcrl_sim2real[mjx]")

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import json
 import os
 import queue
 import re
@@ -401,6 +402,35 @@ def code_fingerprint(src: str) -> tuple[str, str]:
     return h.hexdigest()[:12], f"{commit} dirty={len(changed)}"
 
 
+def git_ref(src: str) -> dict | None:
+    """A checkout's full commit and count of uncommitted paths, or None when it is not a git checkout."""
+    try:
+        status = _git(src, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+        return {"commit": _head(src), "dirty": len(_changed_paths(status))}
+    except (subprocess.CalledProcessError, OSError):
+        return None
+
+
+def dirty_worktrees(workspace: str, wt: str) -> list[str]:
+    """The worktree set's checkouts with uncommitted changes, as ``<repo> (<n> changed)``.
+
+    A run ships them as they are on disk, so its recorded commits would not restage the code it ran.
+
+    Args:
+        workspace: Manager checkout whose resources/ holds the repos.
+        wt: Worktree-set name.
+    """
+    resources = os.path.join(workspace, "resources")
+    dirty = []
+    for repo, src in {**local_code(workspace, wt), **local_data(workspace, wt)}.items():
+        if os.path.realpath(src) == os.path.realpath(os.path.join(resources, repo)):
+            continue  # a main checkout ships at its HEAD commit, its edits left behind
+        ref = git_ref(src)
+        if ref and ref["dirty"]:
+            dirty.append(f"{repo} ({ref['dirty']} changed)")
+    return dirty
+
+
 def _describe(src: str) -> str:
     """A checkout's commit and dirty count, or a note when it is not a git checkout."""
     try:
@@ -457,6 +487,7 @@ def runner_script(
     command: bool = False,
     venv: tuple[str, list[str], str] | None = None,
     root: str = "",
+    refs: str = "",
 ) -> str:
     """The bash that runs on the target: a stage log, isolated caches, the given PYTHONPATH, the script's status.
 
@@ -470,6 +501,8 @@ def runner_script(
         command: Run the arguments as a command line, the ilab venv first on PATH, instead of the script.
         venv: A tool venv (dir, requirements, python version) to run with instead of ilab, built on first use.
         root: An Isaac Lab install root on the target whose ``venv`` runs the script instead of ilab.
+        refs: The stage's W&B config file, copied into ``cwd`` (the run's own) as the ``config-defaults.yaml`` that
+            ``wandb.init`` loads.
 
     Returns:
         The run.sh text.
@@ -500,6 +533,7 @@ export PYTHONPATH={q(":".join(pythonpath))}"${{PYTHONPATH:+:$PYTHONPATH}}"
 cat {q(stage + "/MANIFEST")}
 echo "[res] {t.host}:gpu{t.gpu} ({t.pin}) python=$py env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
+{f"cp {q(refs)} config-defaults.yaml" if refs else ""}
 {launch}
 """
 
@@ -672,7 +706,14 @@ STOP_WAIT_S = 90  # how long a stop waits for the runner's status: its TERM/KILL
 
 
 def slurm_runner_script(
-    t: Target, stage: str, script: str, env_names: list[str], cwd: str, python: str = "", command: bool = False
+    t: Target,
+    stage: str,
+    script: str,
+    env_names: list[str],
+    cwd: str,
+    python: str = "",
+    command: bool = False,
+    refs: str = "",
 ) -> str:
     """The bash that runs inside the container on a SLURM node: pin by UUID, run, stop on request, record status.
 
@@ -684,6 +725,8 @@ def slurm_runner_script(
         cwd: Directory to run the script from, in the container.
         python: The interpreter (default: ``CONTAINER_PYTHON``).
         command: Run the arguments as a command line instead of the script.
+        refs: The stage's W&B config file, copied into ``cwd`` as the ``config-defaults.yaml`` that ``wandb.init``
+            loads.
 
     Returns:
         The run.sh text. The container hides its processes from the node, so ``<stage>/heartbeat`` shows the run
@@ -718,6 +761,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 cat {s["MANIFEST"]}
 echo "[res] {t.host}:gpu{t.gpu} job {t.job} (uuid) env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd)} && cd {q(cwd)} || {{ echo 97 > {s["status"]}; exit 97; }}
+{f"cp {q(refs)} config-defaults.yaml" if refs else ""}
 script_from=$(( $(stat -c %s {s["log"]}) + 1 ))  # the traceback check reads only the script's own output
 setsid {launch} &
 child=$!
@@ -771,6 +815,7 @@ class Stage:
         self.proc: subprocess.Popen | None = None
         self.dead = False
         self.tree = ""  # the staged code tree a SLURM run uses
+        self.refs: dict[str, dict] = {}  # repo -> the commit and dirty count it ships at (W&B config pls_refs)
         self.root = ""  # an Isaac Lab install root a SLURM run's step uses instead of the cluster's image (--root)
 
     def _ssh(self, cmd: str, **kw: object) -> subprocess.CompletedProcess:
@@ -953,6 +998,7 @@ class Stage:
                     f" ({', '.join(pointers[:3])}{', ...' if len(pointers) > 3 else ''}): run `git lfs pull` there"
                 )
         if self.t.kind == "local":
+            self.refs = {repo: ref for repo, src in code.items() if (ref := git_ref(src))}
             return list(code.values()), [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
         main = os.path.join(local_workspace(), "resources")
         worktree = {
@@ -965,6 +1011,8 @@ class Stage:
             if repo not in worktree:
                 with contextlib.suppress(subprocess.CalledProcessError):
                     heads[repo] = _head(src)
+        self.refs = {repo: ref for repo, src in {**worktree, **data}.items() if (ref := git_ref(src))}
+        self.refs.update({repo: {"commit": head, "dirty": 0} for repo, head in heads.items()})
         kept = f"{self.t.workspace}/resources"
         if self.t.kind == "slurm":
             # develop stage checks a commit out clean
@@ -1476,6 +1524,11 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
     siblings = sibling_args(args.with_ or [])
     if clash := sorted(set(env) & {SIBLINGS[n].env for n in siblings}):
         sys.exit(f"[res] --env {', '.join(clash)} and --with both set it; --with points it at the shipped copy")
+    if args.wt and not args.tree and not args.allow_dirty and (dirty := dirty_worktrees(local_workspace(), args.wt)):
+        sys.exit(
+            f"[res] --wt {args.wt} has uncommitted changes in {', '.join(dirty)}: commit them, since a replay restages"
+            " the run's recorded commits, or pass --allow-dirty"
+        )
     taken, job, uuid = None, "", ""
     if args.lease:
         pool, host, gpu, job, uuid = _lease_card(args.lease, args.holder, pools)
@@ -1535,7 +1588,12 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
                 manifest.append(f"{line} ({', '.join(sib.dirs)} only, {sib.env})")
         if args.root:
             manifest.append(f"python {args.root}/venv (--root)")
+        if args.allow_dirty:
+            manifest.append("--allow-dirty: a worktree's uncommitted changes ship too")
         stage.write("\n".join(manifest) + "\n", "MANIFEST", mode=0o644)
+        # the code a run ran, for its W&B config under pls_refs: a replay restages the commits, or --tree reuses the tree
+        pls_refs = {"repos": stage.refs, "tree": stage.tree, "wt": args.wt, "root": args.root, "manifest": manifest}
+        stage.write(json.dumps({"pls_refs": {"value": pls_refs}}) + "\n", "wandb_config.yaml", mode=0o644)
         # snapshots are read-only, runs may be concurrent and a stage is removed after a success, so relative outputs
         # (train.py's logs/, a census's tables) go to a writable working dir of this run's own, kept afterwards
         work = container_path(t, f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}")
@@ -1547,6 +1605,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         else:
             put = stage.put(script, os.path.basename(script), mode=0o644)
             cwd, target_script = work if t.kind == "slurm" else "", container_path(t, put)
+        # wandb.init reads config-defaults.yaml from the cwd; only a run's own work dir gets one, never the workspace
+        refs_file = container_path(t, f"{stage.dir}/wandb_config.yaml") if cwd == work else ""
         lines = [f"{k}={shlex.quote(v)}" for k, v in {**wandb_env(), **env, **paths}.items()]
         stage.write("\n".join(lines) + "\n", "env")
         names = sorted({**env, **paths})
@@ -1557,12 +1617,28 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             stage.root = args.root
             python = f"{args.root}/venv/bin/python" if args.root else ""
             runner = slurm_runner_script(
-                t, container_path(t, stage.dir), target_script, names, cwd, python=python, command=args.cmd
+                t,
+                container_path(t, stage.dir),
+                target_script,
+                names,
+                cwd,
+                python=python,
+                command=args.cmd,
+                refs=refs_file,
             )
         else:
             venv = tool_venv(args.venv, code, t.scratch) if args.venv else None
             runner = runner_script(
-                t, stage.dir, target_script, names, pythonpath, cwd, command=args.cmd, venv=venv, root=args.root
+                t,
+                stage.dir,
+                target_script,
+                names,
+                pythonpath,
+                cwd,
+                command=args.cmd,
+                venv=venv,
+                root=args.root,
+                refs=refs_file,
             )
         stage.write(runner, "run.sh", mode=0o700)
         staging.stop()
@@ -1687,6 +1763,11 @@ def parser() -> argparse.ArgumentParser:
         help="[NAME=]<W&B run URL | entity/project/run[@iter] | path>, exported as NAME; {NAME} in the script args is its path",
     )
     ev.add_argument("--env", action="append", help="KEY=VALUE for the script (repeatable)")
+    ev.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="ship a --wt worktree with uncommitted changes (refused by default: a replay restages the recorded commits)",
+    )
     ev.add_argument("--wt", default="", help=argparse.SUPPRESS)  # this machine's resources/<repo>/worktrees/<name>
     ev.add_argument(
         "--timeout", type=_duration, default=0.0, help="kill the run after this long, e.g. 2h (default: none)"
