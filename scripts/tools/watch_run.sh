@@ -3,15 +3,20 @@
 #
 #   watch_run.sh <label> <log> <target-iters> [stall_min] [report_every] [metric-grep]
 #
-# <log> is a local path, or user@host:/path when the log lands on a different host from the process. A run that
+# <log> is a local path, user@host:/path when the log lands on a different host from the process, or ray:<job_id>
+# for a Ray job (read through `pls cluster ray logs`; a job Ray reports FAILED or STOPPED is FAILED here). A run that
 # logs every N iterations finishes when it closes (W&B's sync lines after its last iteration) within N of the target.
 set -u
 
 LABEL=$1; LOG_SPEC=$2; TARGET=$3; STALL_MIN=${4:-20}; EVERY=${5:-100}; MET=${6:-}
+RAY_JOB=""
 case $LOG_SPEC in
+  ray:*) RAY_JOB=${LOG_SPEC#ray:}; HOST=""; LOG="${TMPDIR:-/tmp}/watch_run_ray_${RAY_JOB}_$$.log"
+         trap 'rm -f "$LOG" "$LOG.new" "$LOG.status"' EXIT ;;
   *:*) HOST=${LOG_SPEC%%:*}; LOG=${LOG_SPEC#*:} ;;
   *)   HOST=""; LOG=$LOG_SPEC ;;
 esac
+PLS=${WATCH_RUN_PLS:-pls}  # the pls a Ray watch asks; tests stub it
 [ "${EVERY:-0}" -gt 0 ] 2>/dev/null || EVERY=0   # 0 disables the periodic metric line
 
 ERRPAT='Traceback|error running python|Error executing|CUDA out of memory|Could not override|No contact sensors|Segmentation fault|Killed|srun: error|Disk quota exceeded|Worker exited -11'
@@ -65,7 +70,16 @@ run_remote() {  # stdin: the probe script
     fi
 }
 
+RAY_STATUS=""
+ray_refresh() {  # a Ray job's log into $LOG, replaced only when it changed, so its mtime is the last new output
+    timeout "$PROBE_S" "$PLS" cluster ray logs "$RAY_JOB" > "$LOG.new" 2>/dev/null || { rm -f "$LOG.new"; return 1; }
+    if cmp -s "$LOG.new" "$LOG"; then rm -f "$LOG.new"; else mv "$LOG.new" "$LOG"; fi
+    # probe runs in a subshell, so the state goes through a file the loop reads
+    timeout "$PROBE_S" "$PLS" cluster ray list --all_statuses --status_of "$RAY_JOB" 2>/dev/null | tail -1 > "$LOG.status"
+}
+
 probe() {
+    if [ -n "$RAY_JOB" ]; then ray_refresh || return 0; fi  # no output: a failed probe
     run_remote <<EOF
 f="$LOG"
 if [ ! -e "\$f" ]; then echo "missing"; exit 0; fi
@@ -85,6 +99,7 @@ started=$(date +%s); last_it=-1; last_change=$started; lastc=-1; booted=0; last_
 while true; do
     st=$(probe)
     now=$(date +%s)
+    [ -n "$RAY_JOB" ] && RAY_STATUS=$(cat "$LOG.status" 2>/dev/null)
     if [ -z "$st" ]; then  # one failed probe is not evidence, stall_min of them is
         if [ $(( (now - last_ok) / 60 )) -ge "$STALL_MIN" ]; then
             echo "[$LABEL] BLIND: no probe of $LOG_SPEC answered for $(( (now - last_ok) / 60 )) min, last iter ${last_it}"
@@ -128,6 +143,14 @@ while true; do
     if [ -n "$it" ] && [ "$it" -ge $((TARGET - 5)) ]; then
         echo "[$LABEL] finished at iter $it (target $TARGET)"; exit 0
     fi
+    case $RAY_STATUS in  # Ray knows the job ended before its log can say so
+        FAILED|STOPPED)
+            echo "[$LABEL] FAILED: Ray job $RAY_JOB is $RAY_STATUS at iter ${it:-none} (target $TARGET)"
+            tail -c 600 "$LOG" | tr "\r" "\n" | tail -3 | cut -c1-160
+            exit 1 ;;
+        SUCCEEDED)
+            echo "[$LABEL] FAILED: Ray job $RAY_JOB SUCCEEDED at iter ${it:-none}, short of target $TARGET"; exit 1 ;;
+    esac
     if [ "${age:-0}" -ge $((STALL_MIN * 60)) ]; then
         echo "[$LABEL] DEAD or hung: log untouched for $((age / 60)) min, last iter ${last_it}"
         printf 'tail -c 600 "%s" | tr "\\r" "\\n" | tail -3 | cut -c1-160\n' "$LOG" | run_remote

@@ -163,6 +163,32 @@ def fill_checkpoints(script_args: list[str], paths: dict[str, str]) -> list[str]
     return filled
 
 
+_CUDA = re.compile(r"\bcuda:(\d+)\b")
+
+
+def run_device(t: Target) -> str:
+    """The torch device the leased card is inside the run: cuda:0 where CUDA_VISIBLE_DEVICES pins it (SLURM, cvd
+    boxes), else its own index (device-pinned boxes, where every card stays visible)."""
+    return "cuda:0" if t.kind == "slurm" or t.pin == "cvd" else f"cuda:{t.gpu}"
+
+
+def fill_device(script_args: list[str], t: Target) -> list[str]:
+    """The script's arguments with ``{DEVICE}`` replaced by the leased card's device; exits on any other ``cuda:N``.
+
+    Boxes pin a card differently (CUDA_VISIBLE_DEVICES or not), so a hand-written ``cuda:N`` is wrong on some of them:
+    an invalid ordinal, or silently another user's card.
+    """
+    device = run_device(t)
+    filled = [arg.replace("{DEVICE}", device) for arg in script_args]
+    if wrong := sorted({f"cuda:{n}" for arg in filled for n in _CUDA.findall(arg)} - {device}):
+        sys.exit(
+            f"[res] the script arguments name {', '.join(wrong)}, but the leased card is {device} inside this run on"
+            f" {t.host} ({'CUDA_VISIBLE_DEVICES pins it' if device == 'cuda:0' else 'every card stays visible'});"
+            " write {DEVICE} instead (e.g. --device {DEVICE}) and pls run fills it in"
+        )
+    return filled
+
+
 def parse_checkpoints(specs: list[str]) -> list[ck.CheckpointRef]:
     """Parsed ``--checkpoint`` specs; exits on a bad or duplicate name before anything is claimed."""
     refs = []
@@ -1075,10 +1101,12 @@ class Stage:
             self.dead = _kill_local_group(self.proc)
             return self.dead
         q = shlex.quote
+        # alive = a process of the group that is not a zombie (an unreaped exit holds no card)
+        live = "ps -eo pgid=,stat= | awk -v p=$p '$1 == p && $2 !~ /^Z/ {f=1} END {exit !f}'"
         script = (
             f"p=$(cat {q(self.dir)}/pid 2>/dev/null) || exit 0; kill -TERM -- -$p 2>/dev/null; "
-            "for _ in $(seq 20); do kill -0 -- -$p 2>/dev/null || exit 0; sleep 0.5; done; "
-            "kill -KILL -- -$p 2>/dev/null; sleep 1; ! kill -0 -- -$p 2>/dev/null"
+            f"for _ in $(seq 20); do {live} || exit 0; sleep 0.5; done; "
+            f"kill -KILL -- -$p 2>/dev/null; sleep 1; ! {live}"
         )
         self.dead = self.sh(script) == 0
         if self.proc is not None and self.proc.poll() is None:
@@ -1333,7 +1361,17 @@ def _repo_script(spec: str, wt: str) -> tuple[str, str]:
     return repo, rel
 
 
-def _print_detached(stage: Stage, taken: ls.Lease | None) -> None:
+def _record_stage(lease_id: str, stage_dir: str) -> None:
+    """Note the detached run's stage on its lease, so `pls run --stop <lease>` finds it."""
+    if not lease_id:
+        return
+    with ls.locked_store() as leases:
+        for lease in leases:
+            if lease.id == lease_id:
+                lease.stage = stage_dir
+
+
+def _print_detached(stage: Stage, lease_id: str, holder: str) -> None:
     """How to follow, stop and release a detached run."""
     q = shlex.quote
     opts = " ".join(q(o) for o in stage.t.ssh_opts) if stage.t.kind == "slurm" else ""
@@ -1345,19 +1383,68 @@ def _print_detached(stage: Stage, taken: ls.Lease | None) -> None:
     where = f"{stage.t.host}:gpu{stage.t.gpu}" + (f" of job {stage.t.job}" if stage.t.job else "")
     print(f"[res] started detached on {where} (stage {stage.dir})", file=sys.stderr)
     print(f"[res] follow: {on('tail -f ' + q(stage.dir + '/log'))}", file=sys.stderr)
-    if stage.t.kind == "slurm":
+    if lease_id:
+        print(
+            f"[res] stop:   pls run --stop {lease_id} --holder {q(holder)}  (stops the run, releases the lease)",
+            file=sys.stderr,
+        )
+    elif stage.t.kind == "slurm":
         print(f"[res] stop:   {on('touch ' + q(stage.dir + '/stop'))}", file=sys.stderr)
+    else:
+        print(f"[res] stop:   {on('kill -TERM -- -$(cat ' + q(stage.dir + '/pid') + ')')}", file=sys.stderr)
+    if stage.t.kind == "slurm":
         print(
             f"[res] alive while {stage.dir}/heartbeat is fresh (every {HEARTBEAT_S} s); the exit status lands in status",
             file=sys.stderr,
         )
-    else:
-        print(f"[res] stop:   {on('kill -TERM -- -$(cat ' + q(stage.dir + '/pid') + ')')}", file=sys.stderr)
-    if taken is not None:
+    if lease_id:
         print(
-            f"[res] lease {taken.id} stays held; it releases once the card idles, or: pls res release {taken.id}",
+            f"[res] lease {lease_id} stays held while the run lives; it releases once the card idles", file=sys.stderr
+        )
+
+
+def cmd_stop(lease_id: str, holder: str, pools: list[Pool]) -> int:
+    """Stop the detached run on a lease (`pls run --stop`), keep its log, and release the lease once it is gone.
+
+    Args:
+        lease_id: The lease the run was started on (its id, or ``lease:<id>``).
+        holder: The caller, who must hold the lease.
+        pools: Configured pools.
+
+    Returns:
+        0 when the run is gone and the lease released, 1 when the run may still hold the card.
+    """
+    lease_id = lease_id.removeprefix("lease:")
+    pool, host, gpu, job, uuid_ = _lease_card(lease_id, holder, pools)
+    with ls.locked_store() as leases:
+        stage_dir = next(x.stage for x in leases if x.id == lease_id)
+    t = make_target(pool, host, gpu, job, uuid_)
+    if stage_dir:
+        stage = Stage(t)
+        stage.dir = stage_dir
+        gone = stage.kill()
+        print(
+            f"[res] stopped the run in {stage_dir} ({'gone' if gone else 'STILL RUNNING, check the card'})",
             file=sys.stderr,
         )
+        if gone:
+            stage.remove(keep_log=True)
+            where = t.ssh if t.kind == "slurm" else t.host
+            print(f"[res] log kept at {where}:{stage_dir}/log", file=sys.stderr)
+    else:
+        gone = True
+        print(
+            f"[res] lease {lease_id} records no detached run (started before --stop existed, or attached);"
+            " releasing it only",
+            file=sys.stderr,
+        )
+    if not gone:
+        print(f"[res] KEPT lease {lease_id}: the run may still hold the card", file=sys.stderr)
+        return 1
+    with ls.locked_store() as leases:
+        leases[:] = [x for x in leases if x.id != lease_id]
+    print(f"[res] released {lease_id}", file=sys.stderr)
+    return 0
 
 
 def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> None:
@@ -1421,6 +1508,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if pool is None:  # inside the try, so a refusal still releases the lease
             pool = slurm_profile(rep.pool, job, pools)
         t = make_target(pool, host, gpu, job, uuid)
+        run_args = fill_device(run_args, t)  # before staging, so a wrong cuda:N costs nothing
         staging = _LeaseHeartbeat(taken.id if taken is not None else args.lease or "").start()
         stage = Stage(t)
         stage.make()
@@ -1474,7 +1562,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if args.detach:
             stage.start_detached(fill_checkpoints(run_args, paths))
             detached = True
-            _print_detached(stage, taken)
+            held = taken.id if taken is not None else args.lease or ""
+            _record_stage(held, stage.dir)
+            _print_detached(stage, held, args.holder)
             rc = 0
         else:
             print(
@@ -1612,6 +1702,17 @@ def main(argv: list[str] | None = None) -> None:
     import res
 
     argv = sys.argv[1:] if argv is None else argv
+    # `pls run --stop <lease> --holder <you>`: no script, no card to claim; a script's own --stop (after --) is its own
+    if "--stop" in (argv[: argv.index("--")] if "--" in argv else argv):
+        sp = argparse.ArgumentParser(prog="pls run --stop", description="stop a detached run and release its lease")
+        sp.add_argument("--stop", required=True, metavar="LEASE", help="the lease the detached run holds")
+        sp.add_argument("--holder", required=True, help="your session name (must match the lease)")
+        st = sp.parse_args(argv)
+        try:
+            pools = res.load_pools()
+        except Exception as exc:
+            sys.exit(f"[res] cannot read the compute inventory: {type(exc).__name__}: {exc}")
+        sys.exit(cmd_stop(st.stop, st.holder, pools))
     args = parse_args(argv)
     if args.jobs:
         import batch
