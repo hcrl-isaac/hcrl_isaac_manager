@@ -209,6 +209,26 @@ class TargetTest(unittest.TestCase):
         self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
         self.assertIn("ilab/bin/python", ev.runner_script(t, "/s", "x.py", [], []))
 
+    def test_device_placeholder_follows_the_hosts_pinning(self) -> None:
+        cvd = ev.make_target(Pool("a100", "ssh", {"user": "u", "pin": "cvd"}), "mckennie", 2)
+        dev = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pepi", 2)
+        with mock.patch.object(ev, "profile_value", return_value="/work/u/isaaclab"):  # no cluster profile in CI
+            slurm = ev.make_target(Pool("amd-rtx", "slurm", {"login": "u@login"}), "c571-003", 3, "1", "GPU-ab")
+        args = ["--device", "{DEVICE}", "agent.device={DEVICE}"]
+        self.assertEqual(ev.fill_device(args, cvd), ["--device", "cuda:0", "agent.device=cuda:0"])
+        self.assertEqual(ev.fill_device(args, dev), ["--device", "cuda:2", "agent.device=cuda:2"])
+        self.assertEqual(ev.fill_device(args, slurm)[1], "cuda:0", "a SLURM card is pinned by UUID")
+
+    def test_a_hand_written_device_for_another_card_is_refused(self) -> None:
+        cvd = ev.make_target(Pool("a100", "ssh", {"user": "u", "pin": "cvd"}), "mckennie", 2)
+        dev = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pepi", 2)
+        with self.assertRaises(SystemExit) as cm:
+            ev.fill_device(["--device", "cuda:2"], cvd)  # an invalid ordinal there
+        self.assertIn("{DEVICE}", str(cm.exception.code))
+        with self.assertRaises(SystemExit):
+            ev.fill_device(["--device", "cuda:0"], dev)  # silently another user's card there
+        self.assertEqual(ev.fill_device(["--device", "cuda:2"], dev), ["--device", "cuda:2"], "the right one is kept")
+
     def test_jax_does_not_preallocate_a_shared_card(self) -> None:
         runner = ev.runner_script(ev.make_target(Pool("a", "ssh", {"user": "u"}), "h", 0), "/s", "x.py", [], [])
         self.assertIn('XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"', runner)
@@ -1124,6 +1144,18 @@ class EvalRunTest(Isolated):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 0)
         self.assertEqual(self._leases(), [])
+
+    def test_the_device_placeholder_reaches_the_script_filled(self) -> None:
+        rc, out = self._eval("--any", "--env", "MODE=ok", "--", "--device", "{DEVICE}")
+        self.assertEqual(rc, 0, out)
+        want = ev.run_device(ev.make_target(self.pool, "box", 1))
+        self.assertIn(f"ARGV ['--device', '{want}']", out)
+
+    def test_a_wrong_device_is_refused_before_staging_and_frees_the_lease(self) -> None:
+        rc, _ = self._eval("--any", "--", "--device", "cuda:7")
+        self.assertIn("{DEVICE}", str(rc))
+        self.assertEqual(self._leases(), [], "the lease is released")
+        self.assertEqual(self._stages(), [], "nothing was staged")
 
     def test_exactly_one_card_selector(self) -> None:
         rc, _ = self._eval("--any", "--on", "box:1")

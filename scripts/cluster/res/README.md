@@ -174,9 +174,10 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
 - The interpreter is the target workspace's `ilab` python, with a per-run `TMPDIR`, per-card `XDG_CACHE_HOME` /
   `OMNI_CACHE_DIR` and `HCRL_ARTIFACT_ROOT` under `<scratch>/res-eval/`. The card: pools with `pin = "cvd"`
   (default) mask `CUDA_VISIBLE_DEVICES` to it; `pin = "device"` (the A40 pool, where Kit has refused masked GPUs)
-  leaves it unmasked. Either way `RES_EVAL_DEVICE` names the card the script should use (`cuda:0` when masked). A script that
-  hardcodes `cuda:0` on a `device` pool silently runs on a card it does not hold, so read `RES_EVAL_DEVICE` (or pick
-  a `cvd` pool).
+  leaves it unmasked. Either way `RES_EVAL_DEVICE` names the card the script should use (`cuda:0` when masked). Write
+  `{DEVICE}` in the script's arguments (`--device {DEVICE}`, `agent.device={DEVICE}`) and `pls run` fills it in for
+  that card. A hand-written `cuda:N` that is not the card is refused before anything is staged: on a `cvd` pool it is
+  an invalid ordinal, and on a `device` pool it silently runs on a card you do not hold.
 - `--env KEY=VALUE` (repeatable) and the W&B credentials from `scripts/.env.wandb` reach the script through a 0600 env
   file, never the command line.
 - The run starts in its own process group. `--timeout` (default none) and `--stall` (no output for 15 min; `0` turns

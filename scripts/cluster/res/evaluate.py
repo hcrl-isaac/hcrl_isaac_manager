@@ -163,6 +163,32 @@ def fill_checkpoints(script_args: list[str], paths: dict[str, str]) -> list[str]
     return filled
 
 
+_CUDA = re.compile(r"\bcuda:(\d+)\b")
+
+
+def run_device(t: Target) -> str:
+    """The torch device the leased card is inside the run: cuda:0 where CUDA_VISIBLE_DEVICES pins it (SLURM, cvd
+    boxes), else its own index (device-pinned boxes, where every card stays visible)."""
+    return "cuda:0" if t.kind == "slurm" or t.pin == "cvd" else f"cuda:{t.gpu}"
+
+
+def fill_device(script_args: list[str], t: Target) -> list[str]:
+    """The script's arguments with ``{DEVICE}`` replaced by the leased card's device; exits on any other ``cuda:N``.
+
+    Boxes pin a card differently (CUDA_VISIBLE_DEVICES or not), so a hand-written ``cuda:N`` is wrong on some of them:
+    an invalid ordinal, or silently another user's card.
+    """
+    device = run_device(t)
+    filled = [arg.replace("{DEVICE}", device) for arg in script_args]
+    if wrong := sorted({f"cuda:{n}" for arg in filled for n in _CUDA.findall(arg)} - {device}):
+        sys.exit(
+            f"[res] the script arguments name {', '.join(wrong)}, but the leased card is {device} inside this run on"
+            f" {t.host} ({'CUDA_VISIBLE_DEVICES pins it' if device == 'cuda:0' else 'every card stays visible'});"
+            " write {DEVICE} instead (e.g. --device {DEVICE}) and pls run fills it in"
+        )
+    return filled
+
+
 def parse_checkpoints(specs: list[str]) -> list[ck.CheckpointRef]:
     """Parsed ``--checkpoint`` specs; exits on a bad or duplicate name before anything is claimed."""
     refs = []
@@ -1465,6 +1491,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if pool is None:  # inside the try, so a refusal still releases the lease
             pool = slurm_profile(rep.pool, job, pools)
         t = make_target(pool, host, gpu, job, uuid)
+        run_args = fill_device(run_args, t)  # before staging, so a wrong cuda:N costs nothing
         staging = _LeaseHeartbeat(taken.id if taken is not None else args.lease or "").start()
         stage = Stage(t)
         stage.make()

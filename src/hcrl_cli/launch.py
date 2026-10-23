@@ -47,6 +47,9 @@ scripts (the same on every target):
 where you are, on a card from the box workspace (a SLURM card: the run's work dir), with the ilab venv first on PATH
 (the container's python on SLURM). Ray runs python scripts only.
 
+On a card, {DEVICE} in the script's arguments becomes the leased card's torch device (`--device {DEVICE}`): boxes
+pin cards differently, so a hand-written cuda:N that is not the card is refused.
+
 card options (--holder is required): --holder, --note, --pool, --min-free-gb, --checkpoint, --env, --timeout,
 --stall, --detach, --venv, --with, --jobs/--out (a job list over lease:A,B,...); `pls run --on any --help`
 describes them."""
