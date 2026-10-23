@@ -134,8 +134,11 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   the same `/workspace/ext` mounts, stop file and heartbeat as any SLURM run, and the staged package repos on
   PYTHONPATH. Not with `--venv`.
 - `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
-  owns its stage dir, and its lease stays held until the card goes idle (or `pls res release <id>`). `--timeout`
+  owns its stage dir, which its lease records, and the lease stays held until the card goes idle. `--timeout`
   and `--stall` do not apply to a detached run.
+- `pls run --stop <lease> --holder <you>` stops a detached run: the process group (a SLURM run's `stop` file), then,
+  once it is gone, removes the stage but its log and releases the lease. A run that may still be alive keeps the
+  lease. A lease that records no run (one taken before `--stop` existed) is just released.
 
 - The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
   several jobs), `--on any`, `--on <pool>` or `--on lease:<id>`. A busy card is refused (`--wait [limit]` waits for
@@ -155,8 +158,8 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
 - The container hides a SLURM run's processes from the node, so it reports through files in its stage dir:
   `heartbeat` (touched every 2 s while it runs), `stop` (create it to end the run: TERM, then KILL after 10 s) and
   `status` (its exit status, written once the card's processes are gone or after 60 s; a Python traceback with exit
-  0 counts as 1). `--detach` waits for the first heartbeat, prints the follow and stop commands over the SSH
-  master, and logs the step's wrapper to `<stage>/wrapper.log`. A detached run that does not start within 20 min
+  0 counts as 1). `--detach` waits for the first heartbeat, prints the follow command over the SSH master and
+  the `pls run --stop` command, and logs the step's wrapper to `<stage>/wrapper.log`. A detached run that does not start within 20 min
   (a job's first step copies the .sif to the node) is stopped and its credentials removed; a run whose `stop`
   exists before it starts exits 130 without launching. Each new SLURM stage prunes earlier ones: credentials of
   runs that never started after 30 min, and stages and work dirs older than 7 days whose run is not alive;
@@ -179,9 +182,10 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
 - The interpreter is the target workspace's `ilab` python, with a per-run `TMPDIR`, per-card `XDG_CACHE_HOME` /
   `OMNI_CACHE_DIR` and `HCRL_ARTIFACT_ROOT` under `<scratch>/res-eval/`. The card: pools with `pin = "cvd"`
   (default) mask `CUDA_VISIBLE_DEVICES` to it; `pin = "device"` (the A40 pool, where Kit has refused masked GPUs)
-  leaves it unmasked. Either way `RES_EVAL_DEVICE` names the card the script should use (`cuda:0` when masked). A script that
-  hardcodes `cuda:0` on a `device` pool silently runs on a card it does not hold, so read `RES_EVAL_DEVICE` (or pick
-  a `cvd` pool).
+  leaves it unmasked. Either way `RES_EVAL_DEVICE` names the card the script should use (`cuda:0` when masked). Write
+  `{DEVICE}` in the script's arguments (`--device {DEVICE}`, `agent.device={DEVICE}`) and `pls run` fills it in for
+  that card. A hand-written `cuda:N` that is not the card is refused before anything is staged: on a `cvd` pool it is
+  an invalid ordinal, and on a `device` pool it silently runs on a card you do not hold.
 - `--env KEY=VALUE` (repeatable) and the W&B credentials from `scripts/.env.wandb` reach the script through a 0600 env
   file, never the command line.
 - The run starts in its own process group. `--timeout` (default none) and `--stall` (no output for 15 min; `0` turns
