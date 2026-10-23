@@ -771,6 +771,7 @@ class Stage:
         self.proc: subprocess.Popen | None = None
         self.dead = False
         self.tree = ""  # the staged code tree a SLURM run uses
+        self.root = ""  # an Isaac Lab install root a SLURM run's step uses instead of the cluster's image (--root)
 
     def _ssh(self, cmd: str, **kw: object) -> subprocess.CompletedProcess:
         return subprocess.run(["ssh", *self.t.ssh_opts, self.t.ssh, cmd], **kw)
@@ -1083,7 +1084,8 @@ class Stage:
         tree = ["--tree", self.tree] if self.tree else []
         # --own-tmp: runs sharing a node never meet in the container's /tmp (Isaac Lab's /tmp/IsaacLab conversions)
         own = ["--own-tmp"]
-        return cluster_dev_cmd(self.t.pool, self.t.job, "exec", *tree, *own, *opts, "--", "bash", run_sh, *argv)
+        root = ["--root", self.root] if self.root else []
+        return cluster_dev_cmd(self.t.pool, self.t.job, "exec", *tree, *own, *root, *opts, "--", "bash", run_sh, *argv)
 
     def kill(self) -> bool:
         """Kill the runner's process group on the target (TERM, then KILL) and report whether it is gone."""
@@ -1549,9 +1551,14 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         stage.write("\n".join(lines) + "\n", "env")
         names = sorted({**env, **paths})
         if t.kind == "slurm":
-            if args.venv or args.root:
-                sys.exit("[res] --venv and --root run on box cards only; a SLURM run uses the cluster's container")
-            runner = slurm_runner_script(t, container_path(t, stage.dir), target_script, names, cwd, command=args.cmd)
+            if args.venv:
+                sys.exit("[res] --venv runs on box cards only; a SLURM run uses the cluster's container")
+            # --root: the step runs in the root's bookworm image (develop exec --root), the same mounts as ilab's
+            stage.root = args.root
+            python = f"{args.root}/venv/bin/python" if args.root else ""
+            runner = slurm_runner_script(
+                t, container_path(t, stage.dir), target_script, names, cwd, python=python, command=args.cmd
+            )
         else:
             venv = tool_venv(args.venv, code, t.scratch) if args.venv else None
             runner = runner_script(
@@ -1663,8 +1670,9 @@ def parser() -> argparse.ArgumentParser:
         "--root",
         default="",
         metavar="DIR",
-        help="run with the venv of an Isaac Lab install root on the box (<DIR>/venv) instead of ilab, e.g. an Isaac Lab 3"
-        " root made by scripts/isaac3/bench/deploy.sh; --wt picks the code, which ships as usual",
+        help="run with the venv of an Isaac Lab install root on the target (<DIR>/venv) instead of ilab, e.g. an Isaac"
+        " Lab 3 root made by scripts/isaac3/bench/deploy.sh (on a SLURM card in its <DIR>/bookworm.sif image); --wt"
+        " picks the code, which ships as usual",
     )
     ev.add_argument(
         "--jobs",

@@ -294,6 +294,8 @@ class SlurmTest(unittest.TestCase):
         self.assertIn("/isaac-sim/python.sh /workspace/ext/r/s.py", runner)
         self.assertIn("/workspace/artifacts/res-eval/x/stop", runner)
         self.assertIn("> /workspace/artifacts/res-eval/x/status", runner)
+        rooted = ev.slurm_runner_script(t, "/x", "/workspace/ext/r/s.py", [], "/c", python="/r/venv/bin/python")
+        self.assertIn("/r/venv/bin/python /workspace/ext/r/s.py", rooted, "--root runs the root's python")
 
     def test_a_named_tree_is_checked_complete_and_touched(self) -> None:
         t = ev.Target("horizon", "slurm", "c101-035", 1, "u@login", "/w", "/w/artifacts", job="57902", uuid="GPU-ab")
@@ -816,6 +818,22 @@ class SlurmEvalTest(Isolated):
         self.assertEqual(Path(stage.dir, "status").read_text().strip(), "130")
         self.assertNotIn("PID", Path(stage.dir, "log").read_text(), "the script never ran")
         self.assertFalse(Path(stage.dir, "env").exists(), "and its credentials are gone")
+
+    def test_an_install_root_reaches_the_step_and_runs_its_python(self) -> None:
+        root = self.tmp / "isaac3"
+        (root / "venv" / "bin").mkdir(parents=True)
+        (root / "venv" / "bin" / "python").symlink_to(sys.executable)
+        rc, out = self._eval("--root", str(root), "--env", "N=3")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("N 3", out)
+        calls = self.calls.read_text().splitlines()
+        self.assertEqual(calls[calls.index("--root") + 1], str(root), "develop exec runs the step in the root's image")
+        self.assertIn(f"python {root}/venv (--root)", out, "the MANIFEST names the root")
+
+    def test_venv_is_refused_on_a_slurm_card(self) -> None:
+        rc, _ = self._eval("--venv", "hcrl_sim2real[mjx]")
+        self.assertIn("--venv runs on box cards only", str(rc))
+        self.assertEqual(self._leases(), [])
 
     def test_a_card_the_step_cannot_see_fails_fast(self) -> None:
         self.uuid = "GPU-elsewhere"
