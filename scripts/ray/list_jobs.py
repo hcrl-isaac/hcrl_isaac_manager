@@ -21,6 +21,13 @@ parser.add_argument(
     default=None,
     help="Set this value to check if it is within the specified job filters (skip displaying table)",
 )
+parser.add_argument(
+    "--status_of",
+    type=str,
+    default=None,
+    help="Print only this job's status (PENDING, RUNNING, SUCCEEDED, FAILED, STOPPED), or UNKNOWN when it is not"
+    " within the filters; for watchers (scripts/tools/watch_run.sh)",
+)
 args = parser.parse_args()
 
 NULL_ENTRY = "N/A"
@@ -79,4 +86,8 @@ if __name__ == "__main__":
     if args.check_id:
         job_ids = [job.submission_id for job in jobs]
         sys.exit(args.check_id not in job_ids)
+    if args.status_of:
+        status = next((str(job.status.value) for job in jobs if job.submission_id == args.status_of), "UNKNOWN")
+        print(status)
+        sys.exit(status == "UNKNOWN")
     display_table(jobs)

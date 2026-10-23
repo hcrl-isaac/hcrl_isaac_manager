@@ -117,5 +117,26 @@ check "a hanging probe ends as BLIND" '[ "$rc" = 1 ] && case $out in *BLIND*) tr
 out="$(PATH="$T/bin:$PATH" timeout 4 bash "$T/watch_blind.sh" probe "x@host:/log" 4000 20 0 2>&1)"; rc=$?
 check "a few failed probes inside stall_min are retried" '[ "$rc" = 124 ] && [ -z "$out" ]'
 
+# ray:<job>: the log comes through `pls cluster ray logs`, the job's state through `pls cluster ray list --status_of`
+cat > "$T/pls" <<EOF
+#!/usr/bin/env bash
+case "\$3" in logs) cat "$T/ray.log" ;; list) cat "$T/ray.status" ;; esac
+EOF
+chmod +x "$T/pls"
+sed 's/^POLL_S=120 /POLL_S=1 /' "$REPO/scripts/tools/watch_run.sh" > "$T/watch_ray.sh"
+ray_watch() { WATCH_RUN_PLS="$T/pls" timeout 5 bash "$T/watch_ray.sh" probe ray:raysubmit_1 4000 20 0 2>&1; }
+
+printf 'Learning iteration 120/4000\n' > "$T/ray.log"; echo RUNNING > "$T/ray.status"
+out="$(ray_watch)"; rc=$?
+check "a running Ray job is watched" '[ "$rc" = 124 ] && case $out in *"training (iter 120)"*) true ;; *) false ;; esac'
+
+echo FAILED > "$T/ray.status"
+out="$(ray_watch)"; rc=$?
+check "a Ray job Ray reports FAILED is FAILED" '[ "$rc" = 1 ] && case $out in *"raysubmit_1 is FAILED"*) true ;; *) false ;; esac'
+
+printf 'Learning iteration 3999/4000\n' > "$T/ray.log"; echo SUCCEEDED > "$T/ray.status"
+out="$(ray_watch)"; rc=$?
+check "a Ray job that reached its target finished" '[ "$rc" = 0 ] && case $out in *finished*) true ;; *) false ;; esac'
+
 [ "$fails" -eq 0 ] || exit 1
 echo "all watch_run exit tests passed"
