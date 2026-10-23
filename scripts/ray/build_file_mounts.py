@@ -15,6 +15,8 @@ import os
 import sys
 
 MANAGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# per-user state (resources/, workspace.yaml): the main checkout's when run from a manager worktree
+WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR") or MANAGER_DIR
 CONTAINER_EXT = "/workspace/ext"
 
 sys.path.insert(0, os.path.join(MANAGER_DIR, "scripts"))
@@ -26,7 +28,7 @@ def _is_package(path: str) -> bool:
 
 
 def _source_mode() -> bool:
-    manifest = os.path.join(MANAGER_DIR, "workspace.yaml")
+    manifest = os.path.join(WORKSPACE_DIR, "workspace.yaml")
     try:
         with open(manifest) as f:
             for line in f:
@@ -41,11 +43,11 @@ def _source_mode() -> bool:
 
 
 def main() -> None:
-    resources = os.path.join(MANAGER_DIR, "resources")
-    # the same repo list `just run WT=` selects, so a Ray job ships the same worktree set
+    resources = os.path.join(WORKSPACE_DIR, "resources")
+    # the same repo list `pls run --wt` selects, so a Ray job ships the same worktree set
     candidates = [os.path.join(resources, repo) for repo in workspace_repos(resources)]
-    # HCRL_WT=<name>: ship the named worktree instead of the main checkout for any repo that has one
-    wt = os.environ.get("HCRL_WT", "")
+    # WT=<name>: ship the named worktree instead of the main checkout for any repo that has one
+    wt = os.environ.get("WT", "")
     if wt:
         # (source path, repo name): the container path and dedup key are the repo name, since every
         # repo's worktree shares the worktree-set basename
@@ -54,7 +56,7 @@ def main() -> None:
             wdir = os.path.join(c, "worktrees", wt)
             resolved.append((wdir if os.path.isdir(wdir) else c, os.path.basename(c)))
         if all(src == c for (src, _), c in zip(resolved, candidates, strict=False)):
-            raise SystemExit(f"[file_mounts] HCRL_WT={wt!r} matches no resources/<repo>/worktrees/{wt}")
+            raise SystemExit(f"[file_mounts] WT={wt!r} matches no resources/<repo>/worktrees/{wt}")
         candidates = resolved
     else:
         candidates = [(c, os.path.basename(c)) for c in candidates]

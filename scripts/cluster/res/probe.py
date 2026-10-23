@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import urllib.request
 from dataclasses import asdict, dataclass, field
 
-from inventory import Pool
+from inventory import CLUSTER_CONFIG_DIR, Pool
 
 # Idle cards read 0-545 MiB and the smallest card seen in use reads ~2.4 GB, so 1 GiB sits in that gap: at or
 # above this with no visible process a card is held (e.g. Isaac kept its VRAM after exit).
@@ -357,6 +358,38 @@ def _gres_gpus(gres: str) -> int | None:
     return None
 
 
+def profile_accounts(pools: list[Pool]) -> dict[str, str]:
+    """The accounts these pools' profiles submit with (``#SBATCH -A``), keyed by their lowercase form.
+
+    squeue reports an account lowercased (cda26011), and TACC's submit filter refuses that spelling in an overlap step.
+    """
+    found = {}
+    for pool in pools:
+        script = CLUSTER_CONFIG_DIR / pool.name / "submit_job_slurm.sh"
+        if not script.is_file():
+            continue
+        for line in script.read_text().splitlines():
+            m = re.match(r"#SBATCH\s+(?:-A\s*|--account[=\s]+)(\S+)", line.strip())
+            if m:
+                found[m.group(1).lower()] = m.group(1)
+    return found
+
+
+def profile_partitions(pools: list[Pool]) -> dict[str, list[str]]:
+    """Partition -> the profiles whose sbatch script submits to it (``#SBATCH -p``)."""
+    found: dict[str, list[str]] = {}
+    for pool in pools:
+        script = CLUSTER_CONFIG_DIR / pool.name / "submit_job_slurm.sh"
+        if not script.is_file():
+            continue
+        for line in script.read_text().splitlines():
+            m = re.match(r"#SBATCH\s+(?:-p\s*|--partition[=\s]+)(\S+)", line.strip())
+            if m:
+                found.setdefault(m.group(1), []).append(pool.name)
+                break
+    return found
+
+
 def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
     """Probe every job of the login's user once, for all profiles that share that login.
 
@@ -365,14 +398,15 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
         pools: Profiles that use this login.
 
     Returns:
-        One report for the login plus one error report per job whose cards could not be probed.
+        One report per partition the profiles submit to (or a job sits in), labelled ``site (profile, ...)``, plus one
+        error report per job whose cards could not be probed; a login-wide failure is one report for the login.
     """
     parts = login.split("@")[-1].split(".")
     site = next((p for p in parts if not p.startswith("login")), parts[0])
     label = f"{site} ({', '.join(p.name for p in pools)})"
     if not _master_alive(login):
         return [
-            Report(label, "slurm", error=f"SSH master down: state unknown (just cluster {pools[0].name} develop open)")
+            Report(label, "slurm", error=f"SSH master down: state unknown (pls cluster {pools[0].name} develop open)")
         ]
     fmt = "%i|%P|%a|%T|%N|%D|%L|%S|%b|%j"
     try:
@@ -381,44 +415,79 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
         return [Report(label, "slurm", error="squeue timed out")]
     if res.returncode != 0:
         return [Report(label, "slurm", error=f"squeue failed: {res.stderr.strip()[:200]}")]
-    report, failed = Report(label, "slurm", owner=login.split("@")[0]), []
+    owner, failed = login.split("@")[0], []
+    spelling = profile_accounts(pools)
+    by_partition = profile_partitions(pools)
+    reports: dict[str, Report] = {}
+
+    def report_for(part: str) -> Report:  # one report per partition, named after the profiles submitting there
+        if part not in reports:
+            reports[part] = Report(f"{site} ({', '.join(by_partition.get(part, [part]))})", "slurm", owner=owner)
+        return reports[part]
+
+    for part in by_partition:
+        report_for(part)
+    unparsable: list[str] = []
     for line in res.stdout.splitlines():
         f = line.split("|", 9)
         if len(f) < 10:
-            report.notes.append(f"unparsable squeue line: {line[:120]}")
-            report.partial = True
+            unparsable.append(f"unparsable squeue line: {line[:120]}")
             continue
         jobid, part, acct, state, node, nnodes, left, start, gres, name = f
+        report = report_for(part)
         if state == "PENDING":
             report.notes.append(f"job {jobid} ({part}, {name}) PENDING, est. start {start}")
             continue
         if state != "RUNNING":
-            failed.append(Report(f"{label} job {jobid}", "slurm", error=f"job is {state}: its cards are unknown"))
+            failed.append(Report(f"{report.pool} job {jobid}", "slurm", error=f"job is {state}: its cards are unknown"))
             continue
         node = node.split(",")[0]
-        # -p/-A because TACC refuses overlap steps without them on multi-project accounts
-        opts = f"--jobid={jobid} --overlap --immediate=10 --job-name=res-probe -N1 -n1 -t 00:02:00"
-        opts += (f" -p {part}" if part else "") + (f" -A {acct}" if acct and acct != "(null)" else "")
-        remote = f"timeout 45 srun {opts} {REMOTE_QUERY}"
-        try:
-            step = _run(["ssh", *MASTER_OPTS, *SSH_OPTS, login, remote], timeout=60)
-            cards = parse_gpu_query(step.stdout, report.pool, node)
-        except subprocess.TimeoutExpired:
-            failed.append(Report(f"{label} job {jobid}", "slurm", error=f"GPU probe on {node} timed out"))
-            continue
-        except ProbeError as exc:
-            tail = step.stderr.strip()[-160:]
-            failed.append(Report(f"{label} job {jobid}", "slurm", error=f"GPU probe on {node}: {exc} {tail}".strip()))
+        # -p/-A because TACC refuses overlap steps without them on multi-project accounts, and -A as the profile
+        # spells it
+        acct = spelling.get(acct.lower(), acct)
+        # an account no profile names (a job moved with scontrol) only has squeue's lowercase; TACC wants it upper
+        accts = [acct, acct.upper()] if acct and acct != "(null)" and acct != acct.upper() else [acct]
+        cards = None
+        for i, a in enumerate(accts):
+            opts = f"--jobid={jobid} --overlap --immediate=10 --job-name=res-probe -N1 -n1 -t 00:02:00"
+            opts += (f" -p {part}" if part else "") + (f" -A {a}" if a and a != "(null)" else "")
+            remote = f"timeout 45 srun {opts} {REMOTE_QUERY}"
+            try:
+                step = _run(["ssh", *MASTER_OPTS, *SSH_OPTS, login, remote], timeout=60)
+                cards = parse_gpu_query(step.stdout, report.pool, node)
+                break
+            except subprocess.TimeoutExpired:
+                failed.append(Report(f"{report.pool} job {jobid}", "slurm", error=f"GPU probe on {node} timed out"))
+                break
+            except ProbeError as exc:
+                if i + 1 < len(accts) and "Unknown project" in f"{exc} {step.stdout} {step.stderr}":
+                    continue
+                tail = step.stderr.strip()[-160:]
+                error = f"GPU probe on {node}: {exc} {tail}".strip()
+                failed.append(Report(f"{report.pool} job {jobid}", "slurm", error=error))
+                break
+        if cards is None:
             continue
         for card in cards:
             card.job, card.wall_left = jobid, left
         report.cards.extend(cards)
         if nnodes.isdigit() and int(nnodes) > 1:
-            failed.append(Report(f"{label} job {jobid}", "slurm", error=f"probed 1 of {nnodes} nodes"))
+            failed.append(Report(f"{report.pool} job {jobid}", "slurm", error=f"probed 1 of {nnodes} nodes"))
         alloc = _gres_gpus(gres)
         if alloc is not None and alloc > len(cards):
             msg = f"saw {len(cards)} of {alloc} allocated cards; {alloc - len(cards)} unknown"
-            failed.append(Report(f"{label} job {jobid}", "slurm", error=msg))
-    if not report.cards and not report.notes and not failed:
-        report.notes.append("no jobs held")
-    return [report, *failed]
+            failed.append(Report(f"{report.pool} job {jobid}", "slurm", error=msg))
+    # a line squeue garbled could be any partition's job, so no report of this login is complete
+    if unparsable:
+        for report in list(reports.values()) or [reports.setdefault("", Report(label, "slurm", owner=owner))]:
+            report.notes.extend(unparsable)
+            report.partial = True
+    for part, report in reports.items():
+        if (
+            part
+            and not report.cards
+            and not report.notes
+            and not any(f.pool.startswith(f"{report.pool} job ") for f in failed)
+        ):
+            report.notes.append("no jobs held")
+    return [*sorted(reports.values(), key=lambda r: r.pool), *failed]

@@ -35,8 +35,8 @@ STAGE="${TMPDIR:-/tmp}/cluster_dev_${SLURM_JOB_ID:-box}"
 SIF="${STAGE}/${PROFILE}.sif"
 
 stage_once() {
-    # Copy the .sif to node-local scratch once; re-copy if a newer one was pushed, so `cluster.sh
-    # repush` takes effect without clearing the node cache. (Kit writes go to a --writable-tmpfs overlay.)
+    # Copy the .sif to node-local scratch once; re-copy if a newer one was pushed, so `pls cluster <name>
+    # setup --push-only` takes effect without clearing the node cache. (Kit writes go to a --writable-tmpfs overlay.)
     local src="${CLUSTER_SIF_PATH}/${PROFILE}.sif"
     [ -f "$SIF" ] && [ ! "$src" -nt "$SIF" ] && return 0
     mkdir -p "$STAGE"
@@ -74,6 +74,13 @@ if [ $# -eq 1 ]; then cmd="bash -c $(printf %q "$1")"; elif [ $# -gt 1 ]; then c
 # in-repo resource symlinks need the asset repos mounted. The entrypoint PYTHONPATHs only the packages.
 # NODE_EXEC_RESOURCES (set by `exec --tree`) points at a staged tree's resources/ instead of the shared one.
 RESOURCES="${NODE_EXEC_RESOURCES:-${CLUSTER_ISAACLAB_DIR}/resources}"
+IN_USE="" OWN_TMP=""
+cleanup() {  # one EXIT trap for both: the tree's in-use marker and a step's own /tmp
+    [ -n "$IN_USE" ] && rm -f "$IN_USE"
+    [ -n "$OWN_TMP" ] && rm -rf "$OWN_TMP"
+    return 0
+}
+trap cleanup EXIT
 # run logs and checkpoints; a profile points CLUSTER_LOGS_DIR off a quota'd home
 LOGS_DIR="${CLUSTER_LOGS_DIR:-${CLUSTER_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs}"
 if [ -n "${NODE_EXEC_RESOURCES:-}" ]; then
@@ -84,7 +91,6 @@ if [ -n "${NODE_EXEC_RESOURCES:-}" ]; then
         IN_USE="$(dirname "$RESOURCES")/.in-use/$(hostname -s).$$"
     fi
     mkdir -p "$(dirname "$IN_USE")" && touch "$IN_USE"
-    trap 'rm -f "$IN_USE"' EXIT
     trap 'exit 143' TERM INT HUP
 fi
 EXT_BINDS=""
@@ -117,8 +123,8 @@ for d in "${RESOURCES}"/*/; do
 done
 [ -d "${RESOURCES}/IsaacLab/source" ] && \
     EXT_BINDS="$EXT_BINDS -B $(readlink -f "${RESOURCES}/IsaacLab/source"):/workspace/isaaclab_source:rw"
-# artifacts/ is the structural out-of-sync tree (see cluster_dev.sh rsync_code): cluster-only INPUT
-# data staged there still has to be readable inside the container, which the resources/* glob misses.
+# artifacts/ holds cluster-only INPUT data no tree carries; it still has to be readable inside the container,
+# which the resources/* glob misses.
 [ -d "${CLUSTER_ISAACLAB_DIR}/artifacts" ] && \
     EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/artifacts:/workspace/artifacts:rw"
 # Bind list mirrors scripts/cluster/run_singularity.sh -- with extra `-B ...:/u/esturman` so HOME is
@@ -130,10 +136,19 @@ export APPTAINERENV_WANDB_USERNAME="${WANDB_USERNAME:-}" APPTAINERENV_WANDB_API_
 # segfaults at startup on drivers that report a UINT64_MAX maxMemoryAllocationSize (595.71, 615.71)
 VK_BINDS=""
 VKCLAMP_DIR="${CLUSTER_VKCLAMP_DIR:-${CLUSTER_SIF_PATH}/vkclamp}"
-if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ]; then
+if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ] && [ "$(uname -m)" = x86_64 ]; then  # the layer is an x86 build
     VK_BINDS="-B ${VKCLAMP_DIR}:/opt/vkclamp:ro"
     export APPTAINERENV_XDG_CONFIG_DIRS="/opt/vkclamp/conf:/etc/xdg"
 fi
+# NODE_EXEC_OWN_TMP=1 (develop exec --own-tmp): this step's /tmp is its own, not the job's shared one, so steps on
+# one node never meet in Isaac Lab's hard-coded /tmp/IsaacLab (its URDF->USD conversions race); /tmp/cache stays the
+# job's, so caches kept there persist across steps
+STEP_TMP="${STAGE}/tmp" CACHE_BIND=""
+if [ "${NODE_EXEC_OWN_TMP:-}" = 1 ]; then
+    OWN_TMP="$(mktemp -d "${STAGE}/step-tmp.XXXXXX")" && STEP_TMP="$OWN_TMP"
+    mkdir -p "${STAGE}/tmp/cache" && CACHE_BIND="-B ${STAGE}/tmp/cache:/tmp/cache:rw"
+fi
+run_container() {
 apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B ${STAGE}/docker-isaac-sim/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -145,6 +160,19 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/docker-isaac-sim/documents:${DOCKER_USER_HOME}/Documents:rw \
     -B ${STAGE}/home:/u/esturman:rw \
     ${EXT_BINDS} ${VK_BINDS} \
-    -B ${STAGE}/tmp:/tmp:rw \
+    -B ${STEP_TMP}:/tmp:rw ${CACHE_BIND} \
     --nv --writable-tmpfs --containall --no-home "$SIF" \
-    bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
+    bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
+}
+
+# A segfault (exit 139) within KIT_BOOT_S of start is Kit crashing during boot (seen on Delta in libX11's getenv),
+# before any run registers with W&B, so it is retried once.
+KIT_BOOT_S=20
+for attempt in 1 2; do
+    start=$SECONDS
+    run_container && rc=0 || rc=$?
+    if [ "$rc" -ne 139 ] || [ $((SECONDS - start)) -ge "$KIT_BOOT_S" ] || [ "$attempt" -eq 2 ]; then
+        exit "$rc"
+    fi
+    echo "[node_exec] the container segfaulted $((SECONDS - start)) s after start (exit 139, a Kit boot crash); retrying once" >&2
+done

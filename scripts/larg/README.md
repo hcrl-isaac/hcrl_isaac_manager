@@ -50,8 +50,9 @@ scripts/larg/train.sh <host> <task> <run_name> [run_group] [num_envs] [-- extra 
 scripts/larg/train.sh --log <host> <task>    # tail the run log + GPU usage
 ```
 
-Runs are sent with `--video async`, so they tag the W&B run for **async video logging** (see below) rather than
-rendering in-process. `run_group` defaults to `larg`; `num_envs` is optional.
+A40 runs record their videos in-process (`--video on`; the Vulkan clamp layer below lets them render). The A100s have
+no RT cores, so their runs pass `--video async`, which tags the W&B run for the async recorder to render on any free
+RT card (an A40, an RTX PRO 6000, a 5090). `run_group` defaults to `larg`; `num_envs` is optional.
 
 | Env var | Purpose |
 | --- | --- |
@@ -64,6 +65,23 @@ Example — a 2-GPU run on physical GPUs 0,1 of `pepi`:
 ```bash
 LARG_NPROC=2 CUDA_VISIBLE_DEVICES=0,1 scripts/larg/train.sh pepi <task> my-run my-group 8192
 ```
+
+### Feature branches: staged code trees
+
+A run on branches other than what the box's workspace has synced goes through a code tree, as on a cluster
+(`develop stage`): named repos at named refs (or local worktrees) land read-only in `<workspace>/trees/<name>-<fingerprint>/`
+on that box, every other repo links to the workspace, and the workspace itself is never touched.
+
+```bash
+scripts/larg/trees.sh stage hazard kick hhlm_tasks=feat/t1-kick-masked-ball hcrl_isaaclab=feat/train-agent-arg
+CUDA_VISIBLE_DEVICES=0 LARG_HOLDER=<you> scripts/larg/train.sh --tree kick hazard hhlm/T1-Kick-v0 kick-s1
+scripts/larg/trees.sh list hazard
+scripts/larg/trees.sh rm hazard kick-<fingerprint>    # refused while a run from it is alive
+```
+
+`--tree <name>` runs from the newest complete tree of that name: its staged repos lead `PYTHONPATH` over the
+workspace's `ilab` venv, and the tree is marked in use for as long as the run lasts. Stop a tree run with the
+`kill -- -<pid>` it prints (its process group). Trees are per box, so stage on the box you launch on.
 
 ## Rendering on LARG: the Vulkan clamp layer
 
@@ -90,8 +108,5 @@ clean render. The A100s have no RT cores, so render on the A40s.
   the best per-GPU env count; `--log <host> <task>` to poll.
 - **`python scripts/larg/pull_gpu_stats.py`** — print GPU utilization/memory across all LARG boxes. Use it to
   find free GPUs before launching, and be a good citizen on shared boxes.
-- **`scripts/larg/video_logger.sh [--loop [secs]] <task> [<entity>/<project>]`** — run the async video logger
-  for LARG runs on a *local* box that can render — not a LARG box, see above (one pass, or repeat
-  every `secs`, default 1800). See
-  [Asynchronous Video Logging](../../README.md#asynchronous-video-logging) for the full workflow and
-  `video_logger.py --mode async` options.
+- **Rendering a `--video async` run:** `pls run --on <host>:<gpu> --holder <you> -- video_recorder --mode async
+  --wandb_project <entity>/<project> --only_run <id> --task <task>` on any free RT card, e.g. an A40. See [Asynchronous Video Logging](../../README.md#asynchronous-video-logging).

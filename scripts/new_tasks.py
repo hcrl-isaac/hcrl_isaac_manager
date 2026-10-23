@@ -85,7 +85,7 @@ def _files(name: str, org: str) -> dict[str, str]:
             "- `example/` -- replace with this project's task domains.\n\n"
             "## Install\n\n"
             f"Normally installed as part of the workspace via the manager: add `{name}` to "
-            "`workspace.defaults.yaml`'s `available_projects`, then select it in the `just setup` picker. "
+            "`workspace.defaults.yaml`'s `available_projects`, then select it in the `pls setup` picker. "
             "Standalone, with core already in the env: `pip install -e .`.\n\n"
             "## Run\n\n"
             "```bash\n"
@@ -178,7 +178,7 @@ def main() -> None:
     print(f"[new] scaffolded {dest} ({name}/ namespace).")
     print(
         f"[new] next: git init it, push to {args.org}/{name}_tasks, add '{name}' to "
-        "workspace.defaults.yaml available_projects, then pick it in `just setup`."
+        "workspace.defaults.yaml available_projects, then pick it in `pls setup`."
     )
 
 

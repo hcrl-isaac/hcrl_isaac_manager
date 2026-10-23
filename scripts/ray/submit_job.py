@@ -136,6 +136,7 @@ if __name__ == "__main__":
         nargs=argparse.REMAINDER,
         help="This should be last argument. The aggregate jobs to submit separated by the * delimiter.",
     )
+    parser.add_argument("--python_script", help="run this worker path instead of the job config's python_script")
     args = parser.parse_args()
     formatted_jobs = split_jobs(args.aggregate_jobs or [])
     if len(formatted_jobs) > 1:
@@ -144,4 +145,6 @@ if __name__ == "__main__":
 
     clusters = read_cluster_spec(args.config_file)
     runtime_env, metadata, other_data = parse_job_config(args.job_config)
+    if args.python_script:
+        other_data["python_script"] = args.python_script
     submit_jobs_to_clusters(formatted_jobs, clusters, runtime_env, metadata, other_data)
