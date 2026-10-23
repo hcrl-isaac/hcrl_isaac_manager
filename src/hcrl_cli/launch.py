@@ -23,7 +23,8 @@ MIN_FREE_GB, LOW_FREE_GB = 10, 50  # a run here is refused below the first and w
 USAGE = """pls run <script> [args]
        pls run [--on TARGET] [--wt NAME] [card options] -- <script> [args]
        pls run [--on TARGET] [--wt NAME] [card options] --cmd -- <command> [args]
-       pls run --on CLUSTER --batch [--tree N | --wt NAME] -- train [args]"""
+       pls run --on CLUSTER --batch [--tree N | --wt NAME] -- train [args]
+       pls run --stop LEASE --holder YOU    (stop a --detach run on that lease and release the lease)"""
 EPILOG = """targets (--on):
   (none)           this machine, with the ilab venv
   host:gpu         that card (host:job:gpu on a SLURM node running several jobs; local:<gpu> = this machine)
@@ -45,6 +46,9 @@ scripts (the same on every target):
 --cmd runs the words after -- as a command instead (e.g. `--cmd -- nvidia-smi`, `--cmd -- python -m pkg`): here from
 where you are, on a card from the box workspace (a SLURM card: the run's work dir), with the ilab venv first on PATH
 (the container's python on SLURM). Ray runs python scripts only.
+
+On a card, {DEVICE} in the script's arguments becomes the leased card's torch device (`--device {DEVICE}`): boxes
+pin cards differently, so a hand-written cuda:N that is not the card is refused.
 
 card options (--holder is required): --holder, --note, --pool, --min-free-gb, --checkpoint, --env, --timeout,
 --stall, --detach, --venv, --root (an Isaac Lab install root's venv, e.g. pogba's 3.x root), --with, --jobs/--out
@@ -221,6 +225,9 @@ def _batch(on: str, wt: str, tree: str, run: list[str]) -> None:
 
 
 def main(argv: list[str]) -> None:
+    if "--stop" in (argv[: argv.index("--")] if "--" in argv else argv):  # stop a detached run: no script
+        handoff([*CARD_CMD, *argv])
+        return
     opts, run = _split(argv)
     ns, extra = parser().parse_known_args(opts)
     os.environ.pop("WT", None)  # --wt is the only worktree selector
