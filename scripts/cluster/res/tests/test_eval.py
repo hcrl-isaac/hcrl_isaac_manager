@@ -5,6 +5,7 @@ commands are real."""
 import argparse
 import contextlib
 import io
+import json
 import os
 import shutil
 import signal
@@ -209,6 +210,35 @@ class TargetTest(unittest.TestCase):
         self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
         self.assertIn("ilab/bin/python", ev.runner_script(t, "/s", "x.py", [], []))
 
+    def test_an_install_root_runs_its_venv_python_on_a_clean_path(self) -> None:
+        t = ev.make_target(Pool("larg", "ssh", {"user": "u"}), "pogba", 1)
+        runner = ev.runner_script(t, "/s", "x.py", [], ["/s/code/r"], root="/var/local/u/isaac3")
+        self.assertIn("py=/var/local/u/isaac3/venv/bin/python", runner)
+        self.assertIn('export PATH="${py%/*}:/usr/bin:/bin"', runner, "torch.compile needs a PATH without LARG's dirs")
+        self.assertIn("export PYTHONPATH=/s/code/r", runner, "the shipped code, not the root's own copies")
+        self.assertNotIn("ilab/bin/python", runner)
+        self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
+
+    def test_device_placeholder_follows_the_hosts_pinning(self) -> None:
+        cvd = ev.make_target(Pool("a100", "ssh", {"user": "u", "pin": "cvd"}), "mckennie", 2)
+        dev = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pepi", 2)
+        with mock.patch.object(ev, "profile_value", return_value="/work/u/isaaclab"):  # no cluster profile in CI
+            slurm = ev.make_target(Pool("amd-rtx", "slurm", {"login": "u@login"}), "c571-003", 3, "1", "GPU-ab")
+        args = ["--device", "{DEVICE}", "agent.device={DEVICE}"]
+        self.assertEqual(ev.fill_device(args, cvd), ["--device", "cuda:0", "agent.device=cuda:0"])
+        self.assertEqual(ev.fill_device(args, dev), ["--device", "cuda:2", "agent.device=cuda:2"])
+        self.assertEqual(ev.fill_device(args, slurm)[1], "cuda:0", "a SLURM card is pinned by UUID")
+
+    def test_a_hand_written_device_for_another_card_is_refused(self) -> None:
+        cvd = ev.make_target(Pool("a100", "ssh", {"user": "u", "pin": "cvd"}), "mckennie", 2)
+        dev = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pepi", 2)
+        with self.assertRaises(SystemExit) as cm:
+            ev.fill_device(["--device", "cuda:2"], cvd)  # an invalid ordinal there
+        self.assertIn("{DEVICE}", str(cm.exception.code))
+        with self.assertRaises(SystemExit):
+            ev.fill_device(["--device", "cuda:0"], dev)  # silently another user's card there
+        self.assertEqual(ev.fill_device(["--device", "cuda:2"], dev), ["--device", "cuda:2"], "the right one is kept")
+
     def test_jax_does_not_preallocate_a_shared_card(self) -> None:
         runner = ev.runner_script(ev.make_target(Pool("a", "ssh", {"user": "u"}), "h", 0), "/s", "x.py", [], [])
         self.assertIn('XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"', runner)
@@ -265,6 +295,8 @@ class SlurmTest(unittest.TestCase):
         self.assertIn("/isaac-sim/python.sh /workspace/ext/r/s.py", runner)
         self.assertIn("/workspace/artifacts/res-eval/x/stop", runner)
         self.assertIn("> /workspace/artifacts/res-eval/x/status", runner)
+        rooted = ev.slurm_runner_script(t, "/x", "/workspace/ext/r/s.py", [], "/c", python="/r/venv/bin/python")
+        self.assertIn("/r/venv/bin/python /workspace/ext/r/s.py", rooted, "--root runs the root's python")
 
     def test_a_named_tree_is_checked_complete_and_touched(self) -> None:
         t = ev.Target("horizon", "slurm", "c101-035", 1, "u@login", "/w", "/w/artifacts", job="57902", uuid="GPU-ab")
@@ -618,6 +650,7 @@ SLURM_SCRIPT = """import os, sys, time
 for k in ("CUDA_VISIBLE_DEVICES", "RES_EVAL_DEVICE", "TMPDIR", "N"):
     print(k, os.environ.get(k, "-"))
 print("CWD", os.getcwd())
+print("DEFAULTS", open("config-defaults.yaml").read() if os.path.exists("config-defaults.yaml") else "-")
 print("PID", os.getpid(), flush=True)
 if os.environ.get("CKPT_A"):
     print("CKPT_A_CONTENT", open(os.environ["CKPT_A"]).read())
@@ -787,6 +820,49 @@ class SlurmEvalTest(Isolated):
         self.assertEqual(Path(stage.dir, "status").read_text().strip(), "130")
         self.assertNotIn("PID", Path(stage.dir, "log").read_text(), "the script never ran")
         self.assertFalse(Path(stage.dir, "env").exists(), "and its credentials are gone")
+
+    def test_an_install_root_reaches_the_step_and_runs_its_python(self) -> None:
+        root = self.tmp / "isaac3"
+        (root / "venv" / "bin").mkdir(parents=True)
+        (root / "venv" / "bin" / "python").symlink_to(sys.executable)
+        rc, out = self._eval("--root", str(root), "--env", "N=3")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("N 3", out)
+        calls = self.calls.read_text().splitlines()
+        self.assertEqual(calls[calls.index("--root") + 1], str(root), "develop exec runs the step in the root's image")
+        self.assertIn(f"python {root}/venv (--root)", out, "the MANIFEST names the root")
+
+    def test_the_runs_refs_reach_its_wandb_config(self) -> None:
+        rc, out = self._eval("--detach")
+        self.assertEqual(rc, 0, out)
+        stage = self._stage()
+        self._status(stage)
+        config = (stage / "wandb_config.yaml").read_text()
+        self.assertIn(f"DEFAULTS {config}", (stage / "log").read_text(), "the run's cwd has it, where wandb.init looks")
+        refs = json.loads(config)["pls_refs"]["value"]
+        head = subprocess.run(["git", "-C", str(self.src), "rev-parse", "HEAD"], capture_output=True, text=True)
+        self.assertEqual(refs["repos"], {"robot_rl": {"commit": head.stdout.strip(), "dirty": 0}})
+        self.assertEqual(refs["tree"], "res-eval-0123456789", "a replay can reuse the staged tree")
+        self.assertEqual(refs["manifest"], (stage / "MANIFEST").read_text().splitlines())
+
+    def test_a_dirty_worktree_is_refused_before_a_lease(self) -> None:
+        (self.src / "mod.py").write_text("x = 2\n")
+        rc, _ = self._eval("--wt", "wt")
+        self.assertIn("robot_rl (1 changed)", str(rc))
+        self.assertIn("--allow-dirty", str(rc))
+        self.assertEqual(self._leases(), [])
+        rc, out = self._eval("--wt", "wt", "--allow-dirty", "--detach")
+        self.assertEqual(rc, 0, out)
+        stage = self._stage()
+        self._status(stage)
+        self.assertIn("--allow-dirty", (stage / "MANIFEST").read_text())
+        refs = json.loads((stage / "wandb_config.yaml").read_text())["pls_refs"]["value"]
+        self.assertEqual(refs["repos"]["robot_rl"]["dirty"], 1)
+
+    def test_venv_is_refused_on_a_slurm_card(self) -> None:
+        rc, _ = self._eval("--venv", "hcrl_sim2real[mjx]")
+        self.assertIn("--venv runs on box cards only", str(rc))
+        self.assertEqual(self._leases(), [])
 
     def test_a_card_the_step_cannot_see_fails_fast(self) -> None:
         self.uuid = "GPU-elsewhere"
@@ -1090,13 +1166,71 @@ class EvalRunTest(Isolated):
         pid = self._pid((stage / "log").read_text())
         self.assertTrue(_alive(pid))
         self.assertFalse((stage / "env").exists(), "credentials removed once the run read them")
-        stop = next(line.split("stop:", 1)[1].strip() for line in out.splitlines() if "stop:" in line)
-        subprocess.run(["bash", "-c", stop], check=True)
-        for _ in range(50):
-            if not _alive(pid):
-                break
-            time.sleep(0.2)
-        self.assertFalse(_alive(pid))
+        [lease] = self._leases()
+        self.assertEqual(lease.stage, str(stage), "the lease records the detached run's stage")
+        self.assertIn(f"pls run --stop {lease.id} --holder me", out)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(ev.cmd_stop(f"lease:{lease.id}", "me", [self.pool]), 0, err.getvalue())
+        self.assertFalse(_alive(pid), "the run's process group is gone")
+        self.assertEqual(self._leases(), [], "the lease is released once the run is gone")
+        self.assertTrue((stage / "log").exists(), "a stopped run keeps its log")
+
+    def test_a_scripts_own_stop_flag_is_passed_through(self) -> None:
+        """--stop after -- belongs to the script: main() runs the script instead of stopping a lease."""
+        with (
+            mock.patch.object(ev, "cmd_eval") as run,
+            mock.patch.object(ev, "cmd_stop") as stop,
+            mock.patch.object(res, "load_pools", return_value=[self.pool]),
+        ):
+            ev.main([str(self.script), "--holder", "me", "--any", "--", "--stop", "5"])
+        stop.assert_not_called()
+        self.assertEqual(run.call_args.args[0].script_args, ["--stop", "5"])
+
+    def test_stop_refuses_another_holders_lease_and_keeps_a_live_runs(self) -> None:
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        [lease] = self._leases()
+        with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(io.StringIO()):
+            ev.cmd_stop(lease.id, "someone-else", [self.pool])
+        self.assertIn("held by me", str(cm.exception.code))
+        with mock.patch.object(ev.Stage, "kill", return_value=False), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 1, "a run that may still live keeps the lease")
+        self.assertEqual(len(self._leases()), 1)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 0)
+        self.assertEqual(self._leases(), [])
+
+    def test_the_device_placeholder_reaches_the_script_filled(self) -> None:
+        rc, out = self._eval("--any", "--env", "MODE=ok", "--", "--device", "{DEVICE}")
+        self.assertEqual(rc, 0, out)
+        want = ev.run_device(ev.make_target(self.pool, "box", 1))
+        self.assertIn(f"ARGV ['--device', '{want}']", out)
+
+    def test_a_wrong_device_is_refused_before_staging_and_frees_the_lease(self) -> None:
+        rc, _ = self._eval("--any", "--", "--device", "cuda:7")
+        self.assertIn("{DEVICE}", str(rc))
+        self.assertEqual(self._leases(), [], "the lease is released")
+        self.assertEqual(self._stages(), [], "nothing was staged")
+
+    def test_an_install_root_runs_the_script_with_its_python(self) -> None:
+        root = self.tmp / "isaac3"
+        (root / "venv" / "bin").mkdir(parents=True)
+        (root / "venv" / "bin" / "python").symlink_to(sys.executable)
+        rc, out = self._eval("--any", "--root", str(root), "--env", "MODE=ok")
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"python={root}/venv/bin/python", out)
+        self.assertIn(f"python {root}/venv (--root)", out, "the MANIFEST names the root")
+        self.assertIn("MODE ok", out)
+
+    def test_a_missing_root_venv_fails_the_run(self) -> None:
+        rc, out = self._eval("--any", "--root", str(self.tmp / "nowhere"))
+        self.assertEqual(rc, 97, out)
+        self.assertIn("no Isaac Lab root venv", out)
+
+    def test_root_and_venv_are_exclusive(self) -> None:
+        rc, _ = self._eval("--any", "--root", "/r", "--venv", "hcrl_sim2real[mjx]")
+        self.assertIn("pass one", str(rc))
 
     def test_exactly_one_card_selector(self) -> None:
         rc, _ = self._eval("--any", "--on", "box:1")

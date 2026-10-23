@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import json
 import os
 import queue
 import re
@@ -160,6 +161,32 @@ def fill_checkpoints(script_args: list[str], paths: dict[str, str]) -> list[str]
         for name, path in paths.items():
             arg = arg.replace("{" + name + "}", path)
         filled.append(arg)
+    return filled
+
+
+_CUDA = re.compile(r"\bcuda:(\d+)\b")
+
+
+def run_device(t: Target) -> str:
+    """The torch device the leased card is inside the run: cuda:0 where CUDA_VISIBLE_DEVICES pins it (SLURM, cvd
+    boxes), else its own index (device-pinned boxes, where every card stays visible)."""
+    return "cuda:0" if t.kind == "slurm" or t.pin == "cvd" else f"cuda:{t.gpu}"
+
+
+def fill_device(script_args: list[str], t: Target) -> list[str]:
+    """The script's arguments with ``{DEVICE}`` replaced by the leased card's device; exits on any other ``cuda:N``.
+
+    Boxes pin a card differently (CUDA_VISIBLE_DEVICES or not), so a hand-written ``cuda:N`` is wrong on some of them:
+    an invalid ordinal, or silently another user's card.
+    """
+    device = run_device(t)
+    filled = [arg.replace("{DEVICE}", device) for arg in script_args]
+    if wrong := sorted({f"cuda:{n}" for arg in filled for n in _CUDA.findall(arg)} - {device}):
+        sys.exit(
+            f"[res] the script arguments name {', '.join(wrong)}, but the leased card is {device} inside this run on"
+            f" {t.host} ({'CUDA_VISIBLE_DEVICES pins it' if device == 'cuda:0' else 'every card stays visible'});"
+            " write {DEVICE} instead (e.g. --device {DEVICE}) and pls run fills it in"
+        )
     return filled
 
 
@@ -375,6 +402,35 @@ def code_fingerprint(src: str) -> tuple[str, str]:
     return h.hexdigest()[:12], f"{commit} dirty={len(changed)}"
 
 
+def git_ref(src: str) -> dict | None:
+    """A checkout's full commit and count of uncommitted paths, or None when it is not a git checkout."""
+    try:
+        status = _git(src, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+        return {"commit": _head(src), "dirty": len(_changed_paths(status))}
+    except (subprocess.CalledProcessError, OSError):
+        return None
+
+
+def dirty_worktrees(workspace: str, wt: str) -> list[str]:
+    """The worktree set's checkouts with uncommitted changes, as ``<repo> (<n> changed)``.
+
+    A run ships them as they are on disk, so its recorded commits would not restage the code it ran.
+
+    Args:
+        workspace: Manager checkout whose resources/ holds the repos.
+        wt: Worktree-set name.
+    """
+    resources = os.path.join(workspace, "resources")
+    dirty = []
+    for repo, src in {**local_code(workspace, wt), **local_data(workspace, wt)}.items():
+        if os.path.realpath(src) == os.path.realpath(os.path.join(resources, repo)):
+            continue  # a main checkout ships at its HEAD commit, its edits left behind
+        ref = git_ref(src)
+        if ref and ref["dirty"]:
+            dirty.append(f"{repo} ({ref['dirty']} changed)")
+    return dirty
+
+
 def _describe(src: str) -> str:
     """A checkout's commit and dirty count, or a note when it is not a git checkout."""
     try:
@@ -430,6 +486,8 @@ def runner_script(
     cwd: str = "",
     command: bool = False,
     venv: tuple[str, list[str], str] | None = None,
+    root: str = "",
+    refs: str = "",
 ) -> str:
     """The bash that runs on the target: a stage log, isolated caches, the given PYTHONPATH, the script's status.
 
@@ -442,6 +500,9 @@ def runner_script(
         cwd: Directory to run the script from (default: the target workspace).
         command: Run the arguments as a command line, the ilab venv first on PATH, instead of the script.
         venv: A tool venv (dir, requirements, python version) to run with instead of ilab, built on first use.
+        root: An Isaac Lab install root on the target whose ``venv`` runs the script instead of ilab.
+        refs: The stage's W&B config file, copied into ``cwd`` (the run's own) as the ``config-defaults.yaml`` that
+            ``wandb.init`` loads.
 
     Returns:
         The run.sh text.
@@ -467,11 +528,12 @@ export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y PYTHONUNBUFFERED=1 PYTHONPYCACHEPR
 # cards are shared: JAX takes memory as it needs it, not 75% of the card up front (--env may still set it)
 export XLA_PYTHON_CLIENT_PREALLOCATE="${{XLA_PYTHON_CLIENT_PREALLOCATE:-false}}"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR" "$HCRL_ARTIFACT_ROOT"
-{_venv_lines(t, venv) if venv else _ilab_lines()}
+{_venv_lines(t, venv) if venv else _root_lines(root) if root else _ilab_lines()}
 export PYTHONPATH={q(":".join(pythonpath))}"${{PYTHONPATH:+:$PYTHONPATH}}"
 cat {q(stage + "/MANIFEST")}
 echo "[res] {t.host}:gpu{t.gpu} ({t.pin}) python=$py env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
+{f"cp {q(refs)} config-defaults.yaml" if refs else ""}
 {launch}
 """
 
@@ -482,6 +544,19 @@ def _ilab_lines() -> str:
         'gomp="$(ls ilab/lib/python3.*/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)"\n'
         '[ -n "$gomp" ] && export LD_PRELOAD="$gomp${LD_PRELOAD:+:$LD_PRELOAD}"\n'
         'py="$PWD/ilab/bin/python"'
+    )
+
+
+def _root_lines(root: str) -> str:
+    """run.sh lines selecting an Isaac Lab install root's venv python (e.g. pogba's Isaac Lab 3 root)."""
+    q = shlex.quote
+    return (
+        f"py={q(root + '/venv/bin/python')}\n"
+        f'[ -x "$py" ] || {{ echo "[res] no Isaac Lab root venv at $py on $(hostname)"; exit 97; }}\n'
+        f'gomp="$(ls {q(root)}/venv/lib/python3.*/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)"\n'
+        '[ -n "$gomp" ] && export LD_PRELOAD="$gomp${LD_PRELOAD:+:$LD_PRELOAD}"\n'
+        # an unreadable dir on a box's default PATH makes Inductor's nvcc lookup raise, failing every torch.compile
+        'export PATH="${py%/*}:/usr/bin:/bin"'
     )
 
 
@@ -631,7 +706,14 @@ STOP_WAIT_S = 90  # how long a stop waits for the runner's status: its TERM/KILL
 
 
 def slurm_runner_script(
-    t: Target, stage: str, script: str, env_names: list[str], cwd: str, python: str = "", command: bool = False
+    t: Target,
+    stage: str,
+    script: str,
+    env_names: list[str],
+    cwd: str,
+    python: str = "",
+    command: bool = False,
+    refs: str = "",
 ) -> str:
     """The bash that runs inside the container on a SLURM node: pin by UUID, run, stop on request, record status.
 
@@ -643,6 +725,8 @@ def slurm_runner_script(
         cwd: Directory to run the script from, in the container.
         python: The interpreter (default: ``CONTAINER_PYTHON``).
         command: Run the arguments as a command line instead of the script.
+        refs: The stage's W&B config file, copied into ``cwd`` as the ``config-defaults.yaml`` that ``wandb.init``
+            loads.
 
     Returns:
         The run.sh text. The container hides its processes from the node, so ``<stage>/heartbeat`` shows the run
@@ -677,6 +761,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 cat {s["MANIFEST"]}
 echo "[res] {t.host}:gpu{t.gpu} job {t.job} (uuid) env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd)} && cd {q(cwd)} || {{ echo 97 > {s["status"]}; exit 97; }}
+{f"cp {q(refs)} config-defaults.yaml" if refs else ""}
 script_from=$(( $(stat -c %s {s["log"]}) + 1 ))  # the traceback check reads only the script's own output
 setsid {launch} &
 child=$!
@@ -730,6 +815,8 @@ class Stage:
         self.proc: subprocess.Popen | None = None
         self.dead = False
         self.tree = ""  # the staged code tree a SLURM run uses
+        self.refs: dict[str, dict] = {}  # repo -> the commit and dirty count it ships at (W&B config pls_refs)
+        self.root = ""  # an Isaac Lab install root a SLURM run's step uses instead of the cluster's image (--root)
 
     def _ssh(self, cmd: str, **kw: object) -> subprocess.CompletedProcess:
         return subprocess.run(["ssh", *self.t.ssh_opts, self.t.ssh, cmd], **kw)
@@ -911,6 +998,7 @@ class Stage:
                     f" ({', '.join(pointers[:3])}{', ...' if len(pointers) > 3 else ''}): run `git lfs pull` there"
                 )
         if self.t.kind == "local":
+            self.refs = {repo: ref for repo, src in code.items() if (ref := git_ref(src))}
             return list(code.values()), [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
         main = os.path.join(local_workspace(), "resources")
         worktree = {
@@ -923,6 +1011,8 @@ class Stage:
             if repo not in worktree:
                 with contextlib.suppress(subprocess.CalledProcessError):
                     heads[repo] = _head(src)
+        self.refs = {repo: ref for repo, src in {**worktree, **data}.items() if (ref := git_ref(src))}
+        self.refs.update({repo: {"commit": head, "dirty": 0} for repo, head in heads.items()})
         kept = f"{self.t.workspace}/resources"
         if self.t.kind == "slurm":
             # develop stage checks a commit out clean
@@ -1042,7 +1132,8 @@ class Stage:
         tree = ["--tree", self.tree] if self.tree else []
         # --own-tmp: runs sharing a node never meet in the container's /tmp (Isaac Lab's /tmp/IsaacLab conversions)
         own = ["--own-tmp"]
-        return cluster_dev_cmd(self.t.pool, self.t.job, "exec", *tree, *own, *opts, "--", "bash", run_sh, *argv)
+        root = ["--root", self.root] if self.root else []
+        return cluster_dev_cmd(self.t.pool, self.t.job, "exec", *tree, *own, *root, *opts, "--", "bash", run_sh, *argv)
 
     def kill(self) -> bool:
         """Kill the runner's process group on the target (TERM, then KILL) and report whether it is gone."""
@@ -1060,10 +1151,12 @@ class Stage:
             self.dead = _kill_local_group(self.proc)
             return self.dead
         q = shlex.quote
+        # alive = a process of the group that is not a zombie (an unreaped exit holds no card)
+        live = "ps -eo pgid=,stat= | awk -v p=$p '$1 == p && $2 !~ /^Z/ {f=1} END {exit !f}'"
         script = (
             f"p=$(cat {q(self.dir)}/pid 2>/dev/null) || exit 0; kill -TERM -- -$p 2>/dev/null; "
-            "for _ in $(seq 20); do kill -0 -- -$p 2>/dev/null || exit 0; sleep 0.5; done; "
-            "kill -KILL -- -$p 2>/dev/null; sleep 1; ! kill -0 -- -$p 2>/dev/null"
+            f"for _ in $(seq 20); do {live} || exit 0; sleep 0.5; done; "
+            f"kill -KILL -- -$p 2>/dev/null; sleep 1; ! {live}"
         )
         self.dead = self.sh(script) == 0
         if self.proc is not None and self.proc.poll() is None:
@@ -1318,7 +1411,17 @@ def _repo_script(spec: str, wt: str) -> tuple[str, str]:
     return repo, rel
 
 
-def _print_detached(stage: Stage, taken: ls.Lease | None) -> None:
+def _record_stage(lease_id: str, stage_dir: str) -> None:
+    """Note the detached run's stage on its lease, so `pls run --stop <lease>` finds it."""
+    if not lease_id:
+        return
+    with ls.locked_store() as leases:
+        for lease in leases:
+            if lease.id == lease_id:
+                lease.stage = stage_dir
+
+
+def _print_detached(stage: Stage, lease_id: str, holder: str) -> None:
     """How to follow, stop and release a detached run."""
     q = shlex.quote
     opts = " ".join(q(o) for o in stage.t.ssh_opts) if stage.t.kind == "slurm" else ""
@@ -1330,19 +1433,68 @@ def _print_detached(stage: Stage, taken: ls.Lease | None) -> None:
     where = f"{stage.t.host}:gpu{stage.t.gpu}" + (f" of job {stage.t.job}" if stage.t.job else "")
     print(f"[res] started detached on {where} (stage {stage.dir})", file=sys.stderr)
     print(f"[res] follow: {on('tail -f ' + q(stage.dir + '/log'))}", file=sys.stderr)
-    if stage.t.kind == "slurm":
+    if lease_id:
+        print(
+            f"[res] stop:   pls run --stop {lease_id} --holder {q(holder)}  (stops the run, releases the lease)",
+            file=sys.stderr,
+        )
+    elif stage.t.kind == "slurm":
         print(f"[res] stop:   {on('touch ' + q(stage.dir + '/stop'))}", file=sys.stderr)
+    else:
+        print(f"[res] stop:   {on('kill -TERM -- -$(cat ' + q(stage.dir + '/pid') + ')')}", file=sys.stderr)
+    if stage.t.kind == "slurm":
         print(
             f"[res] alive while {stage.dir}/heartbeat is fresh (every {HEARTBEAT_S} s); the exit status lands in status",
             file=sys.stderr,
         )
-    else:
-        print(f"[res] stop:   {on('kill -TERM -- -$(cat ' + q(stage.dir + '/pid') + ')')}", file=sys.stderr)
-    if taken is not None:
+    if lease_id:
         print(
-            f"[res] lease {taken.id} stays held; it releases once the card idles, or: pls res release {taken.id}",
+            f"[res] lease {lease_id} stays held while the run lives; it releases once the card idles", file=sys.stderr
+        )
+
+
+def cmd_stop(lease_id: str, holder: str, pools: list[Pool]) -> int:
+    """Stop the detached run on a lease (`pls run --stop`), keep its log, and release the lease once it is gone.
+
+    Args:
+        lease_id: The lease the run was started on (its id, or ``lease:<id>``).
+        holder: The caller, who must hold the lease.
+        pools: Configured pools.
+
+    Returns:
+        0 when the run is gone and the lease released, 1 when the run may still hold the card.
+    """
+    lease_id = lease_id.removeprefix("lease:")
+    pool, host, gpu, job, uuid_ = _lease_card(lease_id, holder, pools)
+    with ls.locked_store() as leases:
+        stage_dir = next(x.stage for x in leases if x.id == lease_id)
+    t = make_target(pool, host, gpu, job, uuid_)
+    if stage_dir:
+        stage = Stage(t)
+        stage.dir = stage_dir
+        gone = stage.kill()
+        print(
+            f"[res] stopped the run in {stage_dir} ({'gone' if gone else 'STILL RUNNING, check the card'})",
             file=sys.stderr,
         )
+        if gone:
+            stage.remove(keep_log=True)
+            where = t.ssh if t.kind == "slurm" else t.host
+            print(f"[res] log kept at {where}:{stage_dir}/log", file=sys.stderr)
+    else:
+        gone = True
+        print(
+            f"[res] lease {lease_id} records no detached run (started before --stop existed, or attached);"
+            " releasing it only",
+            file=sys.stderr,
+        )
+    if not gone:
+        print(f"[res] KEPT lease {lease_id}: the run may still hold the card", file=sys.stderr)
+        return 1
+    with ls.locked_store() as leases:
+        leases[:] = [x for x in leases if x.id != lease_id]
+    print(f"[res] released {lease_id}", file=sys.stderr)
+    return 0
 
 
 def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> None:
@@ -1365,11 +1517,18 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         sys.exit("[res] several leases (lease:A,B) run a job list: add --jobs FILE --out DIR")
     if sum(map(bool, (args.on, args.any, args.lease))) != 1:
         sys.exit("[res] pick the card with exactly one of --on host:gpu, --any or --lease <id>")
+    if args.venv and args.root:
+        sys.exit("[res] --venv builds a venv and --root uses an install root's: pass one")
     env = parse_env(args.env or [])
     refs = parse_checkpoints(args.checkpoint or [])
     siblings = sibling_args(args.with_ or [])
     if clash := sorted(set(env) & {SIBLINGS[n].env for n in siblings}):
         sys.exit(f"[res] --env {', '.join(clash)} and --with both set it; --with points it at the shipped copy")
+    if args.wt and not args.tree and not args.allow_dirty and (dirty := dirty_worktrees(local_workspace(), args.wt)):
+        sys.exit(
+            f"[res] --wt {args.wt} has uncommitted changes in {', '.join(dirty)}: commit them, since a replay restages"
+            " the run's recorded commits, or pass --allow-dirty"
+        )
     taken, job, uuid = None, "", ""
     if args.lease:
         pool, host, gpu, job, uuid = _lease_card(args.lease, args.holder, pools)
@@ -1404,6 +1563,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if pool is None:  # inside the try, so a refusal still releases the lease
             pool = slurm_profile(rep.pool, job, pools)
         t = make_target(pool, host, gpu, job, uuid)
+        run_args = fill_device(run_args, t)  # before staging, so a wrong cuda:N costs nothing
         staging = _LeaseHeartbeat(taken.id if taken is not None else args.lease or "").start()
         stage = Stage(t)
         stage.make()
@@ -1426,7 +1586,14 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             else:
                 env[sib.env], line = stage.snapshot(name, src, outputs=False, only=sib.dirs)
                 manifest.append(f"{line} ({', '.join(sib.dirs)} only, {sib.env})")
+        if args.root:
+            manifest.append(f"python {args.root}/venv (--root)")
+        if args.allow_dirty:
+            manifest.append("--allow-dirty: a worktree's uncommitted changes ship too")
         stage.write("\n".join(manifest) + "\n", "MANIFEST", mode=0o644)
+        # the code a run ran, for its W&B config under pls_refs: a replay restages the commits, or --tree reuses the tree
+        pls_refs = {"repos": stage.refs, "tree": stage.tree, "wt": args.wt, "root": args.root, "manifest": manifest}
+        stage.write(json.dumps({"pls_refs": {"value": pls_refs}}) + "\n", "wandb_config.yaml", mode=0o644)
         # snapshots are read-only, runs may be concurrent and a stage is removed after a success, so relative outputs
         # (train.py's logs/, a census's tables) go to a writable working dir of this run's own, kept afterwards
         work = container_path(t, f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}")
@@ -1438,22 +1605,49 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         else:
             put = stage.put(script, os.path.basename(script), mode=0o644)
             cwd, target_script = work if t.kind == "slurm" else "", container_path(t, put)
+        # wandb.init reads config-defaults.yaml from the cwd; only a run's own work dir gets one, never the workspace
+        refs_file = container_path(t, f"{stage.dir}/wandb_config.yaml") if cwd == work else ""
         lines = [f"{k}={shlex.quote(v)}" for k, v in {**wandb_env(), **env, **paths}.items()]
         stage.write("\n".join(lines) + "\n", "env")
         names = sorted({**env, **paths})
         if t.kind == "slurm":
             if args.venv:
                 sys.exit("[res] --venv runs on box cards only; a SLURM run uses the cluster's container")
-            runner = slurm_runner_script(t, container_path(t, stage.dir), target_script, names, cwd, command=args.cmd)
+            # --root: the step runs in the root's bookworm image (develop exec --root), the same mounts as ilab's
+            stage.root = args.root
+            python = f"{args.root}/venv/bin/python" if args.root else ""
+            runner = slurm_runner_script(
+                t,
+                container_path(t, stage.dir),
+                target_script,
+                names,
+                cwd,
+                python=python,
+                command=args.cmd,
+                refs=refs_file,
+            )
         else:
             venv = tool_venv(args.venv, code, t.scratch) if args.venv else None
-            runner = runner_script(t, stage.dir, target_script, names, pythonpath, cwd, command=args.cmd, venv=venv)
+            runner = runner_script(
+                t,
+                stage.dir,
+                target_script,
+                names,
+                pythonpath,
+                cwd,
+                command=args.cmd,
+                venv=venv,
+                root=args.root,
+                refs=refs_file,
+            )
         stage.write(runner, "run.sh", mode=0o700)
         staging.stop()
         if args.detach:
             stage.start_detached(fill_checkpoints(run_args, paths))
             detached = True
-            _print_detached(stage, taken)
+            held = taken.id if taken is not None else args.lease or ""
+            _record_stage(held, stage.dir)
+            _print_detached(stage, held, args.holder)
             rc = 0
         else:
             print(
@@ -1549,6 +1743,14 @@ def parser() -> argparse.ArgumentParser:
         " (e.g. hcrl_sim2real[mjx]), instead of ilab; built once per requirement set",
     )
     ev.add_argument(
+        "--root",
+        default="",
+        metavar="DIR",
+        help="run with the venv of an Isaac Lab install root on the target (<DIR>/venv) instead of ilab, e.g. an Isaac"
+        " Lab 3 root made by scripts/isaac3/bench/deploy.sh (on a SLURM card in its <DIR>/bookworm.sif image); --wt"
+        " picks the code, which ships as usual",
+    )
+    ev.add_argument(
         "--jobs",
         metavar="FILE",
         help="run the script once per job (JSON array or lines of {id, args, checkpoint, env}) across the leases"
@@ -1561,6 +1763,11 @@ def parser() -> argparse.ArgumentParser:
         help="[NAME=]<W&B run URL | entity/project/run[@iter] | path>, exported as NAME; {NAME} in the script args is its path",
     )
     ev.add_argument("--env", action="append", help="KEY=VALUE for the script (repeatable)")
+    ev.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="ship a --wt worktree with uncommitted changes (refused by default: a replay restages the recorded commits)",
+    )
     ev.add_argument("--wt", default="", help=argparse.SUPPRESS)  # this machine's resources/<repo>/worktrees/<name>
     ev.add_argument(
         "--timeout", type=_duration, default=0.0, help="kill the run after this long, e.g. 2h (default: none)"
@@ -1584,6 +1791,17 @@ def main(argv: list[str] | None = None) -> None:
     import res
 
     argv = sys.argv[1:] if argv is None else argv
+    # `pls run --stop <lease> --holder <you>`: no script, no card to claim; a script's own --stop (after --) is its own
+    if "--stop" in (argv[: argv.index("--")] if "--" in argv else argv):
+        sp = argparse.ArgumentParser(prog="pls run --stop", description="stop a detached run and release its lease")
+        sp.add_argument("--stop", required=True, metavar="LEASE", help="the lease the detached run holds")
+        sp.add_argument("--holder", required=True, help="your session name (must match the lease)")
+        st = sp.parse_args(argv)
+        try:
+            pools = res.load_pools()
+        except Exception as exc:
+            sys.exit(f"[res] cannot read the compute inventory: {type(exc).__name__}: {exc}")
+        sys.exit(cmd_stop(st.stop, st.holder, pools))
     args = parse_args(argv)
     if args.jobs:
         import batch
