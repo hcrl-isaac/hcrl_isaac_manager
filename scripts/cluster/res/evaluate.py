@@ -456,6 +456,7 @@ def runner_script(
     cwd: str = "",
     command: bool = False,
     venv: tuple[str, list[str], str] | None = None,
+    root: str = "",
 ) -> str:
     """The bash that runs on the target: a stage log, isolated caches, the given PYTHONPATH, the script's status.
 
@@ -468,6 +469,7 @@ def runner_script(
         cwd: Directory to run the script from (default: the target workspace).
         command: Run the arguments as a command line, the ilab venv first on PATH, instead of the script.
         venv: A tool venv (dir, requirements, python version) to run with instead of ilab, built on first use.
+        root: An Isaac Lab install root on the target whose ``venv`` runs the script instead of ilab.
 
     Returns:
         The run.sh text.
@@ -493,7 +495,7 @@ export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y PYTHONUNBUFFERED=1 PYTHONPYCACHEPR
 # cards are shared: JAX takes memory as it needs it, not 75% of the card up front (--env may still set it)
 export XLA_PYTHON_CLIENT_PREALLOCATE="${{XLA_PYTHON_CLIENT_PREALLOCATE:-false}}"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR" "$HCRL_ARTIFACT_ROOT"
-{_venv_lines(t, venv) if venv else _ilab_lines()}
+{_venv_lines(t, venv) if venv else _root_lines(root) if root else _ilab_lines()}
 export PYTHONPATH={q(":".join(pythonpath))}"${{PYTHONPATH:+:$PYTHONPATH}}"
 cat {q(stage + "/MANIFEST")}
 echo "[res] {t.host}:gpu{t.gpu} ({t.pin}) python=$py env: {" ".join(env_names) or "-"}"
@@ -508,6 +510,19 @@ def _ilab_lines() -> str:
         'gomp="$(ls ilab/lib/python3.11/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)"\n'
         '[ -n "$gomp" ] && export LD_PRELOAD="$gomp${LD_PRELOAD:+:$LD_PRELOAD}"\n'
         'py="$PWD/ilab/bin/python"'
+    )
+
+
+def _root_lines(root: str) -> str:
+    """run.sh lines selecting an Isaac Lab install root's venv python (e.g. pogba's Isaac Lab 3 root)."""
+    q = shlex.quote
+    return (
+        f"py={q(root + '/venv/bin/python')}\n"
+        f'[ -x "$py" ] || {{ echo "[res] no Isaac Lab root venv at $py on $(hostname)"; exit 97; }}\n'
+        f'gomp="$(ls {q(root)}/venv/lib/python3.*/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)"\n'
+        '[ -n "$gomp" ] && export LD_PRELOAD="$gomp${LD_PRELOAD:+:$LD_PRELOAD}"\n'
+        # an unreadable dir on a box's default PATH makes Inductor's nvcc lookup raise, failing every torch.compile
+        'export PATH="${py%/*}:/usr/bin:/bin"'
     )
 
 
@@ -1452,6 +1467,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         sys.exit("[res] several leases (lease:A,B) run a job list: add --jobs FILE --out DIR")
     if sum(map(bool, (args.on, args.any, args.lease))) != 1:
         sys.exit("[res] pick the card with exactly one of --on host:gpu, --any or --lease <id>")
+    if args.venv and args.root:
+        sys.exit("[res] --venv builds a venv and --root uses an install root's: pass one")
     env = parse_env(args.env or [])
     refs = parse_checkpoints(args.checkpoint or [])
     siblings = sibling_args(args.with_ or [])
@@ -1514,6 +1531,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             else:
                 env[sib.env], line = stage.snapshot(name, src, outputs=False, only=sib.dirs)
                 manifest.append(f"{line} ({', '.join(sib.dirs)} only, {sib.env})")
+        if args.root:
+            manifest.append(f"python {args.root}/venv (--root)")
         stage.write("\n".join(manifest) + "\n", "MANIFEST", mode=0o644)
         # snapshots are read-only, runs may be concurrent and a stage is removed after a success, so relative outputs
         # (train.py's logs/, a census's tables) go to a writable working dir of this run's own, kept afterwards
@@ -1530,12 +1549,14 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         stage.write("\n".join(lines) + "\n", "env")
         names = sorted({**env, **paths})
         if t.kind == "slurm":
-            if args.venv:
-                sys.exit("[res] --venv runs on box cards only; a SLURM run uses the cluster's container")
+            if args.venv or args.root:
+                sys.exit("[res] --venv and --root run on box cards only; a SLURM run uses the cluster's container")
             runner = slurm_runner_script(t, container_path(t, stage.dir), target_script, names, cwd, command=args.cmd)
         else:
             venv = tool_venv(args.venv, code, t.scratch) if args.venv else None
-            runner = runner_script(t, stage.dir, target_script, names, pythonpath, cwd, command=args.cmd, venv=venv)
+            runner = runner_script(
+                t, stage.dir, target_script, names, pythonpath, cwd, command=args.cmd, venv=venv, root=args.root
+            )
         stage.write(runner, "run.sh", mode=0o700)
         staging.stop()
         if args.detach:
@@ -1637,6 +1658,13 @@ def parser() -> argparse.ArgumentParser:
         default="",
         help="run with a uv venv built on the card's box from <repo>[<extra>], a shipped repo's optional dependencies"
         " (e.g. hcrl_sim2real[mjx]), instead of ilab; built once per requirement set",
+    )
+    ev.add_argument(
+        "--root",
+        default="",
+        metavar="DIR",
+        help="run with the venv of an Isaac Lab install root on the box (<DIR>/venv) instead of ilab, e.g. an Isaac Lab 3"
+        " root made by scripts/isaac3/bench/deploy.sh; --wt picks the code, which ships as usual",
     )
     ev.add_argument(
         "--jobs",

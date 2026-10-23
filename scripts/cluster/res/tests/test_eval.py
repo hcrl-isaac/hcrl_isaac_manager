@@ -209,6 +209,15 @@ class TargetTest(unittest.TestCase):
         self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
         self.assertIn("ilab/bin/python", ev.runner_script(t, "/s", "x.py", [], []))
 
+    def test_an_install_root_runs_its_venv_python_on_a_clean_path(self) -> None:
+        t = ev.make_target(Pool("larg", "ssh", {"user": "u"}), "pogba", 1)
+        runner = ev.runner_script(t, "/s", "x.py", [], ["/s/code/r"], root="/var/local/u/isaac3")
+        self.assertIn("py=/var/local/u/isaac3/venv/bin/python", runner)
+        self.assertIn('export PATH="${py%/*}:/usr/bin:/bin"', runner, "torch.compile needs a PATH without LARG's dirs")
+        self.assertIn("export PYTHONPATH=/s/code/r", runner, "the shipped code, not the root's own copies")
+        self.assertNotIn("ilab/bin/python", runner)
+        self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
+
     def test_device_placeholder_follows_the_hosts_pinning(self) -> None:
         cvd = ev.make_target(Pool("a100", "ssh", {"user": "u", "pin": "cvd"}), "mckennie", 2)
         dev = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pepi", 2)
@@ -1156,6 +1165,25 @@ class EvalRunTest(Isolated):
         self.assertIn("{DEVICE}", str(rc))
         self.assertEqual(self._leases(), [], "the lease is released")
         self.assertEqual(self._stages(), [], "nothing was staged")
+
+    def test_an_install_root_runs_the_script_with_its_python(self) -> None:
+        root = self.tmp / "isaac3"
+        (root / "venv" / "bin").mkdir(parents=True)
+        (root / "venv" / "bin" / "python").symlink_to(sys.executable)
+        rc, out = self._eval("--any", "--root", str(root), "--env", "MODE=ok")
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"python={root}/venv/bin/python", out)
+        self.assertIn(f"python {root}/venv (--root)", out, "the MANIFEST names the root")
+        self.assertIn("MODE ok", out)
+
+    def test_a_missing_root_venv_fails_the_run(self) -> None:
+        rc, out = self._eval("--any", "--root", str(self.tmp / "nowhere"))
+        self.assertEqual(rc, 97, out)
+        self.assertIn("no Isaac Lab root venv", out)
+
+    def test_root_and_venv_are_exclusive(self) -> None:
+        rc, _ = self._eval("--any", "--root", "/r", "--venv", "hcrl_sim2real[mjx]")
+        self.assertIn("pass one", str(rc))
 
     def test_exactly_one_card_selector(self) -> None:
         rc, _ = self._eval("--any", "--on", "box:1")
