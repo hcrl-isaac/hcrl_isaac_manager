@@ -273,6 +273,8 @@ class RunTest(unittest.TestCase):
         for patch in (
             mock.patch.dict(sys.modules, {"worktree_env": fake}),
             mock.patch.dict(os.environ, {"PYTHONPATH": "/x", "WT": "stale"}),
+            # the disk guard reads this host's disk, which a CI runner may have little of
+            mock.patch.object(launch.shutil, "disk_usage", mock.Mock(return_value=types.SimpleNamespace(free=2**40))),
             mock.patch.object(infra, "handoff", _handoff),
             mock.patch.object(launch, "handoff", _handoff),
             mock.patch("sys.stderr"),
