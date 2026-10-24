@@ -5,6 +5,7 @@ set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 T="$(mktemp -d)"
 trap 'chmod -R u+w "$T" 2>/dev/null; rm -rf "$T"' EXIT
+export LARG_MIN_FREE_GB=0  # the fake box is this host's disk, which a CI runner may have little of
 # a copy of the scripts, so nothing beside the real ones (scripts/.env.*) is shipped
 mkdir -p "$T/bin" "$T/scripts/cluster"
 cp -r "$REPO/scripts/larg" "$T/scripts/"
