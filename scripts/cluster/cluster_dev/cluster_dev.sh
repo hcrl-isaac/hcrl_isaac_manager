@@ -284,7 +284,11 @@ cmd_status() {
     echo "  submitted  : $(state_get SUBMIT_TS)"
     echo "  started    : $(state_get START_TS)"
     echo "  master     : $(master_alive && echo UP || echo DOWN)"
-    echo "  watcher    : $([ -f "$WATCH_PID" ] && kill -0 "$(cat "$WATCH_PID")" 2>/dev/null && echo "alive (pid $(cat "$WATCH_PID"))" || echo "not running")"
+    # the watcher only polls the queue wait: it exits once the job runs or leaves the queue
+    local watcher="not running"
+    case "$(state_get JOB_STATE)" in RUNNING | GONE) watcher="done (job $(state_get JOB_STATE))" ;; esac
+    [ -f "$WATCH_PID" ] && kill -0 "$(cat "$WATCH_PID")" 2>/dev/null && watcher="alive (pid $(cat "$WATCH_PID"))"
+    echo "  watcher    : ${watcher}"
     if [ -n "$jobid" ] && master_alive; then
         echo "  live squeue:"; on_login "squeue -j $jobid 2>/dev/null" | sed 's/^/    /' || true
     fi
