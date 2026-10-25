@@ -15,5 +15,7 @@ BACKEND=cu128; [ "$(uname -m)" = aarch64 ] && BACKEND=cu130
 PKGS=(-e $R/robot_rl -e $R/hcrl_isaaclab); [ -d $R/hhlm_tasks ] && PKGS+=(-e $R/hhlm_tasks)
 # Isaac Lab EA's lock pins pydantic 2.14.0a1, whose models reject wandb's artifact-file responses
 PKGS+=("pydantic==2.11.10")
+# the repos' GPU suites run inside the root (`pls run --root` -> pytest)
+PKGS+=(pytest pytest-timeout)
 uv pip install -q --python $ROOT/venv/bin/python --torch-backend $BACKEND "${PKGS[@]}"
 cd $ROOT && $ROOT/venv/bin/python -c "import torch, hcrl_isaaclab, isaaclab_newton; print('SETUP OK', torch.__version__, torch.cuda.device_count(), 'gpus')"
