@@ -1624,7 +1624,10 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if args.cmd:  # from the box workspace (its manager root), or the run's work dir in a SLURM container
             target_script, cwd = "", work if t.kind == "slurm" else ""
         elif repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
-            root = f"/workspace/ext/{repo}" if args.tree else dict(zip(code, pythonpath, strict=True))[repo]
+            # the shipped repos lead pythonpath; importable asset repos (ssti_robots) follow them
+            root = (
+                f"/workspace/ext/{repo}" if args.tree else dict(zip(code, pythonpath[: len(code)], strict=True))[repo]
+            )
             target_script, cwd = f"{root}/{rel}", work
         else:
             put = stage.put(script, os.path.basename(script), mode=0o644)

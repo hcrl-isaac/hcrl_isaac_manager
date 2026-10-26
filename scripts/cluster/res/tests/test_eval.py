@@ -1158,6 +1158,21 @@ class EvalRunTest(Isolated):
         cwd2 = next(line.split(" ", 1)[1] for line in out2.splitlines() if line.startswith("CWD "))
         self.assertNotEqual(str(cwd), cwd2, "each run gets its own work dir")
 
+    def test_a_repo_script_runs_beside_an_importable_asset_repo(self) -> None:
+        """An importable asset repo (ssti_robots) follows the shipped repos on PYTHONPATH; the script's root is still
+        its own repo."""
+        assets = self.tmp / "ws" / "resources" / "ssti_robots"
+        assets.mkdir()
+        (assets / "pyproject.toml").write_text("[project]\nname = 'ssti_robots'\n")
+        scripts = self.tmp / "ws" / "resources" / "robot_rl" / "scripts"
+        scripts.mkdir()
+        (scripts / "train.py").write_text("print('RAN')\n")
+        self.script = "robot_rl:scripts/train.py"
+        with mock.patch.object(ev, "local_workspace", return_value=str(self.tmp / "ws")):
+            rc, out = self._eval("--any")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("RAN", out)
+
     def test_an_unshipped_repo_script_is_refused_before_a_lease(self) -> None:
         self.script = "nope:scripts/train.py"
         with mock.patch.object(ev, "local_workspace", return_value=str(self.tmp / "ws")):
