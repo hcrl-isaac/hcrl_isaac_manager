@@ -8,6 +8,8 @@ import dataclasses
 import io
 import json
 import os
+import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -293,10 +295,29 @@ class SlurmTest(unittest.TestCase):
         t.extra_uuids = ("GPU-b", "GPU-c", "GPU-d")
         runner = ev.slurm_runner_script(t, "/x", "/workspace/ext/r/train.py", [], "/c", python="/r/venv/bin/python")
         self.assertIn("export CUDA_VISIBLE_DEVICES=GPU-a,GPU-b,GPU-c,GPU-d RES_EVAL_DEVICE=cuda:0", runner)
-        self.assertIn(
-            "/r/venv/bin/python -m torch.distributed.run --standalone --nproc_per_node=4 /workspace/ext/r/train.py",
-            runner,
+        launch = re.search(
+            r"-m torch.distributed.run --standalone --nproc_per_node=4 --no-python bash -c ('.*?') rank", runner
         )
+        self.assertIsNotNone(launch, runner)
+        self.assertIn("rank /r/venv/bin/python /workspace/ext/r/train.py", runner)
+        pin = shlex.split(launch.group(1))[0]
+        for rank, cpus in enumerate(("0-1", "2-3", "4-5", "6-7")):  # each rank on its own quarter of the step's CPUs
+            env = {
+                "RES_CPUS": "0 1 2 3 4 5 6 7",
+                "LOCAL_WORLD_SIZE": "4",
+                "LOCAL_RANK": str(rank),
+                "PATH": "/usr/bin:/bin",
+            }
+            show = 'echo "$OMP_NUM_THREADS $(grep Cpus_allowed_list /proc/self/status)"'
+            out = subprocess.run(
+                ["bash", "-c", pin, "rank", "bash", "-c", show], env=env, capture_output=True, text=True
+            )
+            self.assertEqual(out.stdout.split()[0], "2", "OMP_NUM_THREADS is the rank's share")
+            if shutil.which("taskset"):
+                self.assertEqual(out.stdout.split()[-1], cpus)
+        stage = ev.Stage(t)
+        stage.dir, stage.tree = "/w/artifacts/res-eval/x", "t"
+        self.assertIn("--cards 4", " ".join(stage._exec_cmd([])[0]), "the step asks for all four cards' CPUs")
         for u in t.uuids:
             self.assertIn(f"nvidia-smi -i {u} > /dev/null", runner, "each card is checked visible")
         self.assertIn("nvidia-smi -i GPU-a,GPU-b,GPU-c,GPU-d --query-compute-apps", runner, "and all drain")

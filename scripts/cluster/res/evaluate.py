@@ -762,7 +762,18 @@ def slurm_runner_script(
     q = shlex.quote
     python = python or CONTAINER_PYTHON
     ranks = len(t.uuids)
-    dist = f"-m torch.distributed.run --standalone --nproc_per_node={ranks} " if ranks > 1 else ""
+    # each rank runs on its own contiguous 1/N of the step's CPUs (on a two-socket node, ranks 0..N/2-1 on the first),
+    # with OMP_NUM_THREADS that many, rather than N ranks each sizing its thread pools to the whole step
+    pin = (
+        'read -ra c <<< "$RES_CPUS"; n=$(( ${#c[@]} / LOCAL_WORLD_SIZE )); export OMP_NUM_THREADS=$n; '
+        'mine=$(IFS=,; echo "${c[*]:$(( LOCAL_RANK * n )):$n}"); '
+        'if command -v taskset > /dev/null; then exec taskset -c "$mine" "$@"; else exec "$@"; fi'
+    )
+    dist = (
+        f"-m torch.distributed.run --standalone --nproc_per_node={ranks} --no-python bash -c {q(pin)} rank {q(python)} "
+        if ranks > 1
+        else ""
+    )
     launch = '"$@"' if command else f'{q(python)} {dist}{q(script)} "$@"'
     s = {k: q(f"{stage}/{k}") for k in ("log", "env", "status", "stop", "heartbeat", "MANIFEST")}
     # node-local: the run's TMPDIR is in this step's own /tmp (develop exec --own-tmp); its per-card Kit caches are in
@@ -776,6 +787,12 @@ def slurm_runner_script(
         f'    echo "[res] card {u} ({t.host}) is not visible in this step; another step of job {t.job} may hold it"\n'
         f"    echo 98 > {s['status']}; exit 98\nfi"
         for u in t.uuids
+    )
+    cpus = (
+        f"export RES_CPUS=\"$({q(python)} -c 'import os; print(*sorted(os.sched_getaffinity(0)))')\"\n"
+        f'echo "[res] {ranks} ranks share $(echo $RES_CPUS | wc -w) CPUs"\n'
+        if ranks > 1 and not command
+        else ""
     )
     return f"""#!/usr/bin/env bash
 set -u
@@ -795,7 +812,7 @@ cat {s["MANIFEST"]}
 echo "[res] {t.host}:gpu{t.gpu}{f" (+{ranks - 1} more, {ranks} ranks)" if ranks > 1 else ""} job {t.job} (uuid) env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd)} && cd {q(cwd)} || {{ echo 97 > {s["status"]}; exit 97; }}
 {f"cp {q(refs)} config-defaults.yaml" if refs else ""}
-script_from=$(( $(stat -c %s {s["log"]}) + 1 ))  # the traceback check reads only the script's own output
+{cpus}script_from=$(( $(stat -c %s {s["log"]}) + 1 ))  # the traceback check reads only the script's own output
 setsid {launch} &
 child=$!
 stop_child() {{
@@ -1170,7 +1187,11 @@ class Stage:
         # --own-tmp: runs sharing a node never meet in the container's /tmp (Isaac Lab's /tmp/IsaacLab conversions)
         own = ["--own-tmp"]
         root = ["--root", self.root] if self.root else []
-        return cluster_dev_cmd(self.t.pool, self.t.job, "exec", *tree, *own, *root, *opts, "--", "bash", run_sh, *argv)
+        # a multi-GPU run's step gets every card's CPU share, not one card's
+        cards = ["--cards", str(len(self.t.uuids))] if len(self.t.uuids) > 1 else []
+        return cluster_dev_cmd(
+            self.t.pool, self.t.job, "exec", *tree, *own, *root, *cards, *opts, "--", "bash", run_sh, *argv
+        )
 
     def kill(self) -> bool:
         """Kill the runner's process group on the target (TERM, then KILL) and report whether it is gone."""
