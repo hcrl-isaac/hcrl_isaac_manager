@@ -138,5 +138,31 @@ printf 'Learning iteration 3999/4000\n' > "$T/ray.log"; echo SUCCEEDED > "$T/ray
 out="$(ray_watch)"; rc=$?
 check "a Ray job that reached its target finished" '[ "$rc" = 0 ] && case $out in *finished*) true ;; *) false ;; esac'
 
+# --wandb: a log host that does not answer (login node down) hands over to the run's W&B state, never BLIND while it logs
+printf '#!/usr/bin/env bash\ncat "%s/wb.state"\n' "$T" > "$T/wb_probe" && chmod +x "$T/wb_probe"
+wb_watch() {
+    WATCH_RUN_WANDB_PROBE="$T/wb_probe" PATH="$T/bin:$PATH" timeout "$1" bash "$T/watch_blind.sh" \
+        --wandb e/p/r probe "x@host:/log" 4000 "$2" 0 2>&1
+}
+echo "state=running it=1200 age=30" > "$T/wb.state"
+out="$(wb_watch 6 1)"; rc=$?
+check "an unreachable log with a logging W&B run is followed, not BLIND" \
+    '[ "$rc" = 124 ] && case $out in *"following W&B"*"iter 1200"*) true ;; *) false ;; esac && case $out in *BLIND*) false ;; *) true ;; esac'
+echo "state=crashed it=1200 age=30" > "$T/wb.state"
+out="$(wb_watch 6 1)"; rc=$?
+check "a crashed W&B run is FAILED" '[ "$rc" = 1 ] && case $out in *"is crashed"*) true ;; *) false ;; esac'
+echo "state=finished it=3999 age=30" > "$T/wb.state"
+out="$(wb_watch 6 1)"; rc=$?
+check "a W&B run finished at its target is finished" '[ "$rc" = 0 ] && case $out in *finished*) true ;; *) false ;; esac'
+echo "state=finished it=900 age=30" > "$T/wb.state"
+out="$(wb_watch 6 1)"; rc=$?
+check "a W&B run finished short of its target is FAILED" '[ "$rc" = 1 ] && case $out in *"short of target"*) true ;; *) false ;; esac'
+echo "state=running it=1200 age=7200" > "$T/wb.state"
+out="$(wb_watch 6 20)"; rc=$?
+check "a W&B run that stopped logging is DEAD" '[ "$rc" = 1 ] && case $out in *"logged nothing"*) true ;; *) false ;; esac'
+: > "$T/wb.state"
+out="$(wb_watch 10 0)"; rc=$?
+check "with W&B silent too, the watch still ends BLIND" '[ "$rc" = 1 ] && case $out in *BLIND*) true ;; *) false ;; esac'
+
 [ "$fails" -eq 0 ] || exit 1
 echo "all watch_run exit tests passed"
