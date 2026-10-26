@@ -60,6 +60,7 @@ class Target:
             selects the card from RES_EVAL_DEVICE.
         job: The SLURM job (a held dev sentinel) whose node the card is on.
         uuid: The card's GPU UUID, which pins it inside a SLURM step whose device numbering may differ.
+        extra_uuids: The other cards of a multi-GPU run (``--gpus``), on the same node.
     """
 
     pool: str
@@ -72,6 +73,12 @@ class Target:
     pin: str = "cvd"
     job: str = ""
     uuid: str = ""
+    extra_uuids: tuple[str, ...] = ()
+
+    @property
+    def uuids(self) -> tuple[str, ...]:
+        """Every card of the run, the first one first."""
+        return (self.uuid, *self.extra_uuids)
 
     @property
     def ssh_opts(self) -> list[str]:
@@ -754,13 +761,22 @@ def slurm_runner_script(
     """
     q = shlex.quote
     python = python or CONTAINER_PYTHON
-    launch = '"$@"' if command else f'{q(python)} {q(script)} "$@"'
+    ranks = len(t.uuids)
+    dist = f"-m torch.distributed.run --standalone --nproc_per_node={ranks} " if ranks > 1 else ""
+    launch = '"$@"' if command else f'{q(python)} {dist}{q(script)} "$@"'
     s = {k: q(f"{stage}/{k}") for k in ("log", "env", "status", "stop", "heartbeat", "MANIFEST")}
     # node-local: the run's TMPDIR is in this step's own /tmp (develop exec --own-tmp); its per-card Kit caches are in
     # /tmp/cache, the job's dir that persists across runs (one lease per card)
     run_id = os.path.basename(stage)
     tmp, cache = q(f"{CONTAINER_TMP}/{run_id}"), q(f"/tmp/cache/res-eval/{t.host}-gpu{t.gpu}")
-    apps = f"nvidia-smi -i {q(t.uuid)} --query-compute-apps=pid --format=csv,noheader 2>/dev/null"
+    cards = ",".join(t.uuids)
+    apps = f"nvidia-smi -i {q(cards)} --query-compute-apps=pid --format=csv,noheader 2>/dev/null"
+    visible = "\n".join(
+        f"if ! nvidia-smi -i {q(u)} > /dev/null 2>&1; then\n"
+        f'    echo "[res] card {u} ({t.host}) is not visible in this step; another step of job {t.job} may hold it"\n'
+        f"    echo 98 > {s['status']}; exit 98\nfi"
+        for u in t.uuids
+    )
     return f"""#!/usr/bin/env bash
 set -u
 exec > >(tee -a {s["log"]}) 2>&1
@@ -770,16 +786,13 @@ fi
 set -a; source {s["env"]}; set +a
 rm -f {s["env"]}  # credentials stay in this process's environment only
 touch {s["heartbeat"]}
-if ! nvidia-smi -i {q(t.uuid)} > /dev/null 2>&1; then
-    echo "[res] card {t.uuid} ({t.host}:gpu{t.gpu}) is not visible in this step; another step of job {t.job} may hold it"
-    echo 98 > {s["status"]}; exit 98
-fi
-export CUDA_VISIBLE_DEVICES={q(t.uuid)} RES_EVAL_DEVICE=cuda:0 PYTHONUNBUFFERED=1
+{visible}
+export CUDA_VISIBLE_DEVICES={q(cards)} RES_EVAL_DEVICE=cuda:0 PYTHONUNBUFFERED=1
 export TMPDIR={tmp} XDG_CACHE_HOME={cache}/xdg OMNI_CACHE_DIR={cache}/omni
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR"
 trap 'rm -rf "$TMPDIR"' EXIT
 cat {s["MANIFEST"]}
-echo "[res] {t.host}:gpu{t.gpu} job {t.job} (uuid) env: {" ".join(env_names) or "-"}"
+echo "[res] {t.host}:gpu{t.gpu}{f" (+{ranks - 1} more, {ranks} ranks)" if ranks > 1 else ""} job {t.job} (uuid) env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd)} && cd {q(cwd)} || {{ echo 97 > {s["status"]}; exit 97; }}
 {f"cp {q(refs)} config-defaults.yaml" if refs else ""}
 script_from=$(( $(stat -c %s {s["log"]}) + 1 ))  # the traceback check reads only the script's own output
@@ -1366,19 +1379,20 @@ STAGING_TOUCH_S = 300.0  # well inside the lease windows, so a stage of any leng
 class _LeaseHeartbeat:
     """Keeps a lease active from start() to stop() (staging leaves the card idle); stop() may be called twice."""
 
-    def __init__(self, lease_id: str) -> None:
-        self.lease_id, self._stop = lease_id, threading.Event()
+    def __init__(self, *lease_ids: str) -> None:
+        self.lease_ids, self._stop = [i for i in lease_ids if i], threading.Event()
         self._thread = threading.Thread(target=self._beat, daemon=True)
 
     def _beat(self) -> None:
         while True:
-            with contextlib.suppress(ls.LeaseStoreError):
-                _touch_lease(self.lease_id)
+            for lease_id in self.lease_ids:
+                with contextlib.suppress(ls.LeaseStoreError):
+                    _touch_lease(lease_id)
             if self._stop.wait(STAGING_TOUCH_S):
                 return
 
     def start(self) -> _LeaseHeartbeat:
-        if self.lease_id:
+        if self.lease_ids:
             self._thread.start()
         return self
 
@@ -1553,7 +1567,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             f"[res] --wt {args.wt} has uncommitted changes in {', '.join(dirty)}: commit them, since a replay restages"
             " the run's recorded commits, or pass --allow-dirty"
         )
-    taken, job, uuid = None, "", ""
+    if args.gpus > 1 and (args.lease or args.any or not args.on):
+        sys.exit("[res] --gpus N takes --on <node>: a SLURM node as host or host:job (pls res status shows them)")
+    taken, job, uuid, extra = None, "", "", []
     if args.lease:
         pool, host, gpu, job, uuid = _lease_card(args.lease, args.holder, pools)
     else:
@@ -1564,9 +1580,11 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         # a cluster job's cards only when named: --any stays on the boxes unless --pool picks a cluster
         usable = [p for p in pools if p.kind in SUPPORTED and (p.kind != "slurm" or on or p in named)]
         ns = argparse.Namespace(
-            cards=[on] if on else [],
-            any=args.any,
-            count=1,
+            cards=[on] if on and args.gpus == 1 else [],
+            any=args.any or args.gpus > 1,
+            count=args.gpus,
+            within=on if args.gpus > 1 else "",  # N free cards of this one node
+            one_host=args.gpus > 1,
             min_free_gb=args.min_free_gb,
             pool=args.pool,
             holder=args.holder,
@@ -1574,9 +1592,15 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             for_=0.0,
             wait=args.wait,
         )
-        [(taken, card, rep)] = claim(ns, usable)[0]
+        claimed = claim(ns, usable)[0]
+        (taken, card, rep), extra = claimed[0], [x[0] for x in claimed[1:]]
         host, gpu = card.host, card.index
-        print(f"[res] leased {taken.id}: {taken.card} for {args.holder}", file=sys.stderr)
+        for lease, _, _ in claimed:
+            print(f"[res] leased {lease.id}: {lease.card} for {args.holder}", file=sys.stderr)
+        if extra and rep.kind != "slurm":  # inside the claim's own flow: drop the leases before refusing
+            with ls.locked_store() as leases:
+                leases[:] = [x for x in leases if x.id not in {y[0].id for y in claimed}]
+            sys.exit("[res] --gpus runs on a SLURM node; box cards take one card per run")
         if rep.kind == "slurm":
             pool, job, uuid = None, card.job, card.uuid
         else:
@@ -1587,8 +1611,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if pool is None:  # inside the try, so a refusal still releases the lease
             pool = slurm_profile(rep.pool, job, pools)
         t = make_target(pool, host, gpu, job, uuid)
+        t.extra_uuids = tuple(c.uuid for _, c, _ in claimed[1:]) if extra else ()
         run_args = fill_device(run_args, t)  # before staging, so a wrong cuda:N costs nothing
-        staging = _LeaseHeartbeat(taken.id if taken is not None else args.lease or "").start()
+        staging = _LeaseHeartbeat(taken.id if taken is not None else args.lease or "", *(x.id for x in extra)).start()
         stage = Stage(t)
         stage.make()
         paths = {ref.name: container_path(t, stage.link_checkpoint(fetch_checkpoint(ref), ref.name)) for ref in refs}
@@ -1673,7 +1698,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             stage.start_detached(fill_checkpoints(run_args, paths))
             detached = True
             held = taken.id if taken is not None else args.lease or ""
-            _record_stage(held, stage.dir)
+            for lease_id in (held, *(x.id for x in extra)):  # every card's lease names the run's stage
+                _record_stage(lease_id, stage.dir)
             _print_detached(stage, held, args.holder)
             rc = 0
         else:
@@ -1701,13 +1727,14 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             if rc != 0:
                 where = stage.t.ssh if stage.t.kind == "slurm" else stage.t.host
                 print(f"[res] FAILED with status {rc}; log at {where}:{stage.dir}/log", file=sys.stderr)
-        if taken is not None and gone:
+        mine = [x.id for x in (taken, *extra) if x is not None]
+        if mine and gone:
             with ls.locked_store() as leases:
-                leases[:] = [x for x in leases if x.id != taken.id]
-            print(f"[res] released {taken.id}", file=sys.stderr)
-        elif taken is not None:
+                leases[:] = [x for x in leases if x.id not in mine]
+            print(f"[res] released {', '.join(mine)}", file=sys.stderr)
+        elif mine:
             print(
-                f"[res] KEPT lease {taken.id}: the run may still hold the card; release it once it is gone",
+                f"[res] KEPT lease(s) {', '.join(mine)}: the run may still hold the cards; release them once it is gone",
                 file=sys.stderr,
             )
     sys.exit(rc)
@@ -1776,6 +1803,14 @@ def parser() -> argparse.ArgumentParser:
         help="run with the venv of an Isaac Lab install root on the target (<DIR>/venv) instead of ilab, e.g. an Isaac"
         " Lab 3 root made by scripts/isaac3/bench/deploy.sh (on a SLURM card in its <DIR>/bookworm.sif image); --wt"
         " picks the code, which ships as usual",
+    )
+    ev.add_argument(
+        "--gpus",
+        type=int,
+        default=1,
+        metavar="N",
+        help="lease N free cards of the one SLURM node --on names (host or host:job), expose all of them, and run the"
+        " script under torch.distributed.run with N ranks (pass the script's own --distributed)",
     )
     ev.add_argument(
         "--jobs",

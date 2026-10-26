@@ -287,6 +287,30 @@ class SlurmTest(unittest.TestCase):
             ev.slurm_profile(label, "3566414", pools)
         self.assertIn("Invalid job id", str(cm.exception.code))
 
+    def test_a_multi_gpu_runner_pins_every_card_and_launches_one_rank_per_card(self) -> None:
+        t = ev.Target("horizon", "slurm", "c125-013", 0, "u@login", "/w", "/w/artifacts", job="71017", uuid="GPU-a")
+        t.extra_uuids = ("GPU-b", "GPU-c", "GPU-d")
+        runner = ev.slurm_runner_script(t, "/x", "/workspace/ext/r/train.py", [], "/c", python="/r/venv/bin/python")
+        self.assertIn("export CUDA_VISIBLE_DEVICES=GPU-a,GPU-b,GPU-c,GPU-d RES_EVAL_DEVICE=cuda:0", runner)
+        self.assertIn(
+            "/r/venv/bin/python -m torch.distributed.run --standalone --nproc_per_node=4 /workspace/ext/r/train.py",
+            runner,
+        )
+        for u in t.uuids:
+            self.assertIn(f"nvidia-smi -i {u} > /dev/null", runner, "each card is checked visible")
+        self.assertIn("nvidia-smi -i GPU-a,GPU-b,GPU-c,GPU-d --query-compute-apps", runner, "and all drain")
+        self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
+        one = ev.Target("horizon", "slurm", "c125-013", 0, "u@login", "/w", "/w/artifacts", job="71017", uuid="GPU-a")
+        self.assertNotIn("torch.distributed.run", ev.slurm_runner_script(one, "/x", "/s.py", [], "/c"))
+
+    def test_gpus_takes_a_named_node(self) -> None:
+        for argv in (["--any"], ["--lease", "abc"]):
+            with self.subTest(argv=argv):
+                args = ev.parse_args([__file__, "--holder", "h", "--gpus", "4", *argv])
+                with self.assertRaises(SystemExit) as ctx:
+                    ev.cmd_eval(args, [], mock.Mock())
+                self.assertIn("--gpus N takes --on <node>", str(ctx.exception.code))
+
     def test_runner_pins_by_uuid_and_stops_on_request(self) -> None:
         t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
         runner = ev.slurm_runner_script(t, "/workspace/artifacts/res-eval/x", "/workspace/ext/r/s.py", ["A"], "/c")

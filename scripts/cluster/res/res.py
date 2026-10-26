@@ -295,7 +295,19 @@ def _choose(
             c = cr[0]
             return (rank(*cr), c.host not in in_use, per_host[c.host], -(c.mem_total - c.mem_used), c.host, c.index)
 
+        within = getattr(args, "within", "")
+        if within:  # host or host:job: only that node's cards
+            host, _, job = within.partition(":")
+            free = [(c, r) for c, r in free if c.host == host and (not job or c.job == job.split(":")[0])]
         free.sort(key=pack)
+        if getattr(args, "one_host", False):  # all on one node, for a multi-GPU run
+            nodes: dict[tuple[str, str], list] = {}
+            for c, r in free:
+                nodes.setdefault((c.host, c.job), []).append((c, r))
+            for cards in nodes.values():
+                if len(cards) >= args.count:
+                    return cards[: args.count]
+            raise Busy(f"[res] no node has {args.count} free cards that match; nothing claimed")
         if len(free) < args.count:
             raise Busy(f"[res] only {len(free)} free card(s) match; nothing claimed")
         return free[: args.count]
