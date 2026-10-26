@@ -435,6 +435,10 @@ class SshStageTest(Isolated):
         _git_repo(self.src)
         pool = Pool("larg", "ssh", {"user": "u", "workspace": str(self.ws), "scratch": str(self.tmp / "scratch")})
         self.t = ev.make_target(pool, "box", 0)
+        self.local_ws = self.tmp / "local_assets_ws"
+        (self.local_ws / "resources" / "hcrl_robots").mkdir(parents=True)
+        self.patches.append(mock.patch.object(ev, "local_workspace", return_value=str(self.local_ws)))
+        self.patches[-1].start()
 
     def _stage(self) -> ev.Stage:
         stage = ev.Stage(self.t)
@@ -442,6 +446,16 @@ class SshStageTest(Isolated):
         with contextlib.redirect_stderr(io.StringIO()):
             stage.pp, stage.manifest = stage.sync_code({"robot_rl": str(self.src)})
         return stage
+
+    def test_an_asset_repo_that_is_a_package_is_imported_from_the_boxs_copy(self) -> None:
+        """ssti_robots imports as a package; a box whose venv never installed it must still find it."""
+        for ws in (self.local_ws, self.ws):
+            (ws / "resources" / "ssti_robots").mkdir(parents=True)
+            (ws / "resources" / "ssti_robots" / "pyproject.toml").write_text("[project]\nname = 'ssti_robots'\n")
+        stage = self._stage()
+        self.assertEqual(stage.pp, [f"{stage.dir}/resources/robot_rl", f"{stage.dir}/resources/ssti_robots"])
+        self.assertEqual(os.path.realpath(f"{stage.dir}/resources/ssti_robots"), str(self.ws / "resources/ssti_robots"))
+        self.assertNotIn(f"{stage.dir}/resources/hcrl_robots", stage.pp, "a pure asset repo stays off PYTHONPATH")
 
     def test_code_lands_in_a_snapshot_never_in_the_shared_checkout(self) -> None:
         stage = self._stage()
@@ -1143,6 +1157,21 @@ class EvalRunTest(Isolated):
         self.assertTrue(cwd.is_dir(), "the work dir is kept after the run")
         cwd2 = next(line.split(" ", 1)[1] for line in out2.splitlines() if line.startswith("CWD "))
         self.assertNotEqual(str(cwd), cwd2, "each run gets its own work dir")
+
+    def test_a_repo_script_runs_beside_an_importable_asset_repo(self) -> None:
+        """An importable asset repo (ssti_robots) follows the shipped repos on PYTHONPATH; the script's root is still
+        its own repo."""
+        assets = self.tmp / "ws" / "resources" / "ssti_robots"
+        assets.mkdir()
+        (assets / "pyproject.toml").write_text("[project]\nname = 'ssti_robots'\n")
+        scripts = self.tmp / "ws" / "resources" / "robot_rl" / "scripts"
+        scripts.mkdir()
+        (scripts / "train.py").write_text("print('RAN')\n")
+        self.script = "robot_rl:scripts/train.py"
+        with mock.patch.object(ev, "local_workspace", return_value=str(self.tmp / "ws")):
+            rc, out = self._eval("--any")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("RAN", out)
 
     def test_an_unshipped_repo_script_is_refused_before_a_lease(self) -> None:
         self.script = "nope:scripts/train.py"

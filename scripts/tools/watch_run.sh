@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Watchdog for a training run. Every exit is FINISHED, STALLED, DEAD, FAILED or BLIND (no probe answered for stall_min).
 #
-#   watch_run.sh <label> <log> <target-iters> [stall_min] [report_every] [metric-grep]
+#   watch_run.sh [--wandb <entity/project/run_id>] <label> <log> <target-iters> [stall_min] [report_every] [metric-grep]
 #
 # <log> is a local path, user@host:/path when the log lands on a different host from the process, or ray:<job_id>
 # for a Ray job (read through `pls cluster ray logs`; a job Ray reports FAILED or STOPPED is FAILED here). A run that
 # logs every N iterations finishes when it closes (W&B's sync lines after its last iteration) within N of the target.
+# With --wandb, a log that cannot be read (its login node down) is replaced by the run's W&B state, iteration and last
+# log time, so a login outage is not BLIND while the run still logs.
 set -u
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WANDB_RUN=""
+if [ "${1:-}" = --wandb ]; then WANDB_RUN=$2; shift 2; fi
 LABEL=$1; LOG_SPEC=$2; TARGET=$3; STALL_MIN=${4:-20}; EVERY=${5:-100}; MET=${6:-}
 RAY_JOB=""
 case $LOG_SPEC in
@@ -78,6 +83,14 @@ ray_refresh() {  # a Ray job's log into $LOG, replaced only when it changed, so 
     timeout "$PROBE_S" "$PLS" cluster ray list --all_statuses --status_of "$RAY_JOB" 2>/dev/null | tail -1 > "$LOG.status"
 }
 
+wandb_probe() {  # `state=.. it=.. age=..` for $WANDB_RUN, or nothing (WATCH_RUN_WANDB_PROBE stands in for tests)
+    if [ -n "${WATCH_RUN_WANDB_PROBE:-}" ]; then timeout "$PROBE_S" "$WATCH_RUN_WANDB_PROBE" "$WANDB_RUN" 2>/dev/null; return; fi
+    local py common
+    common=$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+    py="${common%/.git}/ilab/bin/python"; [ -x "$py" ] || py=python3
+    timeout "$PROBE_S" "$py" "$HERE/wandb_probe.py" "$WANDB_RUN" 2>/dev/null
+}
+
 probe() {
     if [ -n "$RAY_JOB" ]; then ray_refresh || return 0; fi  # no output: a failed probe
     run_remote <<EOF
@@ -95,11 +108,46 @@ EOF
 }
 
 POLL_S=120  # seconds between probes
-started=$(date +%s); last_it=-1; last_change=$started; lastc=-1; booted=0; last_ok=$started
+started=$(date +%s); last_it=-1; last_change=$started; lastc=-1; booted=0; last_ok=$started; wb_note=0
 while true; do
     st=$(probe)
     now=$(date +%s)
     [ -n "$RAY_JOB" ] && RAY_STATUS=$(cat "$LOG.status" 2>/dev/null)
+    wb=""
+    [ -z "$st" ] && [ -n "$WANDB_RUN" ] && wb=$(wandb_probe)
+    if [ -n "$wb" ]; then  # the log is out of reach, W&B answers: its state, iteration and last log time stand in
+        last_ok=$now
+        [ $wb_note -eq 0 ] && { echo "[$LABEL] $LOG_SPEC unreachable: following W&B run $WANDB_RUN"; wb_note=1; }
+        wfield() { local v=${wb#* $1=}; [ "$v" = "$wb" ] && v=${wb#$1=}; echo "${v%% *}"; }
+        wstate=$(wfield state); w_iter=$(wfield it); wage=$(wfield age)
+        [ "$w_iter" = none ] && w_iter=""
+        case $wstate in
+            crashed|failed|killed)
+                echo "[$LABEL] FAILED: W&B run $WANDB_RUN is $wstate at iter ${w_iter:-none} (target $TARGET)"; exit 1 ;;
+            finished)
+                if [ -n "$w_iter" ] && [ "$w_iter" -ge $((TARGET - 5)) ]; then
+                    echo "[$LABEL] finished: W&B run $WANDB_RUN finished at iter $w_iter (target $TARGET)"; exit 0
+                fi
+                echo "[$LABEL] FAILED: W&B run $WANDB_RUN finished at iter ${w_iter:-none}, short of target $TARGET"; exit 1 ;;
+        esac
+        if [ "${wage:--1}" -ge $((STALL_MIN * 60)) ]; then
+            echo "[$LABEL] DEAD or hung: W&B run $WANDB_RUN logged nothing for $((wage / 60)) min, last iter ${w_iter:-none}"
+            exit 1
+        fi
+        if [ -n "$w_iter" ]; then
+            [ "$w_iter" != "$last_it" ] && { last_it=$w_iter; last_change=$now; }
+            [ $booted -eq 0 ] && { booted=1; echo "[$LABEL] training (iter $w_iter, from W&B)"; }
+            if [ "$w_iter" -ge $((TARGET - 5)) ]; then echo "[$LABEL] finished at iter $w_iter (target $TARGET, from W&B)"; exit 0; fi
+            if [ "$EVERY" -gt 0 ] && [ $((w_iter / EVERY)) != "$lastc" ]; then
+                lastc=$((w_iter / EVERY)); echo "[$LABEL] iter $w_iter (W&B)"
+            fi
+        fi
+        if [ $booted -eq 1 ] && [ $(( (now - last_change) / 60 )) -ge "$STALL_MIN" ]; then
+            echo "[$LABEL] STALLED: iter stuck at ${last_it} for ${STALL_MIN}+ min (W&B still logging)"
+            last_change=$now
+        fi
+        sleep "${POLL_S:-120}"; continue
+    fi
     if [ -z "$st" ]; then  # one failed probe is not evidence, stall_min of them is
         if [ $(( (now - last_ok) / 60 )) -ge "$STALL_MIN" ]; then
             echo "[$LABEL] BLIND: no probe of $LOG_SPEC answered for $(( (now - last_ok) / 60 )) min, last iter ${last_it}"
