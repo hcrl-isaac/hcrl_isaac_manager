@@ -1492,7 +1492,7 @@ def _print_detached(stage: Stage, lease_id: str, holder: str) -> None:
 
 
 def cmd_stop(lease_id: str, holder: str, pools: list[Pool]) -> int:
-    """Stop the detached run on a lease (`pls run --stop`), keep its log, and release the lease once it is gone.
+    """Stop the detached run on a lease (`pls run --stop`), keep its log, and release its leases once it is gone.
 
     Args:
         lease_id: The lease the run was started on (its id, or ``lease:<id>``).
@@ -1500,7 +1500,8 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool]) -> int:
         pools: Configured pools.
 
     Returns:
-        0 when the run is gone and the lease released, 1 when the run may still hold the card.
+        0 when the run is gone and its leases (every card of a ``--gpus`` run) released, 1 when the run may still
+        hold the card.
     """
     lease_id = lease_id.removeprefix("lease:")
     pool, host, gpu, job, uuid_ = _lease_card(lease_id, holder, pools)
@@ -1529,9 +1530,10 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool]) -> int:
     if not gone:
         print(f"[res] KEPT lease {lease_id}: the run may still hold the card", file=sys.stderr)
         return 1
-    with ls.locked_store() as leases:
-        leases[:] = [x for x in leases if x.id != lease_id]
-    print(f"[res] released {lease_id}", file=sys.stderr)
+    with ls.locked_store() as leases:  # a --gpus run's other cards hold leases naming the same stage
+        ids = [lease_id, *(x.id for x in leases if stage_dir and x.stage == stage_dir and x.id != lease_id)]
+        leases[:] = [x for x in leases if x.id not in ids]
+    print(f"[res] released {', '.join(ids)}", file=sys.stderr)
     return 0
 
 

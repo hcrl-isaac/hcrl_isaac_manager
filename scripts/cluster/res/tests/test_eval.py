@@ -4,6 +4,7 @@ commands are real."""
 
 import argparse
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -1236,6 +1237,19 @@ class EvalRunTest(Isolated):
         self.assertFalse(_alive(pid), "the run's process group is gone")
         self.assertEqual(self._leases(), [], "the lease is released once the run is gone")
         self.assertTrue((stage / "log").exists(), "a stopped run keeps its log")
+
+    def test_stop_releases_every_card_of_a_multi_gpu_run(self) -> None:
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        [lease] = self._leases()
+        with ls.locked_store() as leases:  # the other cards of a --gpus run, and an unrelated run's card
+            leases.append(dataclasses.replace(lease, id="rank1", key=lease.key + "-1", card=lease.card + "-1"))
+            leases.append(
+                dataclasses.replace(lease, id="other", key=lease.key + "-2", card=lease.card + "-2", stage="/elsewhere")
+            )
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 0)
+        self.assertEqual([x.id for x in self._leases()], ["other"], "every lease naming the run's stage is released")
 
     def test_a_scripts_own_stop_flag_is_passed_through(self) -> None:
         """--stop after -- belongs to the script: main() runs the script instead of stopping a lease."""
