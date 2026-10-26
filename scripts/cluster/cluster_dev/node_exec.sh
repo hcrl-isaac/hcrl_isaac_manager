@@ -185,11 +185,13 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
 }
 
 run_root() {  # the root's venv in the bookworm image, with the same /workspace/ext mounts as the hcrl-isaac image
-    # the hcrl-isaac entrypoint is not there, so the package repos go on PYTHONPATH here (asset and data repos not)
+    # the hcrl-isaac entrypoint is not there, so the package repos go on PYTHONPATH here, with any asset repo that is
+    # itself a Python package (ssti_robots); pure asset and data repos do not
     local pkgs="" d name
     for d in "${RESOURCES}"/*/; do
         name="$(basename "$d")"
-        case "$name" in IsaacLab | motion_datasets | *_robots) continue ;; esac
+        case "$name" in IsaacLab | motion_datasets) continue ;; esac
+        case "$name" in *_robots) [ -f "${d}pyproject.toml" ] || [ -f "${d}setup.py" ] || continue ;; esac
         pkgs="${pkgs:+$pkgs:}/workspace/ext/${name}"
     done
     export APPTAINERENV_PYTHONPATH="$pkgs"

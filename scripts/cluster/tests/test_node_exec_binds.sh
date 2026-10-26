@@ -88,7 +88,8 @@ if [ "$r" = "1:1" ]; then echo "PASS other failures are not retried"; else echo 
 
 # --root: the root's venv in a bookworm image pulled into the root, the package repos on PYTHONPATH, no entrypoint
 ROOT="$T/isaac3"
-mkdir -p "$ROOT/venv/bin" "$TREE/resources/robot_rl" "$TREE/resources/motion_datasets"
+mkdir -p "$ROOT/venv/bin" "$TREE/resources/robot_rl" "$TREE/resources/motion_datasets" "$TREE/resources/ssti_robots"
+touch "$TREE/resources/ssti_robots/pyproject.toml"  # an asset repo that is also a Python package
 printf '#!/bin/sh\n' > "$ROOT/venv/bin/python" && chmod +x "$ROOT/venv/bin/python"
 printf '#!/usr/bin/env bash\nif [ "$1" = pull ]; then echo "pulled $3"; touch "$2"; exit 0; fi\nprintf "%%s\\n" "$@"\necho "pythonpath $APPTAINERENV_PYTHONPATH"\necho "preload ${LD_PRELOAD:-none}"\n' > "$T/bin/apptainer"
 root_run() { LD_PRELOAD=/xalt.so NODE_EXEC_ROOT="$ROOT" NODE_EXEC_RESOURCES="$TREE/resources" run > "$T/out" 2>&1; }
@@ -96,8 +97,8 @@ root_run
 check "a missing image is pulled into the root" "pulled docker://python:3.12-bookworm"
 check "the run uses the root's image" "$ROOT/bookworm.sif"
 check "the root is bound" "$ROOT"
-check "the package repos are on PYTHONPATH, asset and data repos are not" \
-    "pythonpath /workspace/ext/hcrl_isaaclab:/workspace/ext/robot_rl"
+check "the package repos and package asset repos are on PYTHONPATH, pure asset and data repos are not" \
+    "pythonpath /workspace/ext/hcrl_isaaclab:/workspace/ext/robot_rl:/workspace/ext/ssti_robots"
 check "XALT's preload is dropped" "preload none"
 check "staged repos are mounted as in the image" "$TREE/resources/hcrl_isaaclab:/workspace/ext/hcrl_isaaclab:rw"
 if grep -q "hcrl-entrypoint\|hcrl-isaac.sif" "$T/out"; then

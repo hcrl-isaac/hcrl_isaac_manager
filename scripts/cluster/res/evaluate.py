@@ -241,6 +241,26 @@ def _is_data(repo: str) -> bool:
     return repo in DATA_REPOS or repo.endswith("_robots")
 
 
+def importable_assets(workspace: str) -> list[str]:
+    """Asset repos (``*_robots``) that are also Python packages (a ``pyproject.toml`` or ``setup.py``).
+
+    A run imports these from the target's copy, so they go on its PYTHONPATH rather than relying on an editable
+    install in the target's venv.
+
+    Args:
+        workspace: Manager checkout whose resources/ holds the repos.
+    """
+    resources = os.path.join(workspace, "resources")
+    if not os.path.isdir(resources):
+        return []
+    return [
+        repo
+        for repo in sorted(os.listdir(resources))
+        if repo.endswith("_robots")
+        and any(os.path.isfile(os.path.join(resources, repo, f)) for f in ("pyproject.toml", "setup.py"))
+    ]
+
+
 def local_data(workspace: str, wt: str) -> dict[str, str]:
     """The data and asset repos (``motion_datasets``, ``*_robots``) that the worktree set ``wt`` has a worktree of.
 
@@ -999,7 +1019,9 @@ class Stage:
                 )
         if self.t.kind == "local":
             self.refs = {repo: ref for repo, src in code.items() if (ref := git_ref(src))}
-            return list(code.values()), [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
+            ws = self.t.workspace
+            importable = [data.get(r, os.path.join(ws, "resources", r)) for r in importable_assets(ws)]
+            return [*code.values(), *importable], [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
         main = os.path.join(local_workspace(), "resources")
         worktree = {
             repo: src
@@ -1048,7 +1070,9 @@ class Stage:
         assets += f'[ -e {q(res)}/"$n" ] || ln -s "${{d%/}}" {q(res)}/"$n"; done'
         if self._ssh(f"{links} {assets}").returncode != 0:
             sys.exit(f"[res] could not link the stage's resources on {self.t.host}")
-        return [f"{res}/{repo}" for repo in code], lines
+        # an importable asset repo is imported from the stage's link to it (the box's copy, or the --wt snapshot)
+        importable = [f"{res}/{r}" for r in importable_assets(local_workspace()) if r not in code]
+        return [*(f"{res}/{repo}" for repo in code), *importable], lines
 
     def start(self, argv: list[str]) -> subprocess.Popen:
         """Start the runner in its own process group (pid in ``<stage>/pid``), stdout and stderr merged.
