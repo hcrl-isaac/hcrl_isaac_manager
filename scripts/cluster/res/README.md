@@ -152,9 +152,9 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   yours. `any` stays on the local and ssh pools; name a cluster pool to use its sentinel. Ray is its own target,
   `--on ray`.
 - On a SLURM card (a running job of yours, normally a held dev sentinel) the script runs in the container through a
-  `develop exec` step on that job, with the job's own partition, account and GPU request. The stage dir is
+  step on that job (`cluster_dev.sh exec`), with the job's own partition, account and GPU request. The stage dir is
   `<cluster checkout>/artifacts/res-eval/<id>`, which the container sees as `/workspace/artifacts/res-eval/<id>`; the
-  package repos are staged as a code tree (`develop stage`), as above; asset repos come from the cluster's
+  package repos are staged as a code tree (`pls stage`), as above; asset repos come from the cluster's
   newest `default` tree. The card is pinned by its GPU
   UUID, and a step that cannot see it fails with status 98 (on Delta a step holding the job's GPUs can starve
   another). The container's `/tmp` is the job's node-local dir, which every step of the sentinel shares, so the run
@@ -169,8 +169,8 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   exists before it starts exits 130 without launching. Each new SLURM stage prunes earlier ones: credentials of
   runs that never started after 30 min, and stages and work dirs older than 7 days whose run is not alive;
   `res-eval` code trees unused for 14 days (reuse counts) that no running step marks are removed when one is staged.
-- From a manager worktree, `res` and `develop stage|exec|status|tail` use the main checkout's cluster profiles (a
-  worktree has none of its own); `develop start|sync|stop|kill` refuse there, since they change the shared sentinel
+- From a manager worktree, `res`, `pls stage`, `pls shell` and `pls run --on <cluster>` use the main checkout's cluster profiles (a
+  worktree has none of its own); `pls res hold`/`drop`, `pls disconnect` and `pls jobs ... kill` refuse there, since they change the shared sentinel
   state.
 - `--checkpoint [NAME=]<ref>` (repeatable) exports the checkpoint's path on the target as `NAME` (default
   `CHECKPOINT`). A ref is a local path, a W&B run URL or `entity/project/run_id`, with `@<iter>` for

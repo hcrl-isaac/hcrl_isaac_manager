@@ -13,38 +13,37 @@ persistent **ControlMaster** socket — opened once, kept warm — is what avoid
 
 ## User command
 ```bash
-# from the manager dir; the leading name selects scripts/cluster/config/<cluster>/
-pls cluster rtx-small develop start   # approve ONE 2FA prompt; rest is non-interactive (--no-stage: ship no code)
+# --on selects scripts/cluster/config/<cluster>/
+pls res hold --on rtx-small           # approve ONE 2FA prompt; rest is non-interactive (--no-stage: ship no code)
 ```
-`develop` dispatches to `cluster_dev.sh` with `CLUSTER` set. `start` opens the SSH master (the
-only 2FA prompt), stages the workspace as the code tree `default` (below), submits the sentinel job, and launches a
+`pls` runs `cluster_dev.sh` with `CLUSTER` set. `res hold` opens the SSH master (the
+only 2FA prompt; `pls connect --on <cluster>` opens it ahead of time), stages the workspace as the code tree `default` (below), submits the sentinel job, and launches a
 **background watcher** that tracks the (possibly multi-hour) queue wait. You can walk away.
 
 ## Tracking / using it (no credentials needed once the master is up)
 ```bash
-pls cluster rtx-small develop status      # job id / state / node / master+watcher health / live squeue
-pls cluster rtx-small develop attach      # interactive shell on the compute node (once RUNNING)
-pls cluster rtx-small develop exec -- <cmd>  # run <cmd> inside the Apptainer container, on the newest `default`
-pls cluster rtx-small develop stage       # ship local edits: the workspace as on disk -> a new `default`
-pls cluster rtx-small develop stop [JOBID]  # scancel one sentinel (JOBID, DEV_JOBID, or your only one); master stays up
-pls cluster rtx-small develop close       # close the SSH master: every session's link, until the next `open`
+pls res status --on rtx-small         # job id / state / node / master+watcher health, then the cards
+pls shell --on rtx-small              # interactive shell on the compute node (once RUNNING)
+pls run --on rtx-small --cmd -- <cmd> # run <cmd> inside the Apptainer container on a leased card, on the newest `default`
+pls stage --on rtx-small              # ship local edits: the workspace as on disk -> a new `default`
+pls res drop --on rtx-small <JOBID>   # scancel that sentinel; the connection stays up
+pls disconnect --on rtx-small         # close the SSH master: every session's link, until the next `pls connect`
 ```
 The watcher writes `~/.cluster_dev/<cluster>/state` (and `watch.log` next to it); when
-`JOB_STATE=RUNNING` and `NODE` is set, the box is ready. A Claude session can poll `status` and
-drive `exec`/`attach` over the live master with zero auth.
+`JOB_STATE=RUNNING` and `NODE` is set, the box is ready. A Claude session can poll `pls res status`
+and run on the node over the live master with zero auth.
 
-`exec -- <cmd> <args...>` reaches the container with its argv unchanged, so for shell syntax use
-`exec -- bash -lc 'a; b && c'`. A single argument (`exec -- "python scripts/train.py --task X"`) is run as a
-command string inside the container.
+`pls run --on <cluster> --cmd -- <cmd> <args...>` reaches the container with its argv unchanged, so for shell syntax
+use `--cmd -- bash -lc 'a; b && c'`.
 
 ## Code trees (how code reaches a cluster)
 ```bash
-pls cluster delta develop stage                       # the workspace as on disk (uncommitted work too) -> `default`
-pls cluster delta develop stage push-foot hhlm_tasks=feat/push-foot-contact-penalty hcrl_isaaclab=main robot_rl=main
-pls cluster delta develop exec --tree push-foot -- python scripts/train.py --task ...   # (--detach as usual)
-pls cluster delta develop trees                       # list staged trees
-pls cluster delta develop trees rm push-foot-<fp>     # remove one (refused while a job that used it runs)
-pls cluster delta develop trees rm --partials         # clear interrupted stages older than an hour
+pls stage --on delta                                  # the workspace as on disk (uncommitted work too) -> `default`
+pls stage --on delta push-foot hhlm_tasks=feat/push-foot-contact-penalty hcrl_isaaclab=main robot_rl=main
+pls run --on delta --tree push-foot --holder <you> -- train --task ...   # (--detach as usual)
+pls stage --on delta list                             # list staged trees
+pls stage --on delta rm push-foot-<fp>                # remove one (refused while a job that used it runs)
+pls stage --on delta rm --partials                    # clear interrupted stages older than an hour
 ```
 `stage` uploads repos into a new `<CLUSTER_ISAACLAB_DIR>/trees/<name>-<fingerprint>/`. Nothing is mirrored onto a
 shared workspace, so a run never sees code change under it:

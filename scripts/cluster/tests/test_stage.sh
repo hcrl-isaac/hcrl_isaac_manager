@@ -81,7 +81,7 @@ check "shared checkout untouched" "grep -qx main '$R/resources/hcrl_isaaclab/cod
 check "no inode is shared with the mutable shared checkout" \
     "[ \"\$(stat -c %i '$tree/resources/hcrl_isaaclab/big.bin')\" != \"\$(stat -c %i '$R/resources/hcrl_isaaclab/big.bin')\" ]"
 check "temporary checkout cleaned up" "[ \"\$(git -C '$G' worktree list | wc -l)\" -eq 1 ]"
-check "run hint names the full tree id" "grep -q \"exec --tree \$(basename '$tree')\" '$T/out1'"
+check "run hint names the full tree id" "grep -q -- \"--tree \$(basename '$tree') --\" '$T/out1'"
 
 dev stage t1 hcrl_isaaclab=feat > "$T/out2" 2>&1
 check "same refs reuse the tree" "grep -q 'already staged' '$T/out2' && [ \$(ntrees t1) -eq 1 ]"

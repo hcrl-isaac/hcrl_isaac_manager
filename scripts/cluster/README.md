@@ -7,7 +7,7 @@ Apptainer image, following the workflow of the [Isaac Lab docs](https://isaac-si
 
 1. Create your cluster profile:
    ```bash
-   pls cluster add [name]
+   pls setup --add <name>
    ```
    The prompts write `scripts/cluster/config/<name>/.env.cluster` and `submit_job_slurm.sh`. Profiles are per-user
    and gitignored; every cluster command snapshots a changed profile into `config/<name>/.backup/` and restores a
@@ -19,30 +19,30 @@ Apptainer image, following the workflow of the [Isaac Lab docs](https://isaac-si
 2. Regenerate a profile after a template change, keeping your values as defaults (old files are backed up and the
    diff is printed):
    ```bash
-   pls cluster add --update <name>
+   pls setup --add <name> --update
    ```
 3. Create `scripts/.env.wandb` from `scripts/tools/.env.wandb.template`; `pls run --batch` refuses to run without it.
 4. Build the `.sif` from the shared docker image and push it to the cluster (only needed when the image changes):
    ```bash
-   pls cluster <name> setup
+   pls setup --on <name>
    ```
 
 ## Commands
 
-`pls cluster <name> <verb>`, where `<name>` is a profile (or `ray`, see [../ray/README.md](../ray/README.md)); bare
-`pls cluster` picks both.
+Every command names the cluster with `--on <name>`, a profile (or `ray`, see [../ray/README.md](../ray/README.md));
+leaving `--on` out opens a picker.
 
-| verb | what it does |
+| command | what it does |
 |---|---|
-| `setup` | build the `.sif` and rsync it to `CLUSTER_SIF_PATH`; with `CLUSTER_ARCH=arm64`, build it on the cluster instead |
-| `setup --build-only` | build the `.sif` only (into `scripts/cluster/exports/`) |
-| `setup --push-only` | rsync an already built `.sif` (reuses the SSH master) |
-| `list [squeue args]` | this profile's queued and running jobs (yours, on its partition) |
-| `logs <job> [tail args]` | the job's output file, also after it left the queue (default: the last 100 lines; `-f` follows) |
-| `stop <job>...` | cancel jobs |
-| `status` | this cluster's cards and leases (`pls res status --pool <name>`) |
-| `add [--update]` | regenerate the profile (`pls cluster add [name]` creates one) |
-| `develop ...` | persistent dev node: see [cluster_dev/README.md](cluster_dev/README.md) |
+| `pls setup --on <name>` | build the `.sif` and rsync it to `CLUSTER_SIF_PATH`; with `CLUSTER_ARCH=arm64`, build it on the cluster instead |
+| `pls setup --on <name> --build-only` | build the `.sif` only (into `scripts/cluster/exports/`) |
+| `pls setup --on <name> --push-only` | rsync an already built `.sif` (reuses the SSH connection) |
+| `pls setup --add <name> [--update]` | create or regenerate the profile |
+| `pls jobs --on <name> [squeue args]` | this profile's queued and running jobs (yours, on its partition) |
+| `pls jobs --on <name> logs <job> [tail args]` | the job's output file, also after it left the queue (default: the last 100 lines; `-f` follows) |
+| `pls jobs --on <name> stop <job>...` | cancel jobs |
+| `pls res status --on <name>` | the connection, the held node, and this cluster's cards and leases |
+| `pls connect`, `res hold`/`drop`, `shell`, `stage` | the connection, a held node and code trees: see [cluster_dev/README.md](cluster_dev/README.md) |
 
 Batch jobs launch through `pls run`:
 
@@ -69,7 +69,7 @@ needs a rebuild when dependencies change. Training logs and the job's `slurm-<id
 | `OMP_NUM_THREADS` | threads per process |
 | `CLUSTER_LOGS_DIR` | run logs and checkpoints (default: inside `CLUSTER_ISAACLAB_DIR`); put it on project/scratch storage, not a quota'd home |
 | `CLUSTER_TREES_DIR` | staged code trees (default `CLUSTER_ISAACLAB_DIR/trees`); same advice |
-| `CLUSTER_MIN_FREE_GB` | `develop stage` / `exec` refuse below this much free space (default 10; quota-aware where `quota -s` prints a table) |
+| `CLUSTER_MIN_FREE_GB` | `pls stage` and runs on a held node refuse below this much free space (default 10; quota-aware where `quota -s` prints a table) |
 | `CLUSTER_ARCH` | `amd64` (default) or `arm64` for aarch64 nodes (TACC Horizon's Grace GB200s); see below |
 | `CLUSTER_BUILD_TIME` | wall time of the `arm64` build job (default `02:00:00`) |
 | `CLUSTER_BUILD_MIN_FREE_GB` | the `arm64` build refuses below this much free space at `CLUSTER_SIF_PATH` (default 40) |

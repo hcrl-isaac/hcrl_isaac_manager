@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `list`, `logs` and `stop` (pls cluster <name> list|logs|stop) on a SLURM profile. Stubs only: ssh runs here, and
+# `list`, `logs` and `stop` (pls jobs --on <name> [list]|logs|stop) on a SLURM profile. Stubs only: ssh runs here, and
 # squeue/scontrol/sacct/scancel record their arguments or answer from fixtures.
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"

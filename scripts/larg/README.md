@@ -69,7 +69,7 @@ LARG_NPROC=2 CUDA_VISIBLE_DEVICES=0,1 scripts/larg/train.sh pepi <task> my-run m
 ### Feature branches: staged code trees
 
 A run on branches other than what the box's workspace has synced goes through a code tree, as on a cluster
-(`develop stage`): named repos at named refs (or local worktrees) land read-only in `<workspace>/trees/<name>-<fingerprint>/`
+(`pls stage`): named repos at named refs (or local worktrees) land read-only in `<workspace>/trees/<name>-<fingerprint>/`
 on that box, every other repo links to the workspace, and the workspace itself is never touched.
 
 ```bash

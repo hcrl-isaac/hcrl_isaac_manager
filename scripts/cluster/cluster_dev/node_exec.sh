@@ -48,7 +48,7 @@ root_sif() {  # <root>/bookworm.sif, pulled once; a concurrent pull lands under 
 }
 
 stage_once() {
-    # Copy the .sif to node-local scratch once; re-copy if a newer one was pushed, so `pls cluster <name>
+    # Copy the .sif to node-local scratch once; re-copy if a newer one was pushed, so `pls setup --on <name>
     # setup --push-only` takes effect without clearing the node cache. (Kit writes go to a --writable-tmpfs overlay.)
     local src="${CLUSTER_SIF_PATH}/${PROFILE}.sif"
     [ -f "$SIF" ] && [ ! "$src" -nt "$SIF" ] && return 0

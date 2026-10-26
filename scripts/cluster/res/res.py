@@ -603,7 +603,15 @@ def _duration(text: str) -> float:
 
 def main() -> None:
     """Parse the CLI and run a command."""
-    parser = argparse.ArgumentParser(prog="pls res", description=__doc__)
+    parser = argparse.ArgumentParser(
+        prog="pls res",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="held nodes (a cluster's long-lived job whose cards `pls run --on` leases), handled by `pls res`:\n"
+        "  pls res hold --on <cluster>        submit one (it may queue for hours)\n"
+        "  pls res drop --on <cluster> <job>  cancel it (the cluster connection stays up)\n"
+        "  pls res status --on <cluster>      the connection and held node, then that cluster's cards",
+    )
     sub = parser.add_subparsers(dest="cmd")
     st = sub.add_parser("status", help="probe every pool and show each card's state and lease")
     st.add_argument("--pool", action="append", help="only these pools (repeatable; prefix match)")
