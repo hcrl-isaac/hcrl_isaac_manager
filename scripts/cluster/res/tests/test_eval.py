@@ -301,26 +301,28 @@ class SlurmTest(unittest.TestCase):
         self.assertIsNotNone(launch, runner)
         self.assertIn("rank /r/venv/bin/python /workspace/ext/r/train.py", runner)
         pin = shlex.split(launch.group(1))[0]
-        for rank, cpus in enumerate(("0-1", "2-3", "4-5", "6-7")):  # each rank on its own quarter of the step's CPUs
-            env = {
-                "RES_CPUS": "0 1 2 3 4 5 6 7",
-                "LOCAL_WORLD_SIZE": "4",
-                "LOCAL_RANK": str(rank),
-                "PATH": "/usr/bin:/bin",
-            }
-            show = 'echo "$OMP_NUM_THREADS $(grep Cpus_allowed_list /proc/self/status)"'
-            out = subprocess.run(
-                ["bash", "-c", pin, "rank", "bash", "-c", show], env=env, capture_output=True, text=True
-            )
-            self.assertEqual(out.stdout.split()[0], "2", "OMP_NUM_THREADS is the rank's share")
-            if shutil.which("taskset"):
-                self.assertEqual(out.stdout.split()[-1], cpus)
+        mine = sorted(os.sched_getaffinity(0))
+        share = len(mine) // 4
+        if share:  # each rank on its own quarter of the step's CPUs
+            cpus = " ".join(map(str, mine[: 4 * share]))
+            for rank in range(4):
+                env = {"RES_CPUS": cpus, "LOCAL_WORLD_SIZE": "4", "LOCAL_RANK": str(rank), "PATH": "/usr/bin:/bin"}
+                show = 'echo "$OMP_NUM_THREADS $(nproc)"'
+                out = subprocess.run(
+                    ["bash", "-c", pin, "rank", "bash", "-c", show], env=env, capture_output=True, text=True
+                )
+                self.assertEqual(out.stdout.split()[0], str(share), f"OMP_NUM_THREADS is the rank's share: {out}")
+                if shutil.which("taskset"):
+                    self.assertEqual(out.stdout.split()[1], str(share), f"the rank runs on its share only: {out}")
         stage = ev.Stage(t)
         stage.dir, stage.tree = "/w/artifacts/res-eval/x", "t"
         self.assertIn("--cards 4", " ".join(stage._exec_cmd([])[0]), "the step asks for all four cards' CPUs")
         for u in t.uuids:
             self.assertIn(f"nvidia-smi -i {u} > /dev/null", runner, "each card is checked visible")
         self.assertIn("nvidia-smi -i GPU-a,GPU-b,GPU-c,GPU-d --query-compute-apps", runner, "and all drain")
+        self.assertIn(
+            'export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$gomp"', runner, "libgomp first on aarch64 (Isaac Sim)"
+        )
         self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
         one = ev.Target("horizon", "slurm", "c125-013", 0, "u@login", "/w", "/w/artifacts", job="71017", uuid="GPU-a")
         self.assertNotIn("torch.distributed.run", ev.slurm_runner_script(one, "/x", "/s.py", [], "/c"))

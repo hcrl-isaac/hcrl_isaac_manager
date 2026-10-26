@@ -788,6 +788,17 @@ def slurm_runner_script(
         f"    echo 98 > {s['status']}; exit 98\nfi"
         for u in t.uuids
     )
+    # Isaac Sim's import exits on aarch64 unless the system's and torch's libgomp are preloaded (isaacsim/__init__.py)
+    find_gomp = (
+        "import glob, importlib.util as u; s = u.find_spec('torch'); "
+        "print(':'.join(glob.glob('/lib/*/libgomp.so.1') + "
+        "(glob.glob(s.submodule_search_locations[0] + '.libs/libgomp*') if s else [])))"
+    )
+    gomp = (
+        f'if [ "$(uname -m)" = aarch64 ] && gomp=$({q(python)} -c {q(find_gomp)}) && [ -n "$gomp" ]; then\n'
+        f'    export LD_PRELOAD="${{LD_PRELOAD:+$LD_PRELOAD:}}$gomp"\n'
+        f"fi\n"
+    )
     cpus = (
         f"export RES_CPUS=\"$({q(python)} -c 'import os; print(*sorted(os.sched_getaffinity(0)))')\"\n"
         f'echo "[res] {ranks} ranks share $(echo $RES_CPUS | wc -w) CPUs"\n'
@@ -808,7 +819,7 @@ export CUDA_VISIBLE_DEVICES={q(cards)} RES_EVAL_DEVICE=cuda:0 PYTHONUNBUFFERED=1
 export TMPDIR={tmp} XDG_CACHE_HOME={cache}/xdg OMNI_CACHE_DIR={cache}/omni
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR"
 trap 'rm -rf "$TMPDIR"' EXIT
-cat {s["MANIFEST"]}
+{gomp}cat {s["MANIFEST"]}
 echo "[res] {t.host}:gpu{t.gpu}{f" (+{ranks - 1} more, {ranks} ranks)" if ranks > 1 else ""} job {t.job} (uuid) env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd)} && cd {q(cwd)} || {{ echo 97 > {s["status"]}; exit 97; }}
 {f"cp {q(refs)} config-defaults.yaml" if refs else ""}
