@@ -4,6 +4,7 @@ usage: wandb_probe.py <entity/project/run_id>
 Prints ``state=<state> it=<iteration|none> age=<seconds|-1>``, or nothing when W&B cannot be read (a failed probe).
 """
 
+import contextlib
 import sys
 import time
 
@@ -20,7 +21,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(Exception):  # any failure reads as no answer, which watch_run.sh counts toward BLIND
         main()
-    except Exception:  # noqa: BLE001  any failure reads as no answer, which watch_run.sh counts toward BLIND
-        pass

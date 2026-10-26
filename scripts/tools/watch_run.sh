@@ -119,27 +119,27 @@ while true; do
         last_ok=$now
         [ $wb_note -eq 0 ] && { echo "[$LABEL] $LOG_SPEC unreachable: following W&B run $WANDB_RUN"; wb_note=1; }
         wfield() { local v=${wb#* $1=}; [ "$v" = "$wb" ] && v=${wb#$1=}; echo "${v%% *}"; }
-        wstate=$(wfield state); wit=$(wfield it); wage=$(wfield age)
-        [ "$wit" = none ] && wit=""
+        wstate=$(wfield state); w_iter=$(wfield it); wage=$(wfield age)
+        [ "$w_iter" = none ] && w_iter=""
         case $wstate in
             crashed|failed|killed)
-                echo "[$LABEL] FAILED: W&B run $WANDB_RUN is $wstate at iter ${wit:-none} (target $TARGET)"; exit 1 ;;
+                echo "[$LABEL] FAILED: W&B run $WANDB_RUN is $wstate at iter ${w_iter:-none} (target $TARGET)"; exit 1 ;;
             finished)
-                if [ -n "$wit" ] && [ "$wit" -ge $((TARGET - 5)) ]; then
-                    echo "[$LABEL] finished: W&B run $WANDB_RUN finished at iter $wit (target $TARGET)"; exit 0
+                if [ -n "$w_iter" ] && [ "$w_iter" -ge $((TARGET - 5)) ]; then
+                    echo "[$LABEL] finished: W&B run $WANDB_RUN finished at iter $w_iter (target $TARGET)"; exit 0
                 fi
-                echo "[$LABEL] FAILED: W&B run $WANDB_RUN finished at iter ${wit:-none}, short of target $TARGET"; exit 1 ;;
+                echo "[$LABEL] FAILED: W&B run $WANDB_RUN finished at iter ${w_iter:-none}, short of target $TARGET"; exit 1 ;;
         esac
         if [ "${wage:--1}" -ge $((STALL_MIN * 60)) ]; then
-            echo "[$LABEL] DEAD or hung: W&B run $WANDB_RUN logged nothing for $((wage / 60)) min, last iter ${wit:-none}"
+            echo "[$LABEL] DEAD or hung: W&B run $WANDB_RUN logged nothing for $((wage / 60)) min, last iter ${w_iter:-none}"
             exit 1
         fi
-        if [ -n "$wit" ]; then
-            [ "$wit" != "$last_it" ] && { last_it=$wit; last_change=$now; }
-            [ $booted -eq 0 ] && { booted=1; echo "[$LABEL] training (iter $wit, from W&B)"; }
-            if [ "$wit" -ge $((TARGET - 5)) ]; then echo "[$LABEL] finished at iter $wit (target $TARGET, from W&B)"; exit 0; fi
-            if [ "$EVERY" -gt 0 ] && [ $((wit / EVERY)) != "$lastc" ]; then
-                lastc=$((wit / EVERY)); echo "[$LABEL] iter $wit (W&B)"
+        if [ -n "$w_iter" ]; then
+            [ "$w_iter" != "$last_it" ] && { last_it=$w_iter; last_change=$now; }
+            [ $booted -eq 0 ] && { booted=1; echo "[$LABEL] training (iter $w_iter, from W&B)"; }
+            if [ "$w_iter" -ge $((TARGET - 5)) ]; then echo "[$LABEL] finished at iter $w_iter (target $TARGET, from W&B)"; exit 0; fi
+            if [ "$EVERY" -gt 0 ] && [ $((w_iter / EVERY)) != "$lastc" ]; then
+                lastc=$((w_iter / EVERY)); echo "[$LABEL] iter $w_iter (W&B)"
             fi
         fi
         if [ $booted -eq 1 ] && [ $(( (now - last_change) / 60 )) -ge "$STALL_MIN" ]; then
