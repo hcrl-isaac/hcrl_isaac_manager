@@ -311,6 +311,14 @@ class SlurmTest(unittest.TestCase):
                     ev.cmd_eval(args, [], mock.Mock())
                 self.assertIn("--gpus N takes --on <node>", str(ctx.exception.code))
 
+    def test_gpus_takes_a_positive_count(self) -> None:
+        for n in ("0", "-2"):
+            with self.subTest(n=n):
+                args = ev.parse_args([__file__, "--holder", "h", "--on", "c125-013", "--gpus", n])
+                with self.assertRaises(SystemExit) as ctx:
+                    ev.cmd_eval(args, [], mock.Mock())
+                self.assertIn("card count of 1 or more", str(ctx.exception.code))
+
     def test_runner_pins_by_uuid_and_stops_on_request(self) -> None:
         t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
         runner = ev.slurm_runner_script(t, "/workspace/artifacts/res-eval/x", "/workspace/ext/r/s.py", ["A"], "/c")

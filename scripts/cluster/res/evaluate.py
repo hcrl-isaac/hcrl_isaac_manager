@@ -1567,6 +1567,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             f"[res] --wt {args.wt} has uncommitted changes in {', '.join(dirty)}: commit them, since a replay restages"
             " the run's recorded commits, or pass --allow-dirty"
         )
+    if args.gpus < 1:
+        sys.exit(f"[res] --gpus takes a card count of 1 or more, not {args.gpus}")
     if args.gpus > 1 and (args.lease or args.any or not args.on):
         sys.exit("[res] --gpus N takes --on <node>: a SLURM node as host or host:job (pls res status shows them)")
     taken, job, uuid, extra = None, "", "", []
