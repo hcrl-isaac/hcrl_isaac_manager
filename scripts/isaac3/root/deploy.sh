@@ -1,6 +1,8 @@
 #!/bin/bash
 # Sync the minimal Isaac Lab 3.0 tree set (no venvs, no logs) to SSH_HOST:ROOT/resources.
 # usage: deploy.sh SSH_HOST ROOT [extra rsync/ssh args via RSYNC_RSH]
+# then build its venv on the host: bash ROOT/resources/isaac3/root/remote_setup.sh ROOT. Runs go through
+# `pls run --root ROOT`, which ships the code; the root only holds Isaac Lab and the venv.
 set -euo pipefail
 HOST=$1; ROOT=$2
 R=$(readlink -f "$(dirname "$0")/../../../resources")

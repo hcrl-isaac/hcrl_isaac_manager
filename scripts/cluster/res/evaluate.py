@@ -1774,7 +1774,7 @@ def parser() -> argparse.ArgumentParser:
         default="",
         metavar="DIR",
         help="run with the venv of an Isaac Lab install root on the target (<DIR>/venv) instead of ilab, e.g. an Isaac"
-        " Lab 3 root made by scripts/isaac3/bench/deploy.sh (on a SLURM card in its <DIR>/bookworm.sif image); --wt"
+        " Lab 3 root made by scripts/isaac3/root/deploy.sh (on a SLURM card in its <DIR>/bookworm.sif image); --wt"
         " picks the code, which ships as usual",
     )
     ev.add_argument(

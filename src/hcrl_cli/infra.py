@@ -67,12 +67,6 @@ def res(args: list[str]) -> None:
     handoff(["python3", "scripts/cluster/res/res.py", *args])
 
 
-def isaac3_train(args: list[str]) -> None:
-    """Isaac Lab 3 training on a cluster's GPUs (scripts/isaac3/horizon/train.sh): its options, then `--` and the
-    train.py args, e.g. `pls isaac3-train --gpus 4 -- --task hcrl/T1-Velocity-v0 physics=newton_mjwarp`."""
-    handoff(["bash", "scripts/isaac3/horizon/train.sh", *args])
-
-
 def sync(host: str, args: list[str]) -> None:
     """Push this workspace + Claude sessions to a peer box (git-aware code sync, transcripts, venv update)."""
     handoff(["python3", "scripts/sync_machine.py", host, *args], echo=True)
