@@ -5,6 +5,9 @@ and `robot_rl` — and deploys training to local GPUs, Ray, or HPC clusters. Thi
 quickstart; per-cluster READMEs ([Ray](scripts/ray/README.md), [Cluster](scripts/cluster/README.md),
 [LARG](scripts/larg/README.md)) cover what each piece does and the full options.
 
+Working with Claude Code: [CLAUDE.md](CLAUDE.md) describes the workspace for a Claude session, and
+`.claude/skills/` holds its procedures (`setup`, `add-compute`, `launch-run`, `new-task`, `convention-review`).
+
 ## Prerequisites
 
 - `$HOME/.local/bin` on your `PATH`, and `sh` + `curl` (`./bootstrap.sh` installs uv if it is missing).
@@ -18,8 +21,8 @@ is installed; afterwards `pls` is on your PATH whenever the `ilab` venv is activ
 keys, space to toggle) for **which projects** to install and how to handle **IsaacLab**, pre-filled with
 your current selection, so re-running `pls setup` doubles as reconfiguration. The IsaacLab choice is:
 
-- **pip** — install `isaacsim` + `isaaclab` wheels (the usual local setup).
-- **source** — clone IsaacLab under `resources/` and install it editable.
+- **source** — clone Isaac Lab 3 under `resources/IsaacLab` (at the ref in `workspace.defaults.yaml`) and install
+  it from its uv lock (the usual local setup; Isaac Lab 3 has no pip release).
 - **none** — don't install IsaacLab (or torch / the workspace packages); just fetch the project repos under
   `resources/`. Use this to browse/edit the projects locally and run training on a cluster or Ray instead.
 
@@ -231,9 +234,9 @@ Claude sessions use the same commands, with a few differences:
 ### `setup`
 
 - Installs general dependencies (`pls deps`)
-- Opens the project + IsaacLab-mode (pip/source/**none**) picker (arrow keys + space), pre-filled with your current selection, so re-running `setup` reconfigures; writes the gitignored `workspace.yaml` (keeps the existing selection on a non-interactive shell)
+- Opens the project + IsaacLab-mode (source/**none**) picker (arrow keys + space), pre-filled with your current selection, so re-running `setup` reconfigures; writes the gitignored `workspace.yaml` (keeps the existing selection on a non-interactive shell)
 - Resolves the selection + defaults and fetches the workspace repos (`pls resolve`)
-- Installs Isaac Lab + Isaac Sim and editable-installs every workspace package into the local uv env — **skipped entirely for IsaacLab `none`** (repos are just fetched, for editing locally + running elsewhere)
+- Builds the Python 3.12 `ilab` venv, installs Isaac Lab 3 from its uv lock and editable-installs every workspace package into the local uv env — **skipped entirely for IsaacLab `none`** (repos are just fetched, for editing locally + running elsewhere)
 
 ### `resolve`
 
