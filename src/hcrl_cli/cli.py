@@ -50,7 +50,6 @@ VERBS: dict[str, tuple[str, str, Callable[[list[str]], None]]] = {
     "run": ("[--on T] [--wt S] [--cmd|--batch] -- <script|command> [args]", "run here, on a leased GPU, a cluster batch job or Ray (pls run --help)", launch.main),
     "res": ("[args]", "compute: probe every GPU, claim/release/transfer leases", infra.res),
     "cluster": ("[<name> <verb>] [args]", "a SLURM cluster or ray: setup/list/logs/stop/status, develop/add (SLURM), bench (Ray)", infra.cluster),
-    "isaac3-train": ("[options] -- <train.py args>", "Isaac Lab 3 training on a cluster's GPUs (default horizon, 4 GPUs, torchrun)", infra.isaac3_train),
     "sync": ("<host> [args]", "push this workspace + Claude sessions to a peer box", _first("host", infra.sync)),
     "sim2real": ("<cmd> [args]", "hcrl_sim2real: MuJoCo sim/sysid, replay, fits, measure, fetch-model/policy", sim2real),
     "upload-artifacts": ("[args]", "upload managed large-file resources to W&B as artifacts", infra.upload_artifacts),
