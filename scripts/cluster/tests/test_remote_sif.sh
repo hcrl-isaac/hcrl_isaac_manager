@@ -8,6 +8,7 @@ T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/scripts" "$T/remote/sif" "$T/remote/ws"
 cp -r "$REPO/scripts/cluster" "$REPO/scripts/docker" "$T/scripts/"
+cp "$REPO/workspace.defaults.yaml" "$T/"
 rm -rf "$T/scripts/cluster/config" && mkdir -p "$T/scripts/cluster/config/zz"
 printf 'CLUSTER_LOGIN=fake@host\nCLUSTER_ISAACLAB_DIR=%s\nCLUSTER_SIF_PATH=%s\nCLUSTER_ARCH=arm64\nCLUSTER_MIN_FREE_GB=0\n' \
     "$T/remote/ws" "$T/remote/sif" > "$T/scripts/cluster/config/zz/.env.cluster"
@@ -40,27 +41,31 @@ cat > "$T/bin/apptainer" <<'EOF'
 case "$1" in
     --version) echo "apptainer version stub" ;;
     pull) [ -n "${STUB_PULL_FAIL:-}" ] && { echo "FATAL: pull failed"; exit 1; }; touch "$3" ;;
-    build) echo "new" > "${@: -2:1}" ;;
+    build) echo "new" > "${@: -2:1}"; echo "$*" > "${@: -2:1}.args" ;;
 esac
 EOF
 printf '#!/usr/bin/env bash\necho "Filesystem 1024-blocks Used Available Capacity Mounted"\necho "fake 999999999 0 999999999 0%% /"\n' > "$T/bin/df"
 chmod +x "$T/bin/"*
 ci() { PATH="$T/bin:$PATH" HOME="$T" CLUSTER=zz bash "$T/scripts/cluster/cluster_interface.sh" "$@"; }
-sif="$T/remote/sif/hcrl-isaac.sif"
+sif="$T/remote/sif/hcrl-isaac-isaaclab3.sif"
 
 fails=0
 check() {
     if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
 }
 
+echo 2x > "$T/remote/sif/hcrl-isaac.sif"
 ci setup > "$T/out1" 2>&1; rc=$?
 check "an arm64 setup builds the .sif in a batch job" "[ $rc = 0 ] && [ \"\$(cat '$sif')\" = new ]"
+check "and leaves the Isaac Lab 2.x .sif alone" "[ \"\$(cat '$T/remote/sif/hcrl-isaac.sif')\" = 2x ]"
+check "with the docker build's Isaac Lab ref and extras" \
+    "grep -q -- \"--build-arg ISAACLAB_REF=v3.0.0-EA --build-arg ISAACLAB_EXTRAS=isaacsim rsl-rl\" '$T/remote/sif/build-hcrl-isaac-isaaclab3/hcrl-isaac-isaaclab3.sif.partial.4242.args'"
 check "with the profile's partition, account and qos" \
     "grep -q -- '-p debug' '$T/sbatch_args' && grep -q -- '-A PROJ' '$T/sbatch_args' && grep -q -- '-q normal' '$T/sbatch_args'"
 check "submitted --parsable --wait" "grep -q -- '--parsable --wait' '$T/sbatch_args'"
-check "the base pull is recorded for reuse" "grep -q 'isaac-sim:' '$T/remote/sif/build-hcrl-isaac/isaac-sim-base.ref'"
+check "the base pull is recorded for reuse" "grep -q 'ubuntu:' '$T/remote/sif/build-hcrl-isaac-isaaclab3/base.ref'"
 
-echo old > "$sif"; rm -f "$T/remote/sif/build-hcrl-isaac/isaac-sim-base.ref"
+echo old > "$sif"; rm -f "$T/remote/sif/build-hcrl-isaac-isaaclab3/base.ref"
 STUB_PULL_FAIL=1 ci setup > "$T/out2" 2>&1; rc=$?
 check "a failed base pull fails the setup" "[ $rc != 0 ] && grep -q 'build job 4242 failed' '$T/out2'"
 check "and leaves the old .sif in place" "[ \"\$(cat '$sif')\" = old ]"

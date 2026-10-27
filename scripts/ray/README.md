@@ -27,6 +27,9 @@ Write the Ray configuration (it asks for your UT EID) and push the shared image 
 ```bash
 pls cluster ray setup            # --config: only rewrite the config files; --build-only / --push-only: the image
 ```
+The image is the Isaac Lab 3 `hcrl-isaac:isaaclab3`, pushed as `esturman/isaac-ray:isaaclab3` (the tag follows
+`HCRL_IMAGE_TAG`), so the Isaac Lab 2.x `esturman/isaac-ray:latest` stays as it is; a Ray node runs the 3.x image only
+once it is pointed at that tag.
 
 If you have additional non-standard configurations (e.g. additional file mounts, env variables, etc.), you can edit the config files at `ray/.env.ray` and `ray/job_config.yaml`.
 

@@ -166,8 +166,10 @@ case $command in
             "$SCRIPT_DIR/../docker/docker_interface.sh" build
         fi
         if [ "$mode" != --build-only ]; then
-            docker tag hcrl-isaac:latest esturman/isaac-ray:latest
-            docker push esturman/isaac-ray:latest
+            # pushed under the image's own tag (isaaclab3), never over the Isaac Lab 2.x isaac-ray:latest
+            tag="${HCRL_IMAGE_TAG:-isaaclab3}"
+            docker tag "hcrl-isaac:${tag}" "esturman/isaac-ray:${tag}"
+            docker push "esturman/isaac-ray:${tag}"
         fi
         ;;
     job)

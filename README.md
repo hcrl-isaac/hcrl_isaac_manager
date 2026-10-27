@@ -224,7 +224,7 @@ The shared `ilab`'s `pls` runs the main checkout's `src/hcrl_cli`; to try `pls` 
 ### `docker`
 
 - Installs and configures Docker if necessary
-- Builds and starts the Isaac Lab Docker container
+- Builds the shared image `hcrl-isaac:isaaclab3` (Ubuntu 24.04 + a uv venv from Isaac Lab 3's lock; scripts/docker/)
 
 ### `cluster <name> <verb>`
 

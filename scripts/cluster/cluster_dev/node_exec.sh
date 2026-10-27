@@ -29,7 +29,8 @@ if [ -n "${CLUSTER_MODULE_LOAD:-}" ]; then
     set -u
 fi
 
-PROFILE="${PROFILE:-hcrl-isaac}"
+# the .sif `pls cluster <name> setup` pushes (cluster_interface.sh SIF_NAME): the Isaac Lab 3 image's
+PROFILE="${PROFILE:-hcrl-isaac-isaaclab3}"
 # Persistent per-job staging dir on node-local scratch (reused across exec calls).
 STAGE="${TMPDIR:-/tmp}/cluster_dev_${SLURM_JOB_ID:-box}"
 SIF="${STAGE}/${PROFILE}.sif"

@@ -83,15 +83,15 @@ echo "(run_singularity.py) Copied $1 to $JOB_TMPDIR"
 dir_name=$(basename "$1")
 
 # copy the shared decoupled container (.sif, built by `pls cluster setup`) to the compute node
+# $2 names it (cluster_interface.sh SIF_NAME). A missing one fails the job: another .sif there may carry another Isaac Lab
 SIF_SRC="$CLUSTER_SIF_PATH/$2.sif"
-[ -f "$SIF_SRC" ] || SIF_SRC="$CLUSTER_SIF_PATH/hcrl-isaac.sif"
 if [ -f "$SIF_SRC" ]; then
     cp "$SIF_SRC" "$JOB_TMPDIR/$2.sif"
     echo "(run_singularity.py) Using container $SIF_SRC"
 elif [ -f "$CLUSTER_SIF_PATH/$2.tar" ]; then  # backwards-compat: an exported docker tar
     tar -xf "$CLUSTER_SIF_PATH/$2.tar" -C "$JOB_TMPDIR" || { echo "(run_singularity.py) Tar extraction failed!"; exit 1; }
 else
-    echo "(run_singularity.py) No container found at $CLUSTER_SIF_PATH ($2.sif / hcrl-isaac.sif / $2.tar)"; exit 1
+    echo "(run_singularity.py) No container found at $CLUSTER_SIF_PATH ($2.sif / $2.tar)"; exit 1
 fi
 
 # Bind all workspace repos into /workspace/ext -- packages AND asset repos (for the in-repo resource

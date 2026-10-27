@@ -26,6 +26,9 @@ Apptainer image, following the workflow of the [Isaac Lab docs](https://isaac-si
    ```bash
    pls cluster <name> setup
    ```
+   The image is `hcrl-isaac:isaaclab3` (Isaac Lab 3) and its `.sif` is `hcrl-isaac-isaaclab3.sif`: the `.sif` name
+   follows `HCRL_IMAGE_TAG` (`latest` keeps `hcrl-isaac.sif`), so the Isaac Lab 2.x `hcrl-isaac.sif` on a cluster
+   is never replaced. Jobs and `develop exec` run the `.sif` of this name and fail when it is missing.
 
 ## Commands
 
@@ -64,7 +67,7 @@ needs a rebuild when dependencies change. Training logs and the job's `slurm-<id
 | `CLUSTER_ISAACLAB_DIR` | workspace on the cluster (ends in `isaaclab`); job copies and logs |
 | `CLUSTER_SIF_PATH`, `CLUSTER_ISAAC_SIM_CACHE_DIR` | scratch locations of the `.sif` and the Isaac Sim cache |
 | `CLUSTER_PYTHON_EXECUTABLE` | script (plus fixed args) a `job` runs, e.g. `scripts/train.py` or a `torch.distributed.run` line |
-| `CLUSTER_APPTAINER_FLAGS` | extra `apptainer exec` flags; default `--fakeroot`, which TACC needs to read the image's `/isaac-sim` |
+| `CLUSTER_APPTAINER_FLAGS` | extra `apptainer exec` flags; default `--fakeroot`, which TACC needs to read the image's `/opt` and `/isaac-sim` |
 | `CLUSTER_MODULE_LOAD` | Lmod module(s) providing apptainer on compute nodes (TACC: `tacc-apptainer`); blank if it is on `PATH` |
 | `OMP_NUM_THREADS` | threads per process |
 | `CLUSTER_LOGS_DIR` | run logs and checkpoints (default: inside `CLUSTER_ISAACLAB_DIR`); put it on project/scratch storage, not a quota'd home |
@@ -88,14 +91,15 @@ The x86 docker image cannot run on aarch64 nodes (TACC Horizon's Grace GB200s), 
 cluster. It uploads `scripts/cluster/hcrl-isaac.def`, the Dockerfile's steps as an Apptainer recipe
 (`tests/test_sif_recipe.py` keeps the two in step), checks for `CLUSTER_BUILD_MIN_FREE_GB` free at `CLUSTER_SIF_PATH`,
 and runs `apptainer build --fakeroot` in a batch job with the profile's partition, account, QOS and reservation,
-waiting for it. The job pulls the Dockerfile's Isaac Sim base once (`build-hcrl-isaac/isaac-sim-base.sif`, re-pulled
-when the version changes; a failed pull fails the job), and the new `.sif` replaces the old one only after the
-recipe's `%test` passed: torch is a CUDA build with `sm_100`, torchvision runs against it, and USD (`pxr`) loads.
-Each build logs to `build-hcrl-isaac/build-<job>.log`; if the connection drops while it runs, the job may still
-finish. `build` and `push` refuse for such a profile.
+waiting for it. The job pulls the Dockerfile's base once (`build-hcrl-isaac-isaaclab3/base.sif`, re-pulled when it
+changes; a failed pull fails the job) and builds with the docker build's Isaac Lab ref and extras
+(`docker_interface.sh isaaclab-args`). The new `.sif` replaces the old one only after the recipe's `%test` passed:
+torch is the lock's 2.11.0 CUDA build with `sm_100`, torchvision runs against it, and Isaac Lab, Ray and USD
+(`pxr`) import. Each build logs to `build-hcrl-isaac-isaaclab3/build-<job>.log`; if the connection drops while it
+runs, the job may still finish. `build` and `push` refuse for such a profile.
 
-Two things differ from the x86 image: `usd-core` (no aarch64 wheel) is left out, as Kit's own USD serves, and torch
-is Isaac Sim's CUDA build, since PyPI's aarch64 torch is CPU-only.
+Isaac Lab's lock resolves torch `+cu130` on aarch64 (`+cu128` on x86), and the entrypoint preloads the system's and
+torch's `libgomp` there, without which `import isaacsim` exits.
 
 The job's resources (`-p`, `-A`, `-n`, `--cpus-per-task`, `--time`, mail) are the `#SBATCH` lines of
 `submit_job_slurm.sh`; `develop` reuses them for its sentinel.

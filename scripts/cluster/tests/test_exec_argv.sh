@@ -53,7 +53,7 @@ mkdir -p "$T/n/scripts/cluster/cluster_dev" "$T/n/shared/resources/hcrl_isaaclab
 cp "$REPO/scripts/cluster/cluster_dev/node_exec.sh" "$T/n/scripts/cluster/cluster_dev/"
 printf '#!/usr/bin/env bash\nprintf "%%s" "${@: -1}" > "%s/n/cmd"\n' "$T" > "$T/bin/apptainer"
 chmod +x "$T/bin/apptainer"
-touch "$T/n/sif/hcrl-isaac.sif"
+touch "$T/n/sif/hcrl-isaac-isaaclab3.sif"
 printf 'CLUSTER_SIF_PATH=%s\nCLUSTER_ISAAC_SIM_CACHE_DIR=%s\nCLUSTER_ISAACLAB_DIR=%s\n' \
     "$T/n/sif" "$T/n/cache/docker-isaac-sim" "$T/n/shared" > "$T/n/env"
 node() { PATH="$T/bin:$PATH" TMPDIR="$T/tmp" SLURM_JOB_ID=7 NODE_EXEC_ENV="$T/n/env" bash "$T/n/scripts/cluster/cluster_dev/node_exec.sh" "$@"; }

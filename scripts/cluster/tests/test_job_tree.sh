@@ -54,7 +54,7 @@ check "a job dir links the tree's repos" "[ -n '$jd' ] && [ \"\$(readlink '$jd/r
 check "with the job scripts and this cluster's env" \
     "[ -f '$jd/scripts/cluster/run_singularity.sh' ] && [ -f '$jd/scripts/cluster/config/zz/submit_job_slurm.sh' ] && grep -q CLUSTER_LOGIN '$jd/scripts/cluster/.env.cluster'"
 check "and owner-only W&B credentials" "[ \"\$(stat -c %a '$jd/scripts/cluster/.env.wandb')\" = 600 ]"
-check "submitted from the job dir with its path first" "grep -qx 'cwd $jd' '$T/submitted' && grep -qx 'args $jd hcrl-isaac --task T' '$T/submitted'"
+check "submitted from the job dir with its path first" "grep -qx 'cwd $jd' '$T/submitted' && grep -qx 'args $jd hcrl-isaac-isaaclab3 --task T' '$T/submitted'"
 check "the tree is marked in use by the job" "[ -f '$tree/.in-use/777.nostep' ]"
 check "no workspace copy on the cluster" "[ ! -e '$T/remote/resources' ] && [ -z \"\$(ls -d '$T'/remote_* 2>/dev/null)\" ]"
 

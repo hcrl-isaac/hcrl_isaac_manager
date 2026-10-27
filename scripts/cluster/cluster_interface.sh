@@ -8,8 +8,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 CLUSTER="${CLUSTER:-default}"
 
 IMAGE_NAME="${HCRL_IMAGE_NAME:-hcrl-isaac}"
+IMAGE_TAG="${HCRL_IMAGE_TAG:-isaaclab3}"
+# the .sif follows the image tag (hcrl-isaac-isaaclab3.sif), so it never replaces the Isaac Lab 2.x hcrl-isaac.sif
+# (image tag latest) on a cluster; jobs and develop exec run the .sif of this name
+SIF_NAME="${IMAGE_NAME}"
+[ "$IMAGE_TAG" = latest ] || SIF_NAME="${IMAGE_NAME}-${IMAGE_TAG}"
 SIF_DIR="${HCRL_SIF_DIR:-${SCRIPT_DIR}/exports}"
-SIF_PATH="${SIF_DIR}/${IMAGE_NAME}.sif"
+SIF_PATH="${SIF_DIR}/${SIF_NAME}.sif"
 # profiles are gitignored and per user, so a manager worktree has none: it uses the main checkout's (as res does)
 CONFIG_DIR="${SCRIPT_DIR}/config"
 if [ ! -f "${CONFIG_DIR}/${CLUSTER}/.env.cluster" ]; then
@@ -42,8 +47,8 @@ ensure_ssh_master() {
 # Build the HPC Apptainer (.sif) from the shared docker image (building the image first if needed).
 build_sif() {
     command -v apptainer >/dev/null 2>&1 || { echo "[cluster] apptainer not found (see README)." >&2; exit 1; }
-    local image="${IMAGE_NAME}:${HCRL_IMAGE_TAG:-latest}"
-    docker image inspect "$image" >/dev/null 2>&1 || { echo "[cluster] image $image missing; building"; "${SCRIPT_DIR}/../docker/docker_interface.sh" build; }
+    local image="${IMAGE_NAME}:${IMAGE_TAG}"
+    docker image inspect "$image" >/dev/null 2>&1 || { echo "[cluster] image $image missing; building"; HCRL_IMAGE_TAG="$IMAGE_TAG" "${SCRIPT_DIR}/../docker/docker_interface.sh" build; }
     mkdir -p "$SIF_DIR"
     echo "[cluster] apptainer build ${SIF_PATH} from docker-daemon://${image}"
     apptainer build --force "$SIF_PATH" "docker-daemon://${image}"
@@ -62,10 +67,15 @@ push_sif() {
 # `apptainer build --fakeroot` in a batch job with the profile's resources, replacing the .sif only once built.
 build_remote_sif() {
     source_cluster_env
-    local build="${CLUSTER_SIF_PATH}/build-${IMAGE_NAME}" submit="${CONFIG_DIR}/${CLUSTER}/submit_job_slurm.sh"
+    local build="${CLUSTER_SIF_PATH}/build-${SIF_NAME}" submit="${CONFIG_DIR}/${CLUSTER}/submit_job_slurm.sh"
     local dockerfile="${SCRIPT_DIR}/../docker/Dockerfile" base flags="" flag value free min="${CLUSTER_BUILD_MIN_FREE_GB:-40}"
-    # the same base image as the docker build, from its ARGs
-    base="$(sed -nE 's/^ARG ISAACSIM_BASE_IMAGE=(.+)/\1/p' "$dockerfile"):$(sed -nE 's/^ARG ISAACSIM_VERSION=(.+)/\1/p' "$dockerfile")"
+    local build_args="" arg
+    # the same base image as the docker build, from its ARG, and the same Isaac Lab ref and extras
+    base="$(sed -nE 's/^ARG BASE_IMAGE=(.+)/\1/p' "$dockerfile")"
+    while IFS= read -r arg; do
+        build_args+=" --build-arg '${arg}'"
+    done < <("${SCRIPT_DIR}/../docker/docker_interface.sh" isaaclab-args)
+    [ -n "$build_args" ] || { echo "[ERROR] no Isaac Lab ref from docker_interface.sh isaaclab-args" >&2; exit 1; }
     for flag in -p -A -q --reservation; do  # the profile's own submission flags, in any spelling
         value="$(python3 "${SCRIPT_DIR}/tools/merge_profile.py" get "$submit" "$flag")"
         [ -n "$value" ] && flags+=" ${flag} ${value}"
@@ -92,15 +102,15 @@ unset SINGULARITY_BINDPATH APPTAINER_BINDPATH SINGULARITYENV_LD_PRELOAD APPTAINE
 cd '${build}'
 uname -m; apptainer --version
 # a pulled base: a docker bootstrap loses the image's linked files when unprivileged
-if [ \"\$(cat isaac-sim-base.ref 2>/dev/null)\" != '${base}' ]; then
-    apptainer pull --force isaac-sim-base.sif.\$SLURM_JOB_ID 'docker://${base}'
-    mv -f isaac-sim-base.sif.\$SLURM_JOB_ID isaac-sim-base.sif
-    echo '${base}' > isaac-sim-base.ref
+if [ \"\$(cat base.ref 2>/dev/null)\" != '${base}' ]; then
+    apptainer pull --force base.sif.\$SLURM_JOB_ID 'docker://${base}'
+    mv -f base.sif.\$SLURM_JOB_ID base.sif
+    echo '${base}' > base.ref
 fi
-apptainer build --fakeroot --force ${IMAGE_NAME}.sif.partial.\$SLURM_JOB_ID hcrl-isaac.def
-mv -f ${IMAGE_NAME}.sif.partial.\$SLURM_JOB_ID '${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif'
-echo \"[cluster] built ${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif\""
-    local opts="-N 1 -t ${CLUSTER_BUILD_TIME:-02:00:00} -J ${IMAGE_NAME}-build -o '${build}/build-%j.log'${flags}"
+apptainer build --fakeroot --force${build_args} ${SIF_NAME}.sif.partial.\$SLURM_JOB_ID hcrl-isaac.def
+mv -f ${SIF_NAME}.sif.partial.\$SLURM_JOB_ID '${CLUSTER_SIF_PATH}/${SIF_NAME}.sif'
+echo \"[cluster] built ${CLUSTER_SIF_PATH}/${SIF_NAME}.sif\""
+    local opts="-N 1 -t ${CLUSTER_BUILD_TIME:-02:00:00} -J ${SIF_NAME}-build -o '${build}/build-%j.log'${flags}"
     echo "[cluster] building in a batch job (sbatch ${opts}); it can take ~15 min"
     local rc=0 out id
     out="$(printf '%s\n' "$job" | ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "sbatch --parsable --wait ${opts}")" || rc=$?
@@ -119,7 +129,7 @@ echo \"[cluster] built ${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif\""
 }
 
 # Submit a batch job on the login node: the cluster's submit_job_slurm.sh holds its #SBATCH config and
-# runs scripts/cluster/run_singularity.sh in the shared hcrl-isaac.sif.
+# runs scripts/cluster/run_singularity.sh in the shared ${SIF_NAME}.sif.
 submit_job() {
     case "$CLUSTER_JOB_SCHEDULER" in
         SLURM) job_script=submit_job_slurm.sh ;;
@@ -127,7 +137,7 @@ submit_job() {
         *) echo "[ERROR] Unsupported CLUSTER_JOB_SCHEDULER '$CLUSTER_JOB_SCHEDULER' (SLURM|PBS)" >&2; exit 1 ;;
     esac
     ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
-        "cd $CLUSTER_ISAACLAB_DIR && bash scripts/cluster/config/${CLUSTER}/${job_script} \"$CLUSTER_ISAACLAB_DIR\" hcrl-isaac ${*}"
+        "cd $CLUSTER_ISAACLAB_DIR && bash scripts/cluster/config/${CLUSTER}/${job_script} \"$CLUSTER_ISAACLAB_DIR\" ${SIF_NAME} ${*}"
 }
 
 cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: the workspace, staged as `default`)
