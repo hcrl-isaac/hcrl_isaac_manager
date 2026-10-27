@@ -12,6 +12,7 @@ import contextlib
 import hashlib
 import json
 import os
+import posixpath
 import queue
 import re
 import shlex
@@ -1695,6 +1696,10 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             cwd, target_script = work if t.kind == "slurm" else "", container_path(t, put)
         # wandb.init reads config-defaults.yaml from the cwd; only a run's own work dir gets one, never the workspace
         refs_file = container_path(t, f"{stage.dir}/wandb_config.yaml") if cwd == work else ""
+        # the dir holding the run's staged repos (each at <dir>/<repo>), so a --cmd can cd into the staged code: a
+        # --cmd starts in the box workspace, whose resources/ are that box's own checkouts, not this run's code
+        if args.tree or pythonpath:
+            env["PLS_RESOURCES"] = "/workspace/ext" if args.tree else posixpath.dirname(pythonpath[0])
         lines = [f"{k}={shlex.quote(v)}" for k, v in {**wandb_env(), **env, **paths}.items()]
         stage.write("\n".join(lines) + "\n", "env")
         names = sorted({**env, **paths})

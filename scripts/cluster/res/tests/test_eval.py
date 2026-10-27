@@ -1034,7 +1034,7 @@ class EvalRunTest(Isolated):
         self.assertEqual(self._stages(), [], "stage dir not removed")
 
     def test_a_command_runs_as_given_from_the_workspace_with_the_venv_first_on_path(self) -> None:
-        line = 'echo "CMD [$1] $MODE $(command -v python)"; pwd'
+        line = 'echo "CMD [$1] $MODE $(command -v python)"; pwd; echo "STAGED $(ls "$PLS_RESOURCES" | tr "\\n" " ")"'
         args = ev.parse_args([
             "--cmd",
             "bash",
@@ -1056,6 +1056,8 @@ class EvalRunTest(Isolated):
         self.assertEqual(cm.exception.code, 0, text)
         self.assertIn(f"CMD [a b] ok {self.tmp / 'ws' / 'ilab' / 'bin' / 'python'}", text)
         self.assertIn(f"\n{self.tmp / 'ws'}\n", text)
+        staged = next(x for x in text.splitlines() if x.startswith("STAGED "))
+        self.assertIn("robot_rl", staged.split(), "$PLS_RESOURCES holds the run's staged repos")
         self.assertEqual(self._leases(), [])
 
     def test_a_checkpoint_placeholder_in_the_args_becomes_its_path(self) -> None:

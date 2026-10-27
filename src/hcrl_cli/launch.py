@@ -47,7 +47,9 @@ scripts (the same on every target):
 
 --cmd runs the words after -- as a command instead (e.g. `--cmd -- nvidia-smi`, `--cmd -- python -m pkg`): here from
 where you are, on a card from the box workspace (a SLURM card: the run's work dir), with the ilab venv first on PATH
-(the container's python on SLURM). Ray runs python scripts only.
+(the container's python on SLURM). The box workspace's resources/ are that box's own checkouts, not the code the run
+shipped: $PLS_RESOURCES is the dir holding the staged repos, e.g. `--cmd -- bash -c 'cd "$PLS_RESOURCES/ssti_tasks" &&
+python -m pytest'`. Ray runs python scripts only.
 
 On a card, {DEVICE} in the script's arguments becomes the leased card's torch device (`--device {DEVICE}`): boxes
 pin cards differently, so a hand-written cuda:N that is not the card is refused.
