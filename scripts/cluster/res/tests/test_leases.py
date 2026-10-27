@@ -396,6 +396,23 @@ class CommandTest(CommandBase):
         self.claim(any=True, count=1)
         self.assertEqual(self.stored(), ["mckennie:0"])
 
+    def test_a_multi_gpu_claim_takes_its_cards_from_one_named_node(self) -> None:
+        self.cards = [
+            card(host="gpub1", index=0, job="7"),
+            card(host="gpub2", index=0, job="8"),
+            card(host="gpub2", index=1, job="8"),
+            card(host="gpub2", index=2, job="8", state="busy"),
+        ]
+        self.claim(any=True, count=2, within="gpub2:8", one_host=True)
+        self.assertEqual(sorted(self.stored()), ["gpub2:0 (job 8)", "gpub2:1 (job 8)"])
+
+    def test_a_multi_gpu_claim_is_refused_when_no_node_has_enough_free_cards(self) -> None:
+        self.cards = [card(host="gpub1", index=0, job="7"), card(host="gpub2", index=0, job="8")]
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim(any=True, count=2, one_host=True)
+        self.assertIn("no node has 2 free cards", str(ctx.exception.code))
+        self.assertEqual(self.stored(), [])
+
     def test_release_accepts_host_job_gpu(self) -> None:
         self.cards = [card(host="gpub1", index=0, job="7")]
         self.claim("gpub1:7:0")

@@ -387,7 +387,7 @@ cmd_attach() {  # interactive shell on the compute node
     fi
 }
 
-cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tmp] [--root DIR] -- <command...>
+cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tmp] [--root DIR] [--cards N] -- <command...>
     #
     # Default (foreground): run the container command tethered to this SSH master. Stdout/stderr
     # stream back to the caller; exit code propagates. Good for short ops (smoke tests, status
@@ -399,7 +399,7 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tm
     # redirected to a log file on the login node (default: $HOME/cluster_dev_run_<ts>.log).
     # Follow it with `cluster_dev.sh tail`. The latest --detach log path is recorded in
     # ~/.cluster_dev/state (LAST_RUN_LOG) so `tail` finds it without args.
-    local detach="" logfile="" tree="" space_check=1 own_tmp="" root=""
+    local detach="" logfile="" tree="" space_check=1 own_tmp="" root="" cards=1
     while [ $# -gt 0 ]; do
         case "${1:-}" in
             --detach) detach="1"; shift;;
@@ -411,11 +411,15 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tm
                     root="NODE_EXEC_ROOT=$(printf %q "$2") "; shift 2;;
             --tree) [ -n "${2:-}" ] || { err "--tree needs a tree name or <name>-<fingerprint>"; exit 1; }
                     tree="$2"; shift 2;;
+            # a step for N cards' work (a multi-GPU run): N sentinel tasks' CPUs, not one's
+            --cards) [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] || { err "--cards needs a card count"; exit 1; }
+                     cards="$2"; shift 2;;
             --) shift; break;;
             *) break;;
         esac
     done
     require_running
+    if [ "$cards" -gt 1 ] && [ -n "$DEV_CPUS" ]; then SRUN_CPUS_OPT="--cpus-per-task=$((DEV_CPUS * cards))"; _srun_opts; fi
     [ -n "$space_check" ] && check_space "${CLUSTER_LOGS_DIR:-${REMOTE_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs}" "run logs"
     # exec always runs with the current local config, pushed before every run
     push_env_cluster || { err "could not push ${ENV_FILE} to ${REMOTE_ENV_FILE}"; exit 1; }
