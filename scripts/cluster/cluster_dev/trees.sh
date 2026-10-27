@@ -236,7 +236,7 @@ cmd_stage() {  # stage [--no-space-check] [NAME] [REPO=REF|REPO=PATH ...] : uplo
     if [ -n "$whole" ]; then _push_data || { err "could not add the data repos' new files"; exit 1; }; fi
     _prune_trees "$name"
     printf '%s' "$manifest" | sed 's/^/  /'
-    local hint="${TREE_RUN_HINT:-pls cluster ${CLUSTER:-} develop exec --tree <id> -- <cmd>}"
+    local hint="${TREE_RUN_HINT:-pls run --on ${CLUSTER:-} --tree <id> -- <script>}"
     echo "Run with: ${hint//<id>/$(basename "$tree")}"
 }
 
@@ -260,7 +260,7 @@ resolve_tree() {  # resolve_tree ID -> remote path
     found="$(on_login "for t in '${TREES_DIR}/${id}'-*; do [ -f \"\$t/.complete\" ] && \
         find \"\$t/.complete\" -printf \"%T@ \$(basename \"\$t\")\\n\"; done 2>/dev/null" |
         grep -E " ${id//./\\.}-[0-9a-f]{10}$" | sort -rn | head -1 | cut -d' ' -f2 || true)"
-    [ -n "$found" ] || { err "no staged tree '${id}' under ${TREES_DIR} (stage it: develop stage)"; return 1; }
+    [ -n "$found" ] || { err "no staged tree '${id}' under ${TREES_DIR} (stage it: pls stage --on ${CLUSTER:-<cluster>})"; return 1; }
     echo "${TREES_DIR}/${found}"
 }
 

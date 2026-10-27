@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge a regenerated cluster profile with its previous version so `pls cluster add --update` keeps hand edits."""
+"""Merge a regenerated cluster profile with its previous version so `pls setup --add <name> --update` keeps hand edits."""
 
 from __future__ import annotations
 

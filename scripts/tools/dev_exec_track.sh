@@ -18,7 +18,7 @@ steps() { timeout 60 ssh "${SSH_OPTS[@]}" "$LOGIN" "squeue -s -j $JOB -h -o %i" 
             | grep -oE "${JOB}\.[0-9]+" | sort -u; }
 
 before=$(steps)
-out=$(DEV_JOBID="$JOB" PYTHONPATH="$MGR/src" python3 -m hcrl_cli cluster "$CLUSTER" develop exec --detach -- "$@" 2>&1)
+out=$(DEV_JOBID="$JOB" CLUSTER="$CLUSTER" bash "$MGR/scripts/cluster/cluster_dev/cluster_dev.sh" exec --detach -- "$@" 2>&1)
 log=$(printf '%s\n' "$out" | grep -oE '\$HOME/cluster_dev_run_[0-9-]+\.log' | head -1)
 printf '%s\n' "$out"
 # staging can sit at "Checking available allocation" for minutes before the step appears, so poll

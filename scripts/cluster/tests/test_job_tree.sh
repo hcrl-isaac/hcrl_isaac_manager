@@ -31,6 +31,8 @@ mkdir -p "$G" && (
 echo "WANDB_API_KEY=k" > "$T/scripts/.env.wandb"
 printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nCLUSTER_MIN_FREE_GB=0\nCLUSTER_JOB_SCHEDULER=SLURM\n' \
     "$T/remote" > "$T/scripts/cluster/config/zz/.env.cluster"
+echo 'CLUSTER_PYTHON_EXECUTABLE="-m torch.distributed.run --nproc_per_node=2 scripts/train.py"' \
+    >> "$T/scripts/cluster/config/zz/.env.cluster"
 # the profile's submit script: record where and with what it ran, and answer like sbatch
 cat > "$T/scripts/cluster/config/zz/submit_job_slurm.sh" <<EOF
 #!/usr/bin/env bash
@@ -64,6 +66,16 @@ job --tree pin --task T > "$T/out2" 2>&1
 pin="$(ls -d "$T"/remote/trees/pin-* 2>/dev/null | head -1)"
 check "--tree runs that tree" "[ $? -eq 0 ] && [ \"\$(readlink \"\$(ls -td '$T'/remote/jobs/zz-*/ | head -1)resources\")\" = '$pin/resources' ]"
 check "without staging a new default" "[ \$(ls -d '$T'/remote/trees/default-* | wc -l) -eq 1 ]"
+exe() { (source "$(ls -td "$T"/remote/jobs/zz-*/ | head -1)scripts/cluster/.env.cluster"; echo "$CLUSTER_PYTHON_EXECUTABLE"); }
+check "a job without --script keeps the profile's train.py" \
+    "[ \"\$(exe)\" = '-m torch.distributed.run --nproc_per_node=2 scripts/train.py' ]"
+job --tree pin --script /workspace/ext/robot_rl/tools/eval.py --task T > "$T/out4" 2>&1
+check "--script swaps in another script, keeping the launcher before it" \
+    "[ $? -eq 0 ] && [ \"\$(exe)\" = '-m torch.distributed.run --nproc_per_node=2 /workspace/ext/robot_rl/tools/eval.py' ]"
+sed -i 's|^CLUSTER_PYTHON_EXECUTABLE=.*|CLUSTER_PYTHON_EXECUTABLE="scripts/other.py"|' "$T/scripts/cluster/config/zz/.env.cluster"
+rm -f "$T/submitted"
+job --tree pin --script /workspace/ext/x.py > "$T/out5" 2>&1
+check "a profile not running train.py refuses --script before submitting" "[ $? -ne 0 ] && [ ! -e '$T/submitted' ]"
 rm -f "$T/submitted"
 job --tree nope --task T > "$T/out3" 2>&1
 check "an unknown tree fails before submitting" "[ $? -ne 0 ] && [ ! -e '$T/submitted' ]"

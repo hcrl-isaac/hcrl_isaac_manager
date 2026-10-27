@@ -314,7 +314,7 @@ class SlurmTest(unittest.TestCase):
             ev.use_tree(t, "../etc")
 
     def test_a_staged_tree_id_is_read_from_develop_stage(self) -> None:
-        out = "  robot_rl /p abc worktree 123\nRun with: pls cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
+        out = "  robot_rl /p abc worktree 123\nRun with: pls run --on amd-rtx --tree res-eval-0123456789 -- <script>\n"
         done = mock.Mock(returncode=0, stdout=out)
         t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
         with (
@@ -341,7 +341,7 @@ class SlurmTest(unittest.TestCase):
         self.assertTrue(prune.endswith(">> /w/trees/.prune.log 2>&1 < /dev/null &"))
 
     def test_a_reused_tree_pruned_before_the_run_is_staged_again(self) -> None:
-        out = "Run with: pls cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
+        out = "Run with: pls run --on amd-rtx --tree res-eval-0123456789 -- <script>\n"
         staged = mock.Mock(returncode=0, stdout=out)
         t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
 

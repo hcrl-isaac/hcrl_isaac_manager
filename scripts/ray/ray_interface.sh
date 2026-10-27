@@ -73,7 +73,7 @@ render_job_configs() {  # render_job_configs <ut_eid>
 prepare_submit() {
     local env_ray="$RAY_ENV_ROOT/scripts/ray/.env.ray" ut_eid
     if [ ! -f "$env_ray" ]; then
-        echo "[ERROR] $env_ray not found. Run 'pls cluster ray setup' first." >&2
+        echo "[ERROR] $env_ray not found. Run 'pls setup --on ray' first." >&2
         exit 1
     fi
     ut_eid="$( . "$env_ray"; echo "$UT_EID" )"
@@ -241,7 +241,7 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         else
             echo "[ERROR] The specified job $job_id cannot be stopped."
             echo "[ERROR] Only running jobs started by you can be cancelled."
-            echo "[ERROR] You can view these jobs with \`pls cluster ray list\`." 
+            echo "[ERROR] You can view these jobs with \`pls jobs --on ray\`." 
             exit 1
         fi
         ;;
@@ -260,7 +260,7 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         else
             echo "[ERROR] The specified job $job_id cannot be stopped."
             echo "[ERROR] You may only view the logs of jobs started by you."
-            echo "[ERROR] You can view these jobs with \`pls cluster ray list --all_statuses\`." 
+            echo "[ERROR] You can view these jobs with \`pls jobs --on ray list --all_statuses\`." 
             exit 1
         fi
         ;;

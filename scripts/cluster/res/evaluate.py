@@ -642,7 +642,7 @@ def use_tree(t: Target, tree: str) -> str:
     if check.returncode == 255:
         sys.exit(f"[res] could not reach {t.pool} to check the code tree: {check.stderr.strip()[:200]}")
     if check.returncode != 0:
-        sys.exit(f"[res] --tree {tree}: no complete tree at {path} on {t.pool} (`pls cluster {t.pool} develop trees`)")
+        sys.exit(f"[res] --tree {tree}: no complete tree at {path} on {t.pool} (`pls stage --on {t.pool} list`)")
     return f"code: staged tree {tree} on {t.pool} (as staged; nothing shipped from here)"
 
 
@@ -1007,7 +1007,7 @@ class Stage:
             where = (
                 "a local run reads resources/ in place"
                 if self.t.kind == "local"
-                else ("on a cluster, stage them with `develop stage <name> <repo>=<path>`")
+                else ("on a cluster, stage them with `pls stage --on <cluster> <name> <repo>=<path>`")
             )
             sys.exit(f"[res] --wt data repos ({', '.join(data)}) ship to ssh targets only; {where}")
         for repo, src in data.items():
@@ -1752,7 +1752,7 @@ def parser() -> argparse.ArgumentParser:
     ev.add_argument(
         "--tree",
         metavar="NAME",
-        help="SLURM card: run in this already-staged code tree (`develop trees` lists them) instead of staging"
+        help="SLURM card: run in this already-staged code tree (`pls stage --on <cluster> list` lists them) instead of staging"
         " the workspace or --wt; every repo is as staged",
     )
     ev.add_argument(
