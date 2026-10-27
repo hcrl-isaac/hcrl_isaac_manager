@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SLURM backend of `pls cluster <name>` and `pls run --on <name> --batch`: builds/pushes the shared Isaac .sif,
+# SLURM backend of `pls setup --on|--add`, `pls jobs --on <name>` and `pls run --on <name> --batch`: builds/pushes the shared Isaac .sif,
 # lists, tails and stops this profile's jobs, submits batch jobs and drives the dev node. CLUSTER=<name> selects
 # config/<name>/.
 set -e
@@ -26,7 +26,7 @@ source "${SCRIPT_DIR}/tools/restore_profiles.sh"
 
 source_cluster_env() {
     if [ ! -f "$CLUSTER_ENV_FILE" ]; then
-        echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'pls cluster add'). Available:" \
+        echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'pls setup --add <name>'). Available:" \
             "$(ls "$CONFIG_DIR" 2>/dev/null | paste -sd, -)." >&2
         exit 1
     fi
@@ -35,7 +35,7 @@ source_cluster_env() {
 }
 
 ensure_ssh_master() {
-    echo "[INFO] Opening SSH control master to $CLUSTER_LOGIN (enter 2FA once)"
+    echo "[INFO] Connecting to $CLUSTER_LOGIN (the open connection, or 2FA once)"
     ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" true
 }
 
@@ -130,7 +130,7 @@ submit_job() {
         "cd $CLUSTER_ISAACLAB_DIR && bash scripts/cluster/config/${CLUSTER}/${job_script} \"$CLUSTER_ISAACLAB_DIR\" hcrl-isaac ${*}"
 }
 
-cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: the workspace, staged as `default`)
+cmd_job() {  # job [--tree NAME] [--script PATH] [args]: a batch job on a staged tree (default: the workspace as `default`)
     source_cluster_env
     [ -f "$SCRIPT_DIR/../.env.wandb" ] || {
         echo "[ERROR] scripts/.env.wandb not found: a job without W&B credentials cannot log. Create it from" \
@@ -139,10 +139,23 @@ cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: 
     }
     # the API key: owner-only here, which the copy below carries to the cluster
     chmod go-rwx "$SCRIPT_DIR/../.env.wandb"
-    local tree_name="" dev="$SCRIPT_DIR/cluster_dev/cluster_dev.sh"
-    if [ "${1:-}" = --tree ]; then
-        [ -n "${2:-}" ] || { echo "[ERROR] --tree needs a tree name or <name>-<fingerprint>" >&2; exit 1; }
-        tree_name="$2"; shift 2
+    local tree_name="" script="" dev="$SCRIPT_DIR/cluster_dev/cluster_dev.sh"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --tree) [ -n "${2:-}" ] || { echo "[ERROR] --tree needs a tree name or <name>-<fingerprint>" >&2; exit 1; }
+                    tree_name="$2"; shift 2 ;;
+            --script) [ -n "${2:-}" ] || { echo "[ERROR] --script needs the script's path in the container" >&2; exit 1; }
+                      script="$2"; shift 2 ;;
+            *) break ;;
+        esac
+    done
+    local exe="$CLUSTER_PYTHON_EXECUTABLE"
+    if [ -n "$script" ]; then  # this job's script in place of the profile's train.py, keeping any launcher before it
+        case "$exe" in
+            *scripts/train.py) exe="${exe%scripts/train.py}${script}" ;;
+            *) echo "[ERROR] this profile's CLUSTER_PYTHON_EXECUTABLE ($exe) does not end in scripts/train.py," \
+                   "so a batch job cannot swap in $script" >&2; exit 1 ;;
+        esac
     fi
     ensure_ssh_master
     if [ -z "$tree_name" ]; then
@@ -162,7 +175,10 @@ cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: 
     for f in "$CONFIG_DIR/${CLUSTER}"/submit_job_*.sh; do
         [ -f "$f" ] && { rsync -t -e "ssh ${SSH_OPTS[*]}" "$f" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/config/${CLUSTER}/" || exit 1; }
     done
-    rsync -t -e "ssh ${SSH_OPTS[*]}" "$CLUSTER_ENV_FILE" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/.env.cluster" || exit 1
+    local job_env; job_env="$(mktemp)"
+    { cat "$CLUSTER_ENV_FILE"; printf 'CLUSTER_PYTHON_EXECUTABLE=%q\n' "$exe"; } > "$job_env"
+    rsync -t -e "ssh ${SSH_OPTS[*]}" "$job_env" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/.env.cluster" || { rm -f "$job_env"; exit 1; }
+    rm -f "$job_env"
     rsync -tp -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/../.env.wandb" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/.env.wandb" || exit 1
     [ ! -f "$SCRIPT_DIR/../.env.base" ] || {
         rsync -t -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/../.env.base" "$CLUSTER_LOGIN:${job_dir}/scripts/.env.base" || exit 1; }
@@ -248,18 +264,12 @@ case "$cmd" in
     logs)        cmd_logs "$@" ;;
     stop)        cmd_stop "$@" ;;
     job)         cmd_job "$@" ;;   # `pls run --on <name> --batch`
-    develop)     exec env CLUSTER="$CLUSTER" "${SCRIPT_DIR}/cluster_dev/cluster_dev.sh" "$@" ;;
     -h | --help | help)
-        echo "usage: pls cluster <name> <command> [args]"
-        echo "  setup [--build-only|--push-only]  build the shared .sif and rsync it to the cluster (CLUSTER_ARCH=arm64:"
-        echo "                         build it there); --push-only reuses a built .sif"
-        echo "  list [squeue args]     this profile's queued and running jobs"
-        echo "  logs <job> [tail args] the job's output (default: its last 100 lines; -f follows)"
-        echo "  stop <job>...          cancel jobs"
-        echo "  status                 this cluster's cards and leases"
-        echo "  add [--update]         create or regenerate the profile (scripts/cluster/config/<name>, gitignored)"
-        echo "  develop ...            manage a persistent dev node (start/status/attach/exec/stage/trees/kill/stop)"
-        echo "batch jobs: pls run --on <name> --batch [--tree N] -- train [args]"
+        echo "The SLURM backend of pls (CLUSTER=<profile>); run it through:"
+        echo "  pls setup --on <cluster> [--build-only|--push-only]  build the shared .sif and push it (arm64: built there)"
+        echo "  pls setup --add <name> [--update]                    create or regenerate a profile"
+        echo "  pls jobs --on <cluster> [list|logs <job>|stop <job>]  this profile's batch jobs"
+        echo "  pls run --on <cluster> --batch [--tree N | --wt S] -- <script> [args]  submit one"
         ;;
     *) echo "[ERROR] unknown command '$cmd' (try: help)" >&2; exit 1 ;;
 esac

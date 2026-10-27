@@ -25,7 +25,7 @@ The ray scripts assume that you will be developing on hcrl_isaaclab within manag
 
 Write the Ray configuration (it asks for your UT EID) and push the shared image with
 ```bash
-pls cluster ray setup            # --config: only rewrite the config files; --build-only / --push-only: the image
+pls setup --on ray               # --config: only rewrite the config files; --build-only / --push-only: the image
 ```
 
 If you have additional non-standard configurations (e.g. additional file mounts, env variables, etc.), you can edit the config files at `ray/.env.ray` and `ray/job_config.yaml`.
@@ -39,7 +39,7 @@ manager  # or `source .venv/bin/activate`
 Ensure connectivity to the server with
 
 ```bash
-pls cluster ray list
+pls jobs --on ray
 ```
 
 This should display a blank table, like so:
@@ -93,24 +93,24 @@ from this interface.
 - Ray holds the job until a GPU frees, so a busy cluster queues it instead of refusing it. A card run refuses Ray pools
   and points here.
 
-### `pls cluster ray stop <job_id>`
+### `pls jobs --on ray stop <job_id>`
 
 - Stop a running job
 - Can provide additional arguments (see [`ray job stop` docs](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/cli.html#ray-job-stop))
 - You can only stop jobs that have been created by you. If you really want to bypass this, comment out the check in
 `scripts/ray/ray_interface.sh`.
 
-### `pls cluster ray list`
+### `pls jobs --on ray`
 
 - List your currently running jobs, ascending by start time
 - View all users' runs with `--all_users`
 - View the status of all runs with `--all_statuses`
 
-### `pls cluster ray logs <job_id>`
+### `pls jobs --on ray logs <job_id>`
 
 - Download and print logs for a job
 - Can provide additional arguments (see [`ray job logs` docs](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/cli.html#ray-job-logs))
-- You can redirect the output to a file with the `>` operator: `pls cluster ray logs <job_id> > <file_path>`
+- You can redirect the output to a file with the `>` operator: `pls jobs --on ray logs <job_id> > <file_path>`
 - Generally, you can use W&B to view your run logs and metrics. This function is mainly for when your job fails before it can deploy, or if you aren't using W&B
 
 ## How it works
@@ -181,4 +181,4 @@ There are a couple of limitations on the server setup. They may be fixed over ti
 
 ## Etiquette
 
-Since we only have two server computers, this means that up to two jobs can run at a time. Please be considerate to other users — keep an eye on your jobs, and please cancel them if they aren't getting results. You can see if other users have queued jobs through the Ray dashboard or with `pls cluster ray list --all_users`.
+Since we only have two server computers, this means that up to two jobs can run at a time. Please be considerate to other users — keep an eye on your jobs, and please cancel them if they aren't getting results. You can see if other users have queued jobs through the Ray dashboard or with `pls jobs --on ray list --all_users`.

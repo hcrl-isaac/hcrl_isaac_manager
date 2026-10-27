@@ -4,9 +4,12 @@ commands are real."""
 
 import argparse
 import contextlib
+import dataclasses
 import io
 import json
 import os
+import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -287,6 +290,59 @@ class SlurmTest(unittest.TestCase):
             ev.slurm_profile(label, "3566414", pools)
         self.assertIn("Invalid job id", str(cm.exception.code))
 
+    def test_a_multi_gpu_runner_pins_every_card_and_launches_one_rank_per_card(self) -> None:
+        t = ev.Target("horizon", "slurm", "c125-013", 0, "u@login", "/w", "/w/artifacts", job="71017", uuid="GPU-a")
+        t.extra_uuids = ("GPU-b", "GPU-c", "GPU-d")
+        runner = ev.slurm_runner_script(t, "/x", "/workspace/ext/r/train.py", [], "/c", python="/r/venv/bin/python")
+        self.assertIn("export CUDA_VISIBLE_DEVICES=GPU-a,GPU-b,GPU-c,GPU-d RES_EVAL_DEVICE=cuda:0", runner)
+        launch = re.search(
+            r"-m torch.distributed.run --standalone --nproc_per_node=4 --no-python bash -c ('.*?') rank", runner
+        )
+        self.assertIsNotNone(launch, runner)
+        self.assertIn("rank /r/venv/bin/python /workspace/ext/r/train.py", runner)
+        pin = shlex.split(launch.group(1))[0]
+        mine = sorted(os.sched_getaffinity(0))
+        share = len(mine) // 4
+        if share:  # each rank on its own quarter of the step's CPUs
+            cpus = " ".join(map(str, mine[: 4 * share]))
+            for rank in range(4):
+                env = {"RES_CPUS": cpus, "LOCAL_WORLD_SIZE": "4", "LOCAL_RANK": str(rank), "PATH": "/usr/bin:/bin"}
+                show = 'echo "$OMP_NUM_THREADS $(nproc)"'
+                out = subprocess.run(
+                    ["bash", "-c", pin, "rank", "bash", "-c", show], env=env, capture_output=True, text=True
+                )
+                self.assertEqual(out.stdout.split()[0], str(share), f"OMP_NUM_THREADS is the rank's share: {out}")
+                if shutil.which("taskset"):
+                    self.assertEqual(out.stdout.split()[1], str(share), f"the rank runs on its share only: {out}")
+        stage = ev.Stage(t)
+        stage.dir, stage.tree = "/w/artifacts/res-eval/x", "t"
+        self.assertIn("--cards 4", " ".join(stage._exec_cmd([])[0]), "the step asks for all four cards' CPUs")
+        for u in t.uuids:
+            self.assertIn(f"nvidia-smi -i {u} > /dev/null", runner, "each card is checked visible")
+        self.assertIn("nvidia-smi -i GPU-a,GPU-b,GPU-c,GPU-d --query-compute-apps", runner, "and all drain")
+        self.assertIn(
+            'export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$gomp"', runner, "libgomp first on aarch64 (Isaac Sim)"
+        )
+        self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
+        one = ev.Target("horizon", "slurm", "c125-013", 0, "u@login", "/w", "/w/artifacts", job="71017", uuid="GPU-a")
+        self.assertNotIn("torch.distributed.run", ev.slurm_runner_script(one, "/x", "/s.py", [], "/c"))
+
+    def test_gpus_takes_a_named_node(self) -> None:
+        for argv in (["--any"], ["--lease", "abc"]):
+            with self.subTest(argv=argv):
+                args = ev.parse_args([__file__, "--holder", "h", "--gpus", "4", *argv])
+                with self.assertRaises(SystemExit) as ctx:
+                    ev.cmd_eval(args, [], mock.Mock())
+                self.assertIn("--gpus N takes --on <node>", str(ctx.exception.code))
+
+    def test_gpus_takes_a_positive_count(self) -> None:
+        for n in ("0", "-2"):
+            with self.subTest(n=n):
+                args = ev.parse_args([__file__, "--holder", "h", "--on", "c125-013", "--gpus", n])
+                with self.assertRaises(SystemExit) as ctx:
+                    ev.cmd_eval(args, [], mock.Mock())
+                self.assertIn("card count of 1 or more", str(ctx.exception.code))
+
     def test_runner_pins_by_uuid_and_stops_on_request(self) -> None:
         t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
         runner = ev.slurm_runner_script(t, "/workspace/artifacts/res-eval/x", "/workspace/ext/r/s.py", ["A"], "/c")
@@ -314,7 +370,7 @@ class SlurmTest(unittest.TestCase):
             ev.use_tree(t, "../etc")
 
     def test_a_staged_tree_id_is_read_from_develop_stage(self) -> None:
-        out = "  robot_rl /p abc worktree 123\nRun with: pls cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
+        out = "  robot_rl /p abc worktree 123\nRun with: pls run --on amd-rtx --tree res-eval-0123456789 -- <script>\n"
         done = mock.Mock(returncode=0, stdout=out)
         t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
         with (
@@ -341,7 +397,7 @@ class SlurmTest(unittest.TestCase):
         self.assertTrue(prune.endswith(">> /w/trees/.prune.log 2>&1 < /dev/null &"))
 
     def test_a_reused_tree_pruned_before_the_run_is_staged_again(self) -> None:
-        out = "Run with: pls cluster amd-rtx develop exec --tree res-eval-0123456789 -- <cmd>\n"
+        out = "Run with: pls run --on amd-rtx --tree res-eval-0123456789 -- <script>\n"
         staged = mock.Mock(returncode=0, stdout=out)
         t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
 
@@ -978,7 +1034,7 @@ class EvalRunTest(Isolated):
         self.assertEqual(self._stages(), [], "stage dir not removed")
 
     def test_a_command_runs_as_given_from_the_workspace_with_the_venv_first_on_path(self) -> None:
-        line = 'echo "CMD [$1] $MODE $(command -v python)"; pwd'
+        line = 'echo "CMD [$1] $MODE $(command -v python)"; pwd; echo "STAGED $(ls "$PLS_RESOURCES" | tr "\\n" " ")"'
         args = ev.parse_args([
             "--cmd",
             "bash",
@@ -1000,6 +1056,8 @@ class EvalRunTest(Isolated):
         self.assertEqual(cm.exception.code, 0, text)
         self.assertIn(f"CMD [a b] ok {self.tmp / 'ws' / 'ilab' / 'bin' / 'python'}", text)
         self.assertIn(f"\n{self.tmp / 'ws'}\n", text)
+        staged = next(x for x in text.splitlines() if x.startswith("STAGED "))
+        self.assertIn("robot_rl", staged.split(), "$PLS_RESOURCES holds the run's staged repos")
         self.assertEqual(self._leases(), [])
 
     def test_a_checkpoint_placeholder_in_the_args_becomes_its_path(self) -> None:
@@ -1204,6 +1262,19 @@ class EvalRunTest(Isolated):
         self.assertFalse(_alive(pid), "the run's process group is gone")
         self.assertEqual(self._leases(), [], "the lease is released once the run is gone")
         self.assertTrue((stage / "log").exists(), "a stopped run keeps its log")
+
+    def test_stop_releases_every_card_of_a_multi_gpu_run(self) -> None:
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        [lease] = self._leases()
+        with ls.locked_store() as leases:  # the other cards of a --gpus run, and an unrelated run's card
+            leases.append(dataclasses.replace(lease, id="rank1", key=lease.key + "-1", card=lease.card + "-1"))
+            leases.append(
+                dataclasses.replace(lease, id="other", key=lease.key + "-2", card=lease.card + "-2", stage="/elsewhere")
+            )
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 0)
+        self.assertEqual([x.id for x in self._leases()], ["other"], "every lease naming the run's stage is released")
 
     def test_a_scripts_own_stop_flag_is_passed_through(self) -> None:
         """--stop after -- belongs to the script: main() runs the script instead of stopping a lease."""

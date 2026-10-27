@@ -83,8 +83,8 @@ class PassThroughTest(unittest.TestCase):
                 self.assertEqual(ctx.exception.code, 2)
 
 
-class ClusterTest(unittest.TestCase):
-    """`pls cluster <name> <verb>`: SLURM profiles and ray, shared and backend-only verbs, pickers."""
+class ClusterVerbTest(unittest.TestCase):
+    """connect/disconnect/shell/stage/jobs/res hold|drop/setup --on: every cluster named with --on, pickers otherwise."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -101,63 +101,120 @@ class ClusterTest(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("CLUSTER", None)
+        self.connect_patch = mock.patch.object(infra, "_connected")
+        self.connect_patch.start()
+        self.addCleanup(mock.patch.stopall)
 
-    def _cluster(self, args: list[str], picks: Sequence[str] = ()) -> tuple[HandoffError, list[str]]:
+    def _call(
+        self, fn: Callable[[list[str]], None], args: list[str], picks: Sequence[str] = ()
+    ) -> tuple[HandoffError, list[str]]:
         picks = list(picks)
         with (
             mock.patch.object(infra, "handoff", _handoff),
             mock.patch.object(infra, "ask_select", side_effect=lambda prompt, choices: picks.pop(0)) as ask,
+            mock.patch.object(infra.subprocess, "run", return_value=_done()),
             self.assertRaises(HandoffError) as ctx,
         ):
-            infra.cluster(args)
+            fn(args)
         return ctx.exception, [c.args[0] for c in ask.call_args_list]
 
-    def _refused(self, args: list[str], says: str) -> None:
+    def _refused(self, fn: Callable[[list[str]], None], args: list[str], says: str) -> None:
         with mock.patch.object(infra, "handoff", _handoff), self.assertRaises(SystemExit) as ctx:
-            infra.cluster(args)
+            fn(args)
         self.assertIn(says, str(ctx.exception.code))
 
-    def test_a_profile_and_its_verb_reach_the_slurm_backend(self) -> None:
-        h, asked = self._cluster(["delta", "develop", "start"])
-        self.assertEqual((h.cmd, h.env, asked), ([infra.SLURM_BACKEND, "develop", "start"], {"CLUSTER": "delta"}, []))
-        h, _ = self._cluster(["horizon", "logs", "123", "-f"])
-        self.assertEqual((h.cmd[1:], h.env), (["logs", "123", "-f"], {"CLUSTER": "horizon"}))
+    def test_connection_verbs_reach_the_dev_backend_for_that_cluster(self) -> None:
+        for fn, backend_verb in ((infra.connect, "open"), (infra.disconnect, "close"), (infra.shell, "attach")):
+            with self.subTest(fn=fn.__name__):
+                h, asked = self._call(fn, ["--on", "delta"])
+                self.assertEqual(
+                    (h.cmd, h.env, asked), (["bash", infra.DEV_BACKEND, backend_verb], {"CLUSTER": "delta"}, [])
+                )
+        self._refused(infra.connect, ["--on", "ray"], "SLURM cluster profile")
 
-    def test_ray_takes_the_shared_verbs_from_its_own_backend(self) -> None:
-        for verb in ("setup", "list", "logs", "stop", "bench"):
-            with self.subTest(verb=verb):
-                h, _ = self._cluster(["ray", verb, "x"])
-                self.assertEqual((h.cmd, h.env), ([infra.RAY_BACKEND, verb, "x"], {}))
+    def test_stage_stages_lists_and_removes_trees(self) -> None:
+        h, _ = self._call(infra.stage, ["--on=horizon", "feat", "robot_rl=main"])
+        self.assertEqual(
+            (h.cmd, h.env), (["bash", infra.DEV_BACKEND, "stage", "feat", "robot_rl=main"], {"CLUSTER": "horizon"})
+        )
+        h, _ = self._call(infra.stage, ["list", "--on", "horizon"])
+        self.assertEqual(h.cmd, ["bash", infra.DEV_BACKEND, "trees"])
+        h, _ = self._call(infra.stage, ["--on", "horizon", "rm", "t-1"])
+        self.assertEqual(h.cmd, ["bash", infra.DEV_BACKEND, "trees", "rm", "t-1"])
 
-    def test_status_is_the_resource_probe_of_that_cluster(self) -> None:
-        for name in ("horizon", "ray"):
-            h, _ = self._cluster([name, "status", "--json"])
-            self.assertEqual(h.cmd, ["python3", "scripts/cluster/res/res.py", "status", "--pool", name, "--json"])
+    def test_jobs_lists_follows_stops_and_kills(self) -> None:
+        h, _ = self._call(infra.jobs, ["--on", "horizon"])
+        self.assertEqual((h.cmd, h.env), ([infra.SLURM_BACKEND, "list"], {"CLUSTER": "horizon"}))
+        h, _ = self._call(infra.jobs, ["--on", "horizon", "logs", "123", "-f"])
+        self.assertEqual(h.cmd, [infra.SLURM_BACKEND, "logs", "123", "-f"])
+        h, _ = self._call(infra.jobs, ["--on", "horizon", "kill", "--all"])
+        self.assertEqual(h.cmd, ["bash", infra.DEV_BACKEND, "kill", "--all"])
+        for sub in ("list", "logs", "stop"):
+            with self.subTest(ray=sub):
+                h, _ = self._call(infra.jobs, ["--on", "ray", sub, "x"])
+                self.assertEqual((h.cmd, h.env), ([infra.RAY_BACKEND, sub, "x"], {}))
+        self._refused(infra.jobs, ["--on", "ray", "kill"], "SLURM held node")
 
-    def test_bare_cluster_asks_for_the_cluster_then_the_verb(self) -> None:
-        h, asked = self._cluster([], picks=["horizon", "list"])
-        self.assertEqual((h.cmd[1:], h.env, asked), (["list"], {"CLUSTER": "horizon"}, ["Cluster:", "horizon:"]))
+    def test_res_holds_drops_and_shows_a_clusters_node(self) -> None:
+        h, _ = self._call(infra.res, ["hold", "--on", "delta"])
+        self.assertEqual((h.cmd, h.env), (["bash", infra.DEV_BACKEND, "start"], {"CLUSTER": "delta"}))
+        h, _ = self._call(infra.res, ["drop", "--on", "delta", "4242"])
+        self.assertEqual(h.cmd, ["bash", infra.DEV_BACKEND, "stop", "4242"])
+        self._refused(infra.res, ["drop", "--on", "delta"], "job id")
+        h, _ = self._call(infra.res, ["status", "--on", "horizon", "--json"])
+        self.assertEqual(h.cmd, [*infra.RES, "status", "--pool", "horizon", "--json"])
+        h, _ = self._call(infra.res, ["claim", "--any"])
+        self.assertEqual(h.cmd, [*infra.RES, "claim", "--any"])
+
+    def test_a_missing_cluster_is_picked_and_an_unknown_one_refused(self) -> None:
+        h, asked = self._call(infra.jobs, [], picks=["horizon"])
+        self.assertEqual((h.env, asked), ({"CLUSTER": "horizon"}, ["pls jobs --on:"]))
+        self._refused(infra.jobs, ["--on", "nope"], "not 'nope'")
+        self._refused(infra.jobs, ["--on", "half-made"], "not 'half-made'")
 
     def test_an_exported_cluster_is_ignored(self) -> None:
         os.environ["CLUSTER"] = "delta"
-        h, _ = self._cluster(["horizon", "list"])
+        h, _ = self._call(infra.jobs, ["--on", "horizon"])
         self.assertEqual(h.env, {"CLUSTER": "horizon"})
 
-    def test_add_creates_or_updates_a_profile(self) -> None:
-        h, _ = self._cluster(["add", "x"])
-        self.assertEqual((h.cmd, h.env), ([infra.SLURM_BACKEND, "add", "x"], {}))
-        h, _ = self._cluster(["delta", "add", "--update"])
-        self.assertEqual(h.cmd, [infra.SLURM_BACKEND, "add", "--update", "delta"])
+    def test_setup_builds_a_clusters_image_or_adds_a_profile(self) -> None:
+        with mock.patch.object(infra, "handoff", _handoff), mock.patch("os.chdir"):
+            for argv, cmd, env in (
+                (
+                    ["setup", "--on", "delta", "--push-only"],
+                    [infra.SLURM_BACKEND, "setup", "--push-only"],
+                    {"CLUSTER": "delta"},
+                ),
+                (["setup", "--on", "ray"], [infra.RAY_BACKEND, "setup"], {}),
+                (["setup", "--add", "x"], [infra.SLURM_BACKEND, "add", "x"], {}),
+                (["setup", "--add", "delta", "--update"], [infra.SLURM_BACKEND, "add", "--update", "delta"], {}),
+            ):
+                with self.subTest(argv=argv), self.assertRaises(HandoffError) as ctx:
+                    cli.main(argv)
+                self.assertEqual((ctx.exception.cmd, ctx.exception.env), (cmd, env))
 
-    def test_backend_only_verbs_and_launches_are_refused_with_the_way(self) -> None:
-        self._refused(["ray", "develop"], "SLURM clusters only")
-        self._refused(["ray", "add"], "SLURM clusters only")
-        self._refused(["delta", "bench"], "RAY clusters only")
-        self._refused(["delta", "job", "--task", "T"], "pls run --on delta --batch")
-        self._refused(["ray", "run", "x.py"], "pls run --on ray --")
-        self._refused(["delta", "frobnicate"], "unknown verb")
-        self._refused(["nope", "list"], "no cluster 'nope'")
-        self._refused(["half-made", "list"], "no cluster 'half-made'")
+    def test_an_unconnected_cluster_asks_for_pls_connect_when_no_one_is_at_the_terminal(self) -> None:
+        self.connect_patch.stop()
+        down = _done(code=1)
+        with (
+            mock.patch.object(infra.subprocess, "run", return_value=down),
+            mock.patch("sys.stdin.isatty", return_value=False),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            infra._connected("horizon", "jobs")
+        self.assertIn("pls connect --on horizon", str(ctx.exception.code))
+
+    def test_the_retired_cluster_forms_name_their_replacement(self) -> None:
+        for argv, says in (
+            (["horizon", "develop", "open"], "pls connect --on horizon"),
+            (["horizon", "develop", "start"], "pls res hold --on horizon"),
+            (["horizon", "list"], "pls jobs --on horizon"),
+            (["add", "x"], "pls setup --add x"),
+            (["ray", "bench"], "pls run --on ray -- bench"),
+            ([], "verb-first"),
+        ):
+            with self.subTest(argv=argv):
+                self._refused(infra.cluster, argv, says)
 
     def test_a_worktree_without_profiles_uses_the_main_checkouts(self) -> None:
         main = Path(self.tmp.name, "main")
@@ -192,6 +249,7 @@ class BatchTest(unittest.TestCase):
             mock.patch.object(launch, "handoff", _handoff),
             mock.patch.object(launch.proc, "run", self.run),
             mock.patch("os.chdir"),
+            mock.patch.object(infra, "_connected"),
             mock.patch("sys.stderr"),
         ):
             patch.start()
@@ -221,10 +279,21 @@ class BatchTest(unittest.TestCase):
         )
         self.assertEqual(h.cmd, [launch.SLURM_BACKEND, "job", "--tree", "feat", "--task", "T"])
 
-    def test_batch_needs_a_profile_train_and_no_card_options(self) -> None:
+    def test_batch_runs_any_workspace_script_in_place_of_train(self) -> None:
+        h = self._pls("--on", "delta", "--batch", "--", "census", "--n", "2")
+        self.assertEqual(
+            h.cmd,
+            [launch.SLURM_BACKEND, "job", "--script", "/workspace/ext/hcrl_isaaclab/scripts/census.py", "--n", "2"],
+        )
+        Path(self.tmp.name, "resources", "robot_rl").mkdir(parents=True)
+        with mock.patch.object(launch, "ROOT", Path(self.tmp.name)):
+            h = self._pls("--on", "delta", "--batch", "--", "robot_rl/tools/eval.py")
+        self.assertEqual(h.cmd[2:4], ["--script", "/workspace/ext/robot_rl/tools/eval.py"])
+
+    def test_batch_needs_a_profile_a_workspace_script_and_no_card_options(self) -> None:
         self._refused("--on", "ray", "--batch", "--", "train")
         self._refused("--on", "nope", "--batch", "--", "train")
-        self._refused("--on", "delta", "--batch", "--", "census")
+        self._refused("--on", "delta", "--batch", "--", "./scratch.py")
         self._refused("--on", "delta", "--batch", "--cmd", "--", "nvidia-smi")
         self._refused("--on", "delta", "--batch", "--holder", "me", "--", "train")
         self._refused("--on", "delta", "--batch", "--tree", "t", "--wt", "feat", "--", "train")

@@ -295,7 +295,19 @@ def _choose(
             c = cr[0]
             return (rank(*cr), c.host not in in_use, per_host[c.host], -(c.mem_total - c.mem_used), c.host, c.index)
 
+        within = getattr(args, "within", "")
+        if within:  # host or host:job: only that node's cards
+            host, _, job = within.partition(":")
+            free = [(c, r) for c, r in free if c.host == host and (not job or c.job == job.split(":")[0])]
         free.sort(key=pack)
+        if getattr(args, "one_host", False):  # all on one node, for a multi-GPU run
+            nodes: dict[tuple[str, str], list] = {}
+            for c, r in free:
+                nodes.setdefault((c.host, c.job), []).append((c, r))
+            for cards in nodes.values():
+                if len(cards) >= args.count:
+                    return cards[: args.count]
+            raise Busy(f"[res] no node has {args.count} free cards that match; nothing claimed")
         if len(free) < args.count:
             raise Busy(f"[res] only {len(free)} free card(s) match; nothing claimed")
         return free[: args.count]
@@ -603,7 +615,15 @@ def _duration(text: str) -> float:
 
 def main() -> None:
     """Parse the CLI and run a command."""
-    parser = argparse.ArgumentParser(prog="pls res", description=__doc__)
+    parser = argparse.ArgumentParser(
+        prog="pls res",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="held nodes (a cluster's long-lived job whose cards `pls run --on` leases), handled by `pls res`:\n"
+        "  pls res hold --on <cluster>        submit one (it may queue for hours)\n"
+        "  pls res drop --on <cluster> <job>  cancel it (the cluster connection stays up)\n"
+        "  pls res status --on <cluster>      the connection and held node, then that cluster's cards",
+    )
     sub = parser.add_subparsers(dest="cmd")
     st = sub.add_parser("status", help="probe every pool and show each card's state and lease")
     st.add_argument("--pool", action="append", help="only these pools (repeatable; prefix match)")
