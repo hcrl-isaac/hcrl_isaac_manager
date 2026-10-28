@@ -1,7 +1,7 @@
 # File containing environment variables (e.g. W&B credentials)
 env_file: ${MANAGER_DIR}/scripts/ray/.env.ray
 # UT EID (for tracking ownership of Ray jobs)
-user_id: ${UT_EID}
+user_id: ${RAY_USER_ID}
 # Working directory during job, should contain your scripts
 ext_dir: ${WORKSPACE_EXT_DIR}
 # Train script to execute on cluster

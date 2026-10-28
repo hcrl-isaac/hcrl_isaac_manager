@@ -177,6 +177,10 @@ class ClusterVerbTest(unittest.TestCase):
         h, _ = self._call(infra.jobs, ["--on", "horizon"])
         self.assertEqual(h.env, {"CLUSTER": "horizon"})
 
+    def test_setup_add_refuses_an_unknown_kind_or_an_unnamed_pool(self) -> None:
+        self._refused(lambda a: infra.add_cluster("x", a), ["--kind", "k8s"], "not 'k8s'")
+        self._refused(lambda a: infra.add_cluster("", a), ["--kind", "ssh", "--hosts", "a"], "name the pool")
+
     def test_setup_builds_a_clusters_image_or_adds_a_profile(self) -> None:
         with mock.patch.object(infra, "handoff", _handoff), mock.patch("os.chdir"):
             for argv, cmd, env in (
@@ -188,6 +192,17 @@ class ClusterVerbTest(unittest.TestCase):
                 (["setup", "--on", "ray"], [infra.RAY_BACKEND, "setup"], {}),
                 (["setup", "--add", "x"], [infra.SLURM_BACKEND, "add", "x"], {}),
                 (["setup", "--add", "delta", "--update"], [infra.SLURM_BACKEND, "add", "--update", "delta"], {}),
+                (["setup", "--add", "x", "--kind", "slurm"], [infra.SLURM_BACKEND, "add", "x"], {}),
+                (
+                    ["setup", "--add", "box", "--kind", "ssh", "--hosts", "a,b", "--user", "u"],
+                    [*infra.INVENTORY, "add", "box", "--kind", "ssh", "--hosts", "a,b", "--user", "u"],
+                    {},
+                ),
+                (
+                    ["setup", "--add=ray", "--kind=ray", "--address", "http://h:8265"],
+                    [*infra.INVENTORY, "add", "ray", "--kind", "ray", "--address", "http://h:8265"],
+                    {},
+                ),
             ):
                 with self.subTest(argv=argv), self.assertRaises(HandoffError) as ctx:
                     cli.main(argv)
@@ -504,10 +519,14 @@ class WorkspaceTest(unittest.TestCase):
         vscode.assert_not_called()
 
     def test_a_failed_install_does_not_stop_the_rest_and_is_reported(self) -> None:
-        installs, vscode, err = self._setup("pip", failing=("torch==",))
+        installs, vscode, err = self._setup("source", failing=("uv sync",))
         self.assertIn("resources/robot_rl", installs[-1])
         vscode.assert_called_once()
-        self.assertIn("torch", err)
+        self.assertIn("IsaacLab", err)
+
+    def test_pip_mode_stops_before_installing(self) -> None:
+        with self.assertRaises(SystemExit):
+            self._setup("pip")
 
     def test_rc_hook_is_added_once_and_clean_removes_it(self) -> None:
         rc = self.tmp / ".bashrc"

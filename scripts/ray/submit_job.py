@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Submit aggregate job(s) to the Ray cluster(s) listed in a config file.
+"""Submit aggregate job(s) to one Ray cluster (``--address``) or to the clusters listed in a config file.
 
 The config file holds one ``name: <NAME> address: http://<IP>:<PORT>`` line per cluster. Aggregate jobs are
 separated by the ``*`` delimiter and assigned by ``job_index % cluster_count``; ``--aggregate_jobs`` must be the
@@ -11,7 +11,8 @@ last argument. An aggregate job is a ``wrap_resources.py`` (sub-jobs separated b
 ``task_runner.py`` invocation.
 
 Usage:
-    python scripts/ray/submit_job.py --config_file <cfg> --job_config <yaml> --aggregate_jobs <job> [* <job>]
+    python scripts/ray/submit_job.py (--address <url> | --config_file <cfg>) --job_config <yaml>
+        --aggregate_jobs <job> [* <job>]
 """
 
 import argparse
@@ -128,6 +129,7 @@ def parse_job_config(cfg_file: str) -> tuple[dict, dict, dict]:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Submit multiple GPU jobs to multiple Ray clusters.")
+    parser.add_argument("--address", help="The one Ray cluster's dashboard address (instead of --config_file).")
     parser.add_argument("--config_file", default="~/.cluster_config", help="The cluster config path.")
     parser.add_argument("--job_config", help="Path to the job config file.")
     parser.add_argument(
@@ -143,7 +145,7 @@ if __name__ == "__main__":
         print("Warning; Split jobs by cluster with the * delimiter")
     print(f"[INFO] Isaac Ray Wrapper received jobs {formatted_jobs=}")
 
-    clusters = read_cluster_spec(args.config_file)
+    clusters = [{"name": "ray", "address": args.address}] if args.address else read_cluster_spec(args.config_file)
     runtime_env, metadata, other_data = parse_job_config(args.job_config)
     if args.python_script:
         other_data["python_script"] = args.python_script

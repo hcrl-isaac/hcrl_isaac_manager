@@ -467,7 +467,7 @@ def _describe(src: str) -> str:
         return "(not a git checkout)"
 
 
-TOOL_VENV_PYTHON = "3.11"  # ilab's version: a tool venv's python unless its repo's [tool.pls.venv.<extra>] sets one
+TOOL_VENV_PYTHON = "3.12"  # ilab's version: a tool venv's python unless its repo's [tool.pls.venv.<extra>] sets one
 
 
 def tool_venv(spec: str, code: dict[str, str], scratch: str) -> tuple[str, list[str], str]:
@@ -569,14 +569,14 @@ mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
 def _ilab_lines() -> str:
     """run.sh lines selecting the workspace's ilab python (with torch's libgomp preloaded)."""
     return (
-        'gomp="$(ls ilab/lib/python3.11/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)"\n'
+        'gomp="$(ls ilab/lib/python3.*/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)"\n'
         '[ -n "$gomp" ] && export LD_PRELOAD="$gomp${LD_PRELOAD:+:$LD_PRELOAD}"\n'
         'py="$PWD/ilab/bin/python"'
     )
 
 
 def _root_lines(root: str) -> str:
-    """run.sh lines selecting an Isaac Lab install root's venv python (e.g. pogba's Isaac Lab 3 root)."""
+    """run.sh lines selecting an Isaac Lab install root's venv python (e.g. an ssh box's Isaac Lab 3 root)."""
     q = shlex.quote
     return (
         f"py={q(root + '/venv/bin/python')}\n"
@@ -1842,7 +1842,7 @@ def parser() -> argparse.ArgumentParser:
         default="",
         metavar="DIR",
         help="run with the venv of an Isaac Lab install root on the target (<DIR>/venv) instead of ilab, e.g. an Isaac"
-        " Lab 3 root made by scripts/isaac3/bench/deploy.sh (on a SLURM card in its <DIR>/bookworm.sif image); --wt"
+        " Lab 3 root made by scripts/isaac3/root/deploy.sh (on a SLURM card in its <DIR>/bookworm.sif image); --wt"
         " picks the code, which ships as usual",
     )
     ev.add_argument(

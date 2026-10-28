@@ -7,14 +7,14 @@ from rich.console import Console
 from rich.table import Table
 
 parser = argparse.ArgumentParser(description="List jobs on the Ray cluster")
-parser.add_argument("--address", type=str, default="http://100.95.64.90:8265", help="Address to the cluster head.")
+parser.add_argument("--address", type=str, required=True, help="Address to the cluster head (the ray pool's).")
 parser.add_argument(
     "--all_users", action="store_true", help="Enable this flag to view jobs from all users, not just your own."
 )
 parser.add_argument(
     "--all_statuses", action="store_true", help="Enable this flag to view finished jobs as well as running jobs."
 )
-parser.add_argument("--user_id", type=str, help="Your UT EID.")
+parser.add_argument("--user_id", type=str, help="Your Ray user id (RAY_USER_ID in .env.ray).")
 parser.add_argument(
     "--check_id",
     type=str,

@@ -2,7 +2,7 @@
 """Interactively select which projects + IsaacLab mode this workspace composes.
 
 Reads the committed catalog (``workspace.defaults.yaml``) and writes the per-user selection to a gitignored
-``workspace.yaml`` (``projects`` + ``isaaclab.mode``: pip/source/none), which ``resolve_workspace.py`` merges.
+``workspace.yaml`` (``projects`` + ``isaaclab.mode``: source/none), which ``resolve_workspace.py`` merges.
 
 Modes:
     (default)      Write the catalog defaults if ``workspace.yaml`` is absent, else leave it. Never prompts.
@@ -28,21 +28,22 @@ def _load(path: Path) -> dict:
     return yaml.safe_load(path.read_text()) or {} if path.is_file() else {}
 
 
+# Isaac Lab 3 has no pip release: a source install, or none at all
+MODES = ("source", "none")
+
+
 def _default_mode(defaults: dict) -> str:
-    """Default IsaacLab mode from the catalog (accepts the legacy ``source: bool`` form)."""
-    il = defaults.get("isaaclab", {})
-    if "mode" in il:
-        return il["mode"]
-    return "source" if il.get("source") else "pip"
+    """Default IsaacLab mode from the catalog: its ``mode`` when it is one of MODES, else ``source``."""
+    mode = defaults.get("isaaclab", {}).get("mode")
+    return mode if mode in MODES else "source"
 
 
 def _current_mode(current: dict, defaults: dict) -> str:
-    """The user's current IsaacLab mode (accepts the legacy ``source: bool`` form), else the default."""
+    """The user's current IsaacLab mode, else the default. A retired mode (pip, or the legacy ``source: bool`` form)
+    reads as ``source``."""
     il = current.get("isaaclab", {})
-    if "mode" in il:
-        return il["mode"]
-    if "source" in il:
-        return "source" if il["source"] else "pip"
+    if "mode" in il or "source" in il:
+        return il["mode"] if il.get("mode") in MODES else "source"
     return _default_mode(defaults)
 
 
@@ -112,7 +113,6 @@ def _prompt(defaults: dict, current: dict) -> dict:
     mode = questionary.select(
         "IsaacLab:",
         choices=[
-            questionary.Choice("pip     (install isaacsim + isaaclab wheels)", value="pip"),
             questionary.Choice("source  (clone IsaacLab under resources/ and install editable)", value="source"),
             questionary.Choice("none    (don't install IsaacLab; just fetch the project repos)", value="none"),
         ],

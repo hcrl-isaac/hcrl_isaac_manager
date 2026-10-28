@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Launch a training run on a LARG box from its synced workspace, detached (setsid nohup).
+# Launch a training run on an ssh GPU box from its synced workspace, detached (setsid nohup).
 #
-# A40 runs record video in-process (--video on; the Vulkan clamp layer in the LARG home lets them render); the A100s
-# lack RT cores, so their runs pass --video async and render elsewhere. Extra train.py flags pass via `--` (a --video
+# Runs on a pool with `render = true` (RT-core cards, e.g. A40s) record video in-process (--video on; the Vulkan clamp
+# layer in the box's home lets them render); other cards (e.g. A100s, no RT cores) pass --video async and render
+# elsewhere. Extra train.py flags pass via `--` (a --video
 # there wins). One GPU runs train.py directly; LARG_NPROC > 1 runs it under torchrun with --distributed. --tree runs
 # from a code tree staged on the box (scripts/larg/trees.sh stage): its repos first on PYTHONPATH, the workspace's ilab.
 #
@@ -13,7 +14,7 @@
 # Env:
 #   LARG_NPROC            GPUs for the run (default 1)
 #   CUDA_VISIBLE_DEVICES  physical GPUs to pin the run to (e.g. 2 or 0,1); also tags the run dir
-#   LARG_SCRATCH          per-box scratch for run logs and Kit caches (default /var/local/$LARG_USER)
+#   LARG_SCRATCH          per-box scratch for run logs and Kit caches (default /var/local/<login>)
 #   LARG_HOLDER           your session name: lease the pinned cards with `pls res claim` before launching
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,7 +25,7 @@ if [ "${1:-}" = "--tree" ]; then tree="${2:-}"; shift 2 || true; [ -n "$tree" ] 
 
 TRAIN="resources/hcrl_isaaclab/scripts/train.py"
 NPROC="${LARG_NPROC:-1}"
-RUNS="${LARG_SCRATCH:-/var/local/$LARG_USER}/larg-runs"
+RUNS="$(larg_scratch)/larg-runs"
 
 if [ "${1:-}" = "--log" ]; then
   shift; host="$1"; task="$2"
@@ -45,7 +46,7 @@ host="${pos[0]:-}"; task="${pos[1]:-}"; run_name="${pos[2]:-}"; run_group="${pos
 [[ -z "$num_envs" || "$num_envs" =~ ^[0-9]+$ ]] || { echo "[larg] num_envs must be a number, got '$num_envs'"; exit 1; }
 
 video=async
-for h in "${LARG_A40_HOSTS[@]}"; do [ "${host%%.*}" = "$h" ] && video=on; done
+[ "$(larg_inventory host-setting "$host" render)" = true ] && video=on
 args=(--video "$video" --task "$task" --run_name "$run_name" --run_group "$run_group")
 [ -n "$num_envs" ] && args+=(--num_envs "$num_envs")
 args+=("${extra[@]}")
@@ -83,7 +84,7 @@ cd \"\$WS\" || { echo \"no workspace at \$WS\"; exit 1; }
 export PATH=\$HOME/.local/bin:\$PATH ACCEPT_EULA=Y OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1
 export TMPDIR=$(q "$run_dir/tmp") XDG_CACHE_HOME=$(q "$cache/xdg") OMNI_CACHE_DIR=$(q "$cache/omni")
 ${gpus:+export CUDA_VISIBLE_DEVICES=$(q "$gpus")}
-gomp=\"\$(ls \$WS/ilab/lib/python3.11/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)\"
+gomp=\"\$(ls \$WS/ilab/lib/python3.*/site-packages/torch/lib/libgomp-*.so.1 2>/dev/null | head -1)\"
 [ -n \"\$gomp\" ] && export LD_PRELOAD=\"\$gomp\${LD_PRELOAD:+:\$LD_PRELOAD}\"
 set -a; source scripts/.env.wandb 2>/dev/null; set +a
 marker=/dev/null

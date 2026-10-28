@@ -15,6 +15,7 @@ SLURM_BACKEND = "scripts/cluster/cluster_interface.sh"
 DEV_BACKEND = "scripts/cluster/cluster_dev/cluster_dev.sh"
 RAY_BACKEND = "scripts/ray/ray_interface.sh"
 RES = ("python3", "scripts/cluster/res/res.py")
+INVENTORY = ("python3", "scripts/cluster/res/inventory.py")
 
 
 def _profile_dir() -> Path:
@@ -168,9 +169,28 @@ def setup_on(cluster: str, args: list[str]) -> None:
     handoff([SLURM_BACKEND, "setup", *args], env=_env(cluster))
 
 
+ADD_KINDS = ("slurm", "ssh", "ray")
+
+
 def add_cluster(name: str, args: list[str]) -> None:
-    """`pls setup --add <name>`: create (or with --update, regenerate) a SLURM cluster profile."""
-    handoff([SLURM_BACKEND, "add", *args, *([name] if name else [])])
+    """`pls setup --add <name> [--kind slurm|ssh|ray]`: create (or with --update, regenerate) a SLURM cluster profile,
+    or write an ssh or ray pool into the gitignored compute.local.toml."""
+    kind, rest, i = "slurm", [], 0
+    while i < len(args):
+        if args[i] == "--kind" and i + 1 < len(args):
+            kind, i = args[i + 1], i + 2
+        elif args[i].startswith("--kind="):
+            kind, i = args[i].removeprefix("--kind="), i + 1
+        else:
+            rest.append(args[i])
+            i += 1
+    if kind not in ADD_KINDS:
+        sys.exit(f"[pls] setup --add: --kind takes {', '.join(ADD_KINDS)}, not {kind!r}")
+    if kind == "slurm":
+        return handoff([SLURM_BACKEND, "add", *rest, *([name] if name else [])])
+    if not name:
+        sys.exit(f"[pls] setup --add --kind {kind}: name the pool (`pls setup --add <name> --kind {kind} ...`)")
+    handoff([*INVENTORY, "add", name, "--kind", kind, *rest])
 
 
 MOVED = {  # the retired `pls cluster <name> ...` forms -> what replaces each

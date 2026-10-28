@@ -15,7 +15,7 @@ cp -r "$REPO/scripts/cluster/cluster_dev" "$REPO/scripts/cluster/tools" "$M/scri
 mkdir -p "$M/scripts/cluster/config/zz"
 printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nCLUSTER_MIN_FREE_GB=0\n' "$T/remote" \
     > "$M/scripts/cluster/config/zz/.env.cluster"
-printf '#!/usr/bin/env bash\n#SBATCH -p test\n#SBATCH -A IRI26004\n' > "$M/scripts/cluster/config/zz/submit_job_slurm.sh"
+printf '#!/usr/bin/env bash\n#SBATCH -p test\n#SBATCH -A XYZ67890\n' > "$M/scripts/cluster/config/zz/submit_job_slurm.sh"
 git -C "$M" worktree add -q "$T/wt"
 cat > "$T/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
@@ -48,24 +48,24 @@ check() {
     if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
 }
 
-SQ_ROW="RUNNING n1 amd-rtx IRI26004 gres/gpu:4" dev "$M" exec -- echo hi > "$T/out1" 2>&1
+SQ_ROW="RUNNING n1 amd-rtx XYZ67890 gres/gpu:4" dev "$M" exec -- echo hi > "$T/out1" 2>&1
 check "the step takes the job's partition" "grep -q -- '-p amd-rtx ' '$T/srun_args' && ! grep -q -- '-p test' '$T/srun_args'"
-check "and its account" "grep -q -- '-A IRI26004 ' '$T/srun_args'"
+check "and its account" "grep -q -- '-A XYZ67890 ' '$T/srun_args'"
 check "and its GPU request" "grep -q -- '--gres=gpu:4 ' '$T/srun_args'"
 check "the command reaches node_exec" "grep -q '^ARG<hi>' '$T/out1'"
 
-SQ_ROW="RUNNING n1 amd-rtx iri26004 gres/gpu:4" dev "$M" exec -- echo hi > "$T/out5" 2>&1
-check "squeue's lowercased account takes the profile's spelling (TACC refuses cda26011)" "grep -q -- '-A IRI26004 ' '$T/srun_args'"
+SQ_ROW="RUNNING n1 amd-rtx xyz67890 gres/gpu:4" dev "$M" exec -- echo hi > "$T/out5" 2>&1
+check "squeue's lowercased account takes the profile's spelling (TACC refuses abc12345)" "grep -q -- '-A XYZ67890 ' '$T/srun_args'"
 SQ_ROW="RUNNING n1 amd-rtx otherproj gres/gpu:4" dev "$M" exec -- echo hi > "$T/out6" 2>&1
 check "a different account is kept as squeue gives it" "grep -q -- '-A otherproj ' '$T/srun_args'"
-SQ_ROW="RUNNING n1 amd-rtx cda26011 gres/gpu:4" dev "$M" exec -- echo hi > "$T/out7" 2>&1
-check "a job moved to another TACC project steps with it upper-cased" "grep -q -- '-A CDA26011 ' '$T/srun_args'"
+SQ_ROW="RUNNING n1 amd-rtx abc12345 gres/gpu:4" dev "$M" exec -- echo hi > "$T/out7" 2>&1
+check "a job moved to another TACC project steps with it upper-cased" "grep -q -- '-A ABC12345 ' '$T/srun_args'"
 
 SQ_ROW="RUNNING n1 skx (null) N/A" dev "$M" exec -- echo hi > "$T/out2" 2>&1
 check "a job without an account keeps the profile's, and no GPU request adds none" \
-    "grep -q -- '-p skx ' '$T/srun_args' && grep -q -- '-A IRI26004 ' '$T/srun_args' && ! grep -q -- '--gres' '$T/srun_args'"
+    "grep -q -- '-p skx ' '$T/srun_args' && grep -q -- '-A XYZ67890 ' '$T/srun_args' && ! grep -q -- '--gres' '$T/srun_args'"
 
-SQ_ROW="RUNNING n1 amd-rtx IRI26004 N/A" dev "$T/wt" exec -- echo hi > "$T/out3" 2>&1
+SQ_ROW="RUNNING n1 amd-rtx XYZ67890 N/A" dev "$T/wt" exec -- echo hi > "$T/out3" 2>&1
 check "a worktree's exec uses the main checkout's profile" "grep -q '^ARG<hi>' '$T/out3' && grep -q \"main checkout's profile\" '$T/out3'"
 for cmd in sync stop start kill; do
     dev "$T/wt" "$cmd" > "$T/out4" 2>&1

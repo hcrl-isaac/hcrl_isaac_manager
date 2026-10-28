@@ -12,7 +12,7 @@ from pathlib import Path
 from hcrl_cli.proc import BASH_UTILS, RC_FILE, ROOT, VENV, VENV_PY, handoff, run
 
 CU = "cu128"
-NVIDIA_INDEX = "https://pypi.nvidia.com"
+ISAACLAB_PYTHON = "3.12"  # Isaac Lab 3's interpreter, so the ilab venv's
 WANDB_ENV = Path("scripts/.env.wandb")
 RC_LINE = f"VENV_NAME={VENV} source {BASH_UTILS}"
 LFS_INSTALLERS = (
@@ -44,7 +44,7 @@ def deps() -> None:
         run(["uv", "pip", "install", "--python", VENV_PY, "-e", "."], echo=True)
     else:
         # --relocatable: console scripts derive the interpreter from their own path (survives a dir rename).
-        run(["uv", "venv", "--relocatable", "--python", "3.11", VENV], echo=True)
+        run(["uv", "venv", "--relocatable", "--python", ISAACLAB_PYTHON, VENV], echo=True)
         run(["uv", "sync"], echo=True)
     # git-lfs must materialize LFS assets as real files -- the Ray mount ships pointers as-is otherwise.
     if not shutil.which("git-lfs"):
@@ -88,41 +88,43 @@ def _section(title: str) -> None:
 
 
 def setup() -> None:
-    """Full local install into the `ilab` venv: manager deps + Isaac Lab / Isaac Sim + every workspace package."""
+    """Full local install into the `ilab` venv: manager deps + Isaac Lab 3 + every workspace package."""
     deps()
     # Re-open the project/IsaacLab picker pre-filled (plain `pls setup` reconfigures); no TTY keeps it.
     run([VENV_PY, "scripts/configure_workspace.py", "--interactive"], echo=True)
     resolve([])  # merge selection + defaults -> gitman.yaml + fetch repos under resources/
+    if install():
+        vscode([])
+
+
+def install() -> bool:
+    """Layer Isaac Lab 3 (the uv-locked source clone, which owns torch) + every workspace package onto the ilab venv;
+    returns False when the IsaacLab mode is 'none' and nothing was installed."""
     mode = _isaaclab_mode()
     if mode == "none":
-        print("[setup] IsaacLab mode 'none': repos fetched under resources/; skipping IsaacLab + package installs.")
-        return
-    # A failed install does not stop the rest (as before); the failures are listed at the end.
+        print("[install] IsaacLab mode 'none': repos fetched under resources/; skipping IsaacLab + package installs.")
+        return False
+    if mode != "source":
+        sys.exit("[install][ERROR] Isaac Lab 3 has no pip release; set isaaclab.mode: source (pls setup).")
+    version = f"import sys; sys.exit('%d.%d' % sys.version_info[:2] != '{ISAACLAB_PYTHON}')"
+    if run([VENV_PY, "-c", version], check=False).returncode:
+        sys.exit(
+            f"[install][ERROR] Isaac Lab 3 needs a Python {ISAACLAB_PYTHON} venv; rebuild it: pls clean && pls setup"
+        )
+    # A failed install does not stop the rest; the failures are listed at the end.
     ok: dict[str, bool] = {}
-    _section("PyTorch (CUDA 12.8)")
-    ok["torch"] = _pip("--torch-backend", CU, "torch==2.7.0", "torchvision==0.22.0")
-    _section("Isaac Lab / Isaac Sim")
-    if mode == "source":
-        print(
-            "[setup] IsaacLab source mode -> editable install (+ explicit isaacsim; source isaaclab has no isaacsim extra)"
-        )
-        ok["isaacsim"] = _pip("isaacsim[all,extscache]==5.1.0", "--extra-index-url", NVIDIA_INDEX)
-        for d in sorted(glob.glob("resources/IsaacLab/source/isaaclab*/")):
-            ok[d] = _pip("--torch-backend", CU, "-e", d)
-        ok["hcrl_isaaclab"] = _pip("--torch-backend", CU, "-e", "resources/hcrl_isaaclab")
-    else:
-        print(
-            "[setup] IsaacLab via pip -> hcrl_isaaclab[isaacsim] pulls isaaclab[isaacsim]==2.3.2.post1 (isaacsim 5.1 + torch)"
-        )
-        ok["hcrl_isaaclab"] = _pip(
-            "--torch-backend", CU, "--extra-index-url", NVIDIA_INDEX, "--index-strategy", "unsafe-best-match",
-            "-e", "resources/hcrl_isaaclab[isaacsim]",
-        )  # fmt: skip
-    ok["rsl_rl-lib"] = _pip("rsl_rl-lib")
+    _section("Isaac Lab (source, uv-locked)")
+    extras = run(
+        [VENV_PY, "scripts/resolve_workspace.py", "--isaaclab-extras"], capture=True, check=False
+    ).stdout.split()
+    # an absolute venv path: a relative UV_PROJECT_ENVIRONMENT would land inside resources/IsaacLab
+    sync = ["uv", "sync", "--project", "resources/IsaacLab", "--frozen", "--inexact", *extras]
+    ok["IsaacLab"] = run(sync, echo=True, check=False, env={"UV_PROJECT_ENVIRONMENT": str(ROOT / VENV)}).returncode == 0
     _section("Workspace packages")
     retired = run([VENV_PY, "scripts/resolve_workspace.py", "--retire-renamed"], capture=True, check=False)
     retired = set(retired.stdout.split())
     packages = [
+        "resources/hcrl_isaaclab",
         "resources/robot_rl",
         "resources/hcrl_sim2real",
         *sorted(glob.glob("resources/*_tasks")),
@@ -131,14 +133,14 @@ def setup() -> None:
     ]
     for d in packages:
         if d in retired:
-            print(f"[setup] skipping pre-rename checkout: {d}")
+            print(f"[install] skipping pre-rename checkout: {d}")
         elif Path(d, "setup.py").is_file() or Path(d, "pyproject.toml").is_file():
-            ok[d] = _pip("--torch-backend", CU, "--extra-index-url", NVIDIA_INDEX, "-e", d)
+            ok[d] = _pip("--torch-backend", CU, "-e", d)
         elif Path(d).is_dir():
-            print(f"[setup] skipping non-package data repo: {d}")
+            print(f"[install] skipping non-package data repo: {d}")
     if failed := [name for name, good in ok.items() if not good]:
-        print(f"[setup][WARN] these installs failed (see above): {', '.join(failed)}", file=sys.stderr)
-    vscode([])
+        print(f"[install][WARN] these installs failed (see above): {', '.join(failed)}", file=sys.stderr)
+    return True
 
 
 def vscode(args: list[str]) -> None:

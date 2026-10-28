@@ -3,7 +3,7 @@
 # docker, and other large artifacts that are rebuilt or unneeded on the remote.
 #
 # Usage: scripts/larg/sync.sh <host> [<host> ...]
-#        scripts/larg/sync.sh mckennie hazard
+#        scripts/larg/sync.sh box1 box2
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/common.sh"

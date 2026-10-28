@@ -187,14 +187,14 @@ class TargetTest(unittest.TestCase):
         pyproject.write_text(pyproject.read_text().replace("0.11.2", "0.11.3"))
         bumped = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")[0]
         self.assertNotEqual(bumped, path)
-        with mock.patch.object(ev, "TOOL_VENV_PYTHON", "3.12"):  # the interpreter version is part of the key
+        with mock.patch.object(ev, "TOOL_VENV_PYTHON", "3.13"):  # the interpreter version is part of the key
             other = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")[0]
         self.assertNotEqual(other, bumped)
-        pyproject.write_text(pyproject.read_text() + '[tool.pls.venv.mjx]\npython = "3.12"\n')
-        path12, _, python = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")
-        self.assertEqual(python, "3.12")
-        self.assertNotEqual(path12, bumped)
-        pyproject.write_text(pyproject.read_text().replace('"3.12"', '"latest"'))
+        pyproject.write_text(pyproject.read_text() + '[tool.pls.venv.mjx]\npython = "3.11"\n')
+        path11, _, python = ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")
+        self.assertEqual(python, "3.11")
+        self.assertNotEqual(path11, bumped)
+        pyproject.write_text(pyproject.read_text().replace('"3.11"', '"latest"'))
         with self.assertRaises(SystemExit):
             ev.tool_venv("hcrl_sim2real[mjx]", {"hcrl_sim2real": str(repo)}, "/var/local/u")
         for spec, code in (("hcrl_sim2real", {}), ("x[mjx]", {"hcrl_sim2real": str(repo)}),

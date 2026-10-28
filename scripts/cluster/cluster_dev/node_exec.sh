@@ -146,9 +146,10 @@ done
 # which the resources/* glob misses.
 [ -d "${CLUSTER_ISAACLAB_DIR}/artifacts" ] && \
     EXT_BINDS="$EXT_BINDS -B ${CLUSTER_ISAACLAB_DIR}/artifacts:/workspace/artifacts:rw"
-# Bind list mirrors scripts/cluster/run_singularity.sh -- with extra `-B ...:/u/esturman` so HOME is
-# writable inside the container. CLUSTER_APPTAINER_FLAGS carries site quirks (TACC: --fakeroot, which
+# Bind list mirrors scripts/cluster/run_singularity.sh -- with the staged home bound over your home path on the node
+# ($HOME there) so HOME is writable inside the container. CLUSTER_APPTAINER_FLAGS carries site quirks (TACC: --fakeroot, which
 # unprivileged apptainer needs to create bind points like /root/Documents that don't exist in the image).
+CONTAINER_HOME="${HOME:-/home/$(id -un)}"
 # credentials go in through the environment (apptainer injects APPTAINERENV_*), never argv, which `ps` shows
 export APPTAINERENV_WANDB_USERNAME="${WANDB_USERNAME:-}" APPTAINERENV_WANDB_API_KEY="${WANDB_API_KEY:-}"
 # the Vulkan clamp layer (scripts/vulkan/), when installed for this cluster: Isaac Sim's RTX renderer
@@ -177,11 +178,11 @@ apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B ${STAGE}/docker-isaac-sim/logs:${DOCKER_USER_HOME}/.nvidia-omniverse/logs:rw \
     -B ${STAGE}/docker-isaac-sim/data:${DOCKER_USER_HOME}/.local/share/ov/data:rw \
     -B ${STAGE}/docker-isaac-sim/documents:${DOCKER_USER_HOME}/Documents:rw \
-    -B ${STAGE}/home:/u/esturman:rw \
+    -B ${STAGE}/home:${CONTAINER_HOME}:rw \
     ${EXT_BINDS} ${VK_BINDS} \
     -B ${STEP_TMP}:/tmp:rw ${CACHE_BIND} \
     --nv --writable-tmpfs --containall --no-home "$SIF" \
-    bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=/u/esturman && export OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
+    bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} && export HOME=${CONTAINER_HOME} && export OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec /usr/local/bin/hcrl-entrypoint ${cmd}"
 }
 
 run_root() {  # the root's venv in the bookworm image, with the same /workspace/ext mounts as the hcrl-isaac image
@@ -199,11 +200,11 @@ run_root() {  # the root's venv in the bookworm image, with the same /workspace/
     unset LD_PRELOAD SINGULARITYENV_LD_PRELOAD APPTAINERENV_LD_PRELOAD SINGULARITY_BINDPATH APPTAINER_BINDPATH
     apptainer exec \
         -B "${ROOT_DIR}" -B /dev/shm \
-        -B ${STAGE}/home:/u/esturman:rw \
+        -B ${STAGE}/home:${CONTAINER_HOME}:rw \
         ${EXT_BINDS} ${VK_BINDS} \
         -B ${STEP_TMP}:/tmp:rw ${CACHE_BIND} \
         --nv --containall --no-home "$SIF" \
-        bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} HOME=/u/esturman OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec ${cmd}"
+        bash -c "export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16} HOME=${CONTAINER_HOME} OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 && cd /workspace/ext/hcrl_isaaclab && exec ${cmd}"
 }
 [ -n "$ROOT_DIR" ] && run_container() { run_root; }
 

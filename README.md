@@ -1,9 +1,12 @@
 # hcrl_isaac_manager
 
 Composes the hcrl Isaac Lab workspace — core `hcrl_isaaclab`, per-project `*_tasks` / `*_robots`,
-and `robot_rl` — and deploys training to local GPUs, Ray, or HPC clusters. This README is the
+and `robot_rl` — and deploys training to local GPUs, ssh GPU boxes, Ray, or HPC clusters. This README is the
 quickstart; per-cluster READMEs ([Ray](scripts/ray/README.md), [Cluster](scripts/cluster/README.md),
-[LARG](scripts/larg/README.md)) cover what each piece does and the full options.
+[ssh boxes](scripts/larg/README.md)) cover what each piece does and the full options.
+
+Working with Claude Code: [CLAUDE.md](CLAUDE.md) describes the workspace for a Claude session, and
+`.claude/skills/` holds its procedures (`setup`, `add-compute`, `launch-run`, `new-task`, `convention-review`).
 
 ## Prerequisites
 
@@ -18,8 +21,8 @@ is installed; afterwards `pls` is on your PATH whenever the `ilab` venv is activ
 keys, space to toggle) for **which projects** to install and how to handle **IsaacLab**, pre-filled with
 your current selection, so re-running `pls setup` doubles as reconfiguration. The IsaacLab choice is:
 
-- **pip** — install `isaacsim` + `isaaclab` wheels (the usual local setup).
-- **source** — clone IsaacLab under `resources/` and install it editable.
+- **source** — clone Isaac Lab 3 under `resources/IsaacLab` (at the ref in `workspace.defaults.yaml`) and install
+  it from its uv lock (the usual local setup; Isaac Lab 3 has no pip release).
 - **none** — don't install IsaacLab (or torch / the workspace packages); just fetch the project repos under
   `resources/`. Use this to browse/edit the projects locally and run training on a cluster or Ray instead.
 
@@ -66,15 +69,19 @@ pls run train --task <task-id> [--source <ssti|hhlm>] # run any hcrl_isaaclab sc
 to cd into the extension): `pls run play --task <id> --checkpoint <path>`, `pls run video_logger …`,
 `pls run export …`, etc.
 
-**A GPU elsewhere** (a LARG box, or a card of a cluster's held node; see [Compute](#compute-pls-res)):
+**A GPU elsewhere** (an ssh GPU box, or a card of a cluster's held node; see [Compute](#compute-pls-res)):
 ```bash
+pls setup --add lab --kind ssh --hosts box1,box2 --user <login> --domain <domain>   # one-time: your boxes as a pool
 pls res status --free                                  # which cards are free, everywhere
-pls run --on hazard:2 --holder <you> --note "<why>" -- train --task <task-id>
-pls run --on larg-a40 --holder <you> -- video_logger --run <url>   # any free card of a pool
+pls run --on box1:2 --holder <you> --note "<why>" -- train --task <task-id>
+pls run --on lab --holder <you> -- video_logger --run <url>   # any free card of a pool
 ```
+Pools are per user: `pls setup --add` writes them to the gitignored `scripts/cluster/res/compute.local.toml`; the
+tracked `compute.toml` holds only this machine. See [ssh boxes](scripts/larg/README.md#a-new-ssh-box).
 
 **Ray:**
 ```bash
+pls setup --add ray --kind ray --address http://<head>:8265   # one-time: the cluster's dashboard as the ray pool
 pls setup --on ray             # one-time: write the Ray configs; then build + push the image (when deps change)
 pls upload-artifacts --all     # large assets as W&B artifacts (when they change)
 pls run --on ray -- train --task <task-id> [train args]
@@ -231,9 +238,9 @@ Claude sessions use the same commands, with a few differences:
 ### `setup`
 
 - Installs general dependencies (`pls deps`)
-- Opens the project + IsaacLab-mode (pip/source/**none**) picker (arrow keys + space), pre-filled with your current selection, so re-running `setup` reconfigures; writes the gitignored `workspace.yaml` (keeps the existing selection on a non-interactive shell)
+- Opens the project + IsaacLab-mode (source/**none**) picker (arrow keys + space), pre-filled with your current selection, so re-running `setup` reconfigures; writes the gitignored `workspace.yaml` (keeps the existing selection on a non-interactive shell)
 - Resolves the selection + defaults and fetches the workspace repos (`pls resolve`)
-- Installs Isaac Lab + Isaac Sim and editable-installs every workspace package into the local uv env — **skipped entirely for IsaacLab `none`** (repos are just fetched, for editing locally + running elsewhere)
+- Builds the Python 3.12 `ilab` venv, installs Isaac Lab 3 from its uv lock and editable-installs every workspace package into the local uv env — **skipped entirely for IsaacLab `none`** (repos are just fetched, for editing locally + running elsewhere)
 
 ### `resolve`
 
@@ -306,6 +313,9 @@ Claude sessions use the same commands, with a few differences:
 - `pls setup --on <cluster>` builds the shared image and pushes it (the Apptainer `.sif`; `--build-only`,
   `--push-only`); `pls setup --on ray` sets up the Ray cluster
 - `pls setup --add <name> [--update]` creates (or regenerates) a SLURM cluster profile
+- `pls setup --add <name> --kind ssh --hosts <a,b> --user <login> [--domain <d>] [--pin device] [--render]` adds ssh
+  GPU boxes as a pool, and `pls setup --add ray --kind ray --address http://<head>:8265` adds your Ray cluster; both
+  go in the gitignored `scripts/cluster/res/compute.local.toml` (`--update` replaces a pool of that name)
 - `pls cluster ...` is retired: each old form prints the command that replaced it
 
 ### `upload-artifacts [args]`

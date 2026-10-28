@@ -41,10 +41,13 @@ def _new(name: str, rest: list[str]) -> None:
     _no_args(lambda: workspace.new(name))(rest)
 
 
-SETUP_HELP = """usage: pls setup                                  this machine: deps + Isaac Lab / Isaac Sim + every workspace package
+SETUP_HELP = """usage: pls setup                                  this machine: deps + Isaac Lab 3 + every workspace package
        pls setup --on <cluster> [--build-only|--push-only]  build the shared image and push it to that cluster
                                                   (--on ray: set up the Ray cluster's credentials and venv)
-       pls setup --add <name> [--update]          create (or regenerate) a SLURM cluster profile"""
+       pls setup --add <name> [--update]          create (or regenerate) a SLURM cluster profile
+       pls setup --add <name> --kind ssh --hosts <a,b> --user <login> [--domain <d>] [--pin device] [--render]
+                                                  add ssh GPU boxes as a pool (in compute.local.toml, gitignored)
+       pls setup --add ray --kind ray --address http://<head>:8265   add your Ray cluster's dashboard as the ray pool"""
 
 
 def _setup(args: list[str]) -> None:
@@ -75,6 +78,7 @@ VERBS: dict[str, tuple[str, str, str, Callable[[list[str]], None]]] = {
     "stage": ("cluster", "--on C [list|rm T|<name> <repo>=<ref>...]", "stage code trees on a cluster (pls run does it for you)", infra.stage),
     "setup": ("workspace", "[--on C | --add NAME]", "install this machine; or build/push a cluster's image, or add a cluster", _setup),
     "deps": ("workspace", "", "manager base env: the ilab venv (with pls), uv, gitman, git-lfs, W&B creds", _no_args(workspace.deps)),
+    "install": ("workspace", "", "layer Isaac Lab 3 (uv-locked source clone) + every workspace package onto the ilab venv", _no_args(workspace.install)),
     "resolve": ("workspace", "[args]", "merge selection + defaults -> gitman.yaml, fetch every repo under resources/", workspace.resolve),
     "sync": ("workspace", "<host> [args]", "push this workspace + Claude sessions to a peer box", _first("host", infra.sync)),
     "new": ("workspace", "<name>", "scaffold a new <name>_tasks repo under resources/", _first("name", _new)),

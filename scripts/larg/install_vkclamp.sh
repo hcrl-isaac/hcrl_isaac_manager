@@ -8,12 +8,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/common.sh"
 
 host="${1:?usage: install_vkclamp.sh <host>}"
+target="$(larg_target "$host")"
 remote_home="$(larg_ssh "$host" 'printf %s "$HOME"' 2>/dev/null)"
 [ -n "$remote_home" ] || { echo "[vkclamp] cannot reach $host"; exit 1; }
 build="$(mktemp -d)"
 trap 'rm -rf "$build"' EXIT
 bash "$HERE/../vulkan/install_clamp_layer.sh" "$build" "$remote_home/.local/share/vkclamp" >/dev/null
 larg_ssh "$host" 'mkdir -p "$HOME/.local/share/vkclamp" "$HOME/.config/vulkan/implicit_layer.d"'
-rsync -q "$build/libvkclamp.so" "$(larg_target "$host"):.local/share/vkclamp/"
-rsync -q "$build/conf/vulkan/implicit_layer.d/VkLayer_vkclamp.json" "$(larg_target "$host"):.config/vulkan/implicit_layer.d/"
+rsync -q "$build/libvkclamp.so" "$target:.local/share/vkclamp/"
+rsync -q "$build/conf/vulkan/implicit_layer.d/VkLayer_vkclamp.json" "$target:.config/vulkan/implicit_layer.d/"
 echo "[vkclamp] installed for every LARG box (shared home of $host); VKCLAMP_DISABLE=1 turns it off per run"
