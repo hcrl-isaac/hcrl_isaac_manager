@@ -44,7 +44,10 @@ def _new(name: str, rest: list[str]) -> None:
 SETUP_HELP = """usage: pls setup                                  this machine: deps + Isaac Lab 3 + every workspace package
        pls setup --on <cluster> [--build-only|--push-only]  build the shared image and push it to that cluster
                                                   (--on ray: set up the Ray cluster's credentials and venv)
-       pls setup --add <name> [--update]          create (or regenerate) a SLURM cluster profile"""
+       pls setup --add <name> [--update]          create (or regenerate) a SLURM cluster profile
+       pls setup --add <name> --kind ssh --hosts <a,b> --user <login> [--domain <d>] [--pin device] [--render]
+                                                  add ssh GPU boxes as a pool (in compute.local.toml, gitignored)
+       pls setup --add ray --kind ray --address http://<head>:8265   add your Ray cluster's dashboard as the ray pool"""
 
 
 def _setup(args: list[str]) -> None:

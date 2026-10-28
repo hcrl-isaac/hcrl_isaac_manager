@@ -9,7 +9,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/common.sh"
 
 BENCH="resources/hcrl_isaaclab/scripts/bench.py"
-RUNS="${LARG_SCRATCH:-/var/local/$LARG_USER}/larg-runs"
+RUNS="$(larg_scratch)/larg-runs"
 
 if [ "${1:-}" = "--log" ]; then
   shift; host="$1"; task="$2"

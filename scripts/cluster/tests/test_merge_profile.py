@@ -87,9 +87,9 @@ class AliasTest(unittest.TestCase):
         self.assertEqual(values, ["gpuA40x4", "4", "16", "48:00:00", ""])
 
     def test_flag_value_reads_attached_short_flags_and_qos(self) -> None:
-        job = "#SBATCH -pdebug\n#SBATCH -AIRI26004 -N 1\n#SBATCH --qos=normal\n"
+        job = "#SBATCH -pdebug\n#SBATCH -AXYZ67890 -N 1\n#SBATCH --qos=normal\n"
         values = [flag_value(job, f) for f in ("-p", "-A", "-N", "-q", "-n")]
-        self.assertEqual(values, ["debug", "IRI26004", "1", "normal", ""])
+        self.assertEqual(values, ["debug", "XYZ67890", "1", "normal", ""])
 
     def test_aliases_do_not_duplicate_flags(self) -> None:
         text, lost = merge_submit(ALIAS_JOB, TEMPLATE_JOB)

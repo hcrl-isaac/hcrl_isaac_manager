@@ -26,34 +26,45 @@ partitions → `slurm`. A `http://<host>:8265` dashboard → `ray`. A machine re
 
 ## 2. Add it
 
-**ssh.** Add a pool to `scripts/cluster/res/compute.local.toml` (create it if missing; it is merged over
-`compute.toml`):
+**ssh.** One pool per set of boxes sharing a login and domain:
+
+```bash
+pls setup --add <pool-name> --kind ssh --hosts <host1>,<host2> --user <login> [--domain <domain>] [--pin device] [--render]
+```
+
+`--domain` is appended to each short host name (omit it if the short name resolves); `--pin device` only if Kit
+refuses a masked CUDA_VISIBLE_DEVICES on these boxes; `--render` for RT-core cards (A40, RTX PRO, 5090), whose
+`scripts/larg/train.sh` runs record video in-process; `--update` replaces an existing pool. It writes the pool into
+`scripts/cluster/res/compute.local.toml` (gitignored, merged over `compute.toml`; the main checkout's serves every
+worktree), and editing that file by hand is equivalent:
 
 ```toml
 [compute.<pool-name>]
 kind = "ssh"
-hosts = ["<host1>", "<host2>"]   # short names
-domain = "<domain>"              # appended to each host; omit if the short name resolves
+hosts = ["<host1>", "<host2>"]
+domain = "<domain>"
 user = "<login>"
-# pin = "device"                 # only if Kit refuses a masked CUDA_VISIBLE_DEVICES on these boxes
 ```
 
 Each host needs key-based ssh (`ssh -o BatchMode=yes <user>@<host>.<domain> true` must succeed), a driver for
-CUDA 12.8, and an Isaac Lab 3 install root for `pls run --root <dir>`: `scripts/isaac3/root/deploy.sh <host>
-<dir>`, then `remote_setup.sh` on the host (usage in each script's header).
+CUDA 12.8, and an Isaac Lab 3 install root for `pls run --root <dir>`: `scripts/isaac3/root/deploy.sh
+<user>@<host> <dir>` copies the minimal trees, then `bash <dir>/resources/isaac3/root/remote_setup.sh <dir>` on the
+host builds its venv (usage in each script's header; `<dir>` on local disk, e.g. `/var/local/<login>/isaac3`).
+`scripts/larg/README.md` ("A new ssh box") has the whole sequence.
 
 **slurm.** Run `pls setup --add <cluster-name>`. It asks for the login host, account, partition, GPU type and
 scratch dirs and writes `scripts/cluster/config/<name>/` (gitignored). Then `pls connect --on <name>` (2FA once),
 and `pls setup --on <name>` to build and push the cluster's `.sif` image. Details: `scripts/cluster/README.md`.
 
-**ray.** Copy `scripts/ray/tools/.env.ray.template` to `scripts/ray/.env.ray` and fill it in, then
-`pls setup --on ray`. The dashboard address goes in the pool, so `pls res` and `pls run --on ray` find it:
+**ray.** The dashboard address goes in the pool named `ray`, where `pls res`, `pls run --on ray` and
+`pls jobs --on ray` all read it:
 
-```toml
-[compute.ray]
-kind = "ray"
-address = "http://<head>:8265"
+```bash
+pls setup --add ray --kind ray --address http://<head>:8265
 ```
+
+Then `pls setup --on ray` writes `scripts/ray/.env.ray` (asking for `RAY_USER_ID`, the id the user's jobs are tagged
+with, and `RAY_IMAGE`, the `<registry user>/<name>` image the workers pull) and builds and pushes that image.
 
 Large assets reach Ray workers as W&B artifacts: `pls upload-artifacts --all` once, and again when they change.
 Details: `scripts/ray/README.md`.

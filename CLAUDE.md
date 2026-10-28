@@ -53,8 +53,9 @@ Project skills live in `.claude/skills/`. Use them rather than re-deriving the s
 - **Elsewhere:** `pls run --on <pool | host:gpu | cluster | ray> -- ...`. `pls res status --free` shows which
   cards are free in every pool you have configured; `pls res claim`/`release` hold one.
 - **Compute is per user.** The tracked `scripts/cluster/res/compute.toml` holds only this machine. Your SSH pools
-  go in the gitignored `compute.local.toml`, SLURM clusters in `scripts/cluster/config/<name>/` (`pls setup --add
-  <name>`), Ray in `scripts/ray/.env.ray`. The `add-compute` skill walks through each kind.
+  and your Ray dashboard go in the gitignored `compute.local.toml` (`pls setup --add <name> --kind ssh|ray ...`),
+  SLURM clusters in `scripts/cluster/config/<name>/` (`pls setup --add <name>`), Ray credentials, job id and image in
+  `scripts/ray/.env.ray` (`pls setup --on ray`). The `add-compute` skill walks through each kind.
 - **Code reaches remote compute only as staged trees** (`pls stage`, done by `pls run` for you): a snapshot of the
   workspace as on disk, or of named refs/worktrees. Runs must not write tracked files in place (trees share them by
   hardlink). `pls run --cmd -- <command>` starts in that machine's workspace; the staged code is in `$PLS_RESOURCES`.

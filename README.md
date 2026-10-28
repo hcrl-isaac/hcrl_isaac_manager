@@ -1,9 +1,9 @@
 # hcrl_isaac_manager
 
 Composes the hcrl Isaac Lab workspace — core `hcrl_isaaclab`, per-project `*_tasks` / `*_robots`,
-and `robot_rl` — and deploys training to local GPUs, Ray, or HPC clusters. This README is the
+and `robot_rl` — and deploys training to local GPUs, ssh GPU boxes, Ray, or HPC clusters. This README is the
 quickstart; per-cluster READMEs ([Ray](scripts/ray/README.md), [Cluster](scripts/cluster/README.md),
-[LARG](scripts/larg/README.md)) cover what each piece does and the full options.
+[ssh boxes](scripts/larg/README.md)) cover what each piece does and the full options.
 
 Working with Claude Code: [CLAUDE.md](CLAUDE.md) describes the workspace for a Claude session, and
 `.claude/skills/` holds its procedures (`setup`, `add-compute`, `launch-run`, `new-task`, `convention-review`).
@@ -69,15 +69,19 @@ pls run train --task <task-id> [--source <ssti|hhlm>] # run any hcrl_isaaclab sc
 to cd into the extension): `pls run play --task <id> --checkpoint <path>`, `pls run video_logger …`,
 `pls run export …`, etc.
 
-**A GPU elsewhere** (a LARG box, or a card of a cluster's held node; see [Compute](#compute-pls-res)):
+**A GPU elsewhere** (an ssh GPU box, or a card of a cluster's held node; see [Compute](#compute-pls-res)):
 ```bash
+pls setup --add lab --kind ssh --hosts box1,box2 --user <login> --domain <domain>   # one-time: your boxes as a pool
 pls res status --free                                  # which cards are free, everywhere
-pls run --on hazard:2 --holder <you> --note "<why>" -- train --task <task-id>
-pls run --on larg-a40 --holder <you> -- video_logger --run <url>   # any free card of a pool
+pls run --on box1:2 --holder <you> --note "<why>" -- train --task <task-id>
+pls run --on lab --holder <you> -- video_logger --run <url>   # any free card of a pool
 ```
+Pools are per user: `pls setup --add` writes them to the gitignored `scripts/cluster/res/compute.local.toml`; the
+tracked `compute.toml` holds only this machine. See [ssh boxes](scripts/larg/README.md#a-new-ssh-box).
 
 **Ray:**
 ```bash
+pls setup --add ray --kind ray --address http://<head>:8265   # one-time: the cluster's dashboard as the ray pool
 pls setup --on ray             # one-time: write the Ray configs; then build + push the image (when deps change)
 pls upload-artifacts --all     # large assets as W&B artifacts (when they change)
 pls run --on ray -- train --task <task-id> [train args]
@@ -309,6 +313,9 @@ Claude sessions use the same commands, with a few differences:
 - `pls setup --on <cluster>` builds the shared image and pushes it (the Apptainer `.sif`; `--build-only`,
   `--push-only`); `pls setup --on ray` sets up the Ray cluster
 - `pls setup --add <name> [--update]` creates (or regenerates) a SLURM cluster profile
+- `pls setup --add <name> --kind ssh --hosts <a,b> --user <login> [--domain <d>] [--pin device] [--render]` adds ssh
+  GPU boxes as a pool, and `pls setup --add ray --kind ray --address http://<head>:8265` adds your Ray cluster; both
+  go in the gitignored `scripts/cluster/res/compute.local.toml` (`--update` replaces a pool of that name)
 - `pls cluster ...` is retired: each old form prints the command that replaced it
 
 ### `upload-artifacts [args]`

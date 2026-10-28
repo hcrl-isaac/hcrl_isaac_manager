@@ -97,7 +97,7 @@ SRUN_ACCT_OPT=""; [ -n "$DEV_ACCOUNT" ]   && SRUN_ACCT_OPT="-A ${DEV_ACCOUNT}"
 # included) ran pinned to core 0 of the whole allocation -- measured ~2.9x slower. Reuse the sentinel's
 # own --cpus-per-task so a step gets the same share the batch job asked for.
 SRUN_CPUS_OPT=""; [ -n "$DEV_CPUS" ]      && SRUN_CPUS_OPT="--cpus-per-task=${DEV_CPUS}"
-# squeue lowercases every account, and TACC's step filter refuses "cda26011" for CDA26011: the profile's spelling
+# squeue lowercases every account, and TACC's step filter refuses "abc12345" for ABC12345: the profile's spelling
 # when it names the same account, else a TACC project id (three letters, five digits) in upper case
 _acct_spelling() {
     local a="$1"

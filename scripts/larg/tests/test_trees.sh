@@ -9,7 +9,7 @@ export LARG_MIN_FREE_GB=0  # the fake box is this host's disk, which a CI runner
 # a copy of the scripts, so nothing beside the real ones (scripts/.env.*) is shipped
 mkdir -p "$T/bin" "$T/scripts/cluster"
 cp -r "$REPO/scripts/larg" "$T/scripts/"
-cp -r "$REPO/scripts/cluster/cluster_dev" "$T/scripts/cluster/"
+cp -r "$REPO/scripts/cluster/cluster_dev" "$REPO/scripts/cluster/res" "$T/scripts/cluster/"
 cat > "$T/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
 while [ $# -gt 0 ]; do
@@ -34,7 +34,7 @@ mkdir -p "$G" "$R/resources/hcrl_isaaclab/.artifacts" "$R/resources/hcrl_robots"
 )
 cp "$G/code.py" "$R/resources/hcrl_isaaclab/"
 echo asset > "$R/resources/hcrl_robots/t1.urdf"
-larg() { env PATH="$T/bin:$PATH" LARG_REMOTE_DIR="$R" LARG_LOCAL_DIR="$L" bash "$T/scripts/larg/trees.sh" "$@"; }
+larg() { env PATH="$T/bin:$PATH" LARG_USER=tester LARG_REMOTE_DIR="$R" LARG_LOCAL_DIR="$L" bash "$T/scripts/larg/trees.sh" "$@"; }
 
 fails=0
 check() {
