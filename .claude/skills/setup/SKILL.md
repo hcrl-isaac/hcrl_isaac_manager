@@ -61,7 +61,8 @@ Done when the arch list covers the GPU (e.g. `sm_120` for an RTX 50xx), the smok
 | `.pt`/`.usd` files of ~130 bytes, unpickling errors | Git LFS pointers: `git lfs install`, then `pls resolve` (or `git lfs pull` in that repo) |
 | Isaac Sim import exits on aarch64 | needs `LD_PRELOAD` of the system and torch libgomp (`pls run` sets it on SLURM) |
 | `Failed to get DOF velocities from backend` | the GPU is still full from an earlier Isaac process: kill it and confirm the memory drained |
-| a resolve fails on a data repo | no access to that repo (see `dependencies.yaml`); ask its owner, or drop the project that needs it |
+| `WARNING <repo>: no access to <url>; tasks that load it stop at load` | an `optional: true` data dep (`dependencies.yaml`) you can't read: setup carries on without it. Ask its owner for access (then `pls resolve`), use the copy the warning names, or skip the tasks that need it |
+| a resolve fails on a required repo | no access to a code repo: ask its owner, or drop the project that needs it |
 
 ## 5. Offer compute (once, briefly)
 
