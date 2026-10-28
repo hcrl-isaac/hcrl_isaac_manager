@@ -15,8 +15,17 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import leases as ls
-from inventory import Pool, load_config, load_pools
-from probe import HELD_UTIL, Card, Report, probe_local, probe_ray, probe_slurm_login, probe_ssh_host
+from inventory import Pool, load_config, load_pools, ssh_target
+from probe import (
+    HELD_UTIL,
+    Card,
+    Report,
+    box_cpu_state,
+    probe_local,
+    probe_ray,
+    probe_slurm_login,
+    probe_ssh_host,
+)
 
 CAUTION = {"free": 0, "held": 1, "busy": 2, "unknown": 3}
 WAIT_POLL_S = 60.0  # how often --wait probes again for a card to free
@@ -168,6 +177,11 @@ def render(
             mem = f"{c.mem_used}/{c.mem_total}" if c.mem_used >= 0 else f"?/{c.mem_total}"
             row = f"{where:<22} {c.index:>3} {model:<16} {mem:>15} {c.util:>4}%  {state:<7} {who:<44.44} {c.wall_left}"
             lines.append("   " + row)
+        lines.extend(
+            f"   CPU run [{x.holder}: {x.note or x.id}, {_ago(x.created)}] {x.cpus} cores ({x.cores}), no GPU"
+            for x in held.values()
+            if ls.is_cpu(x) and x.report == rep.pool
+        )
         lines.extend(f"   - {note}" for note in rep.notes)
     parts = [f"{totals[k]} {k}" for k in ("free", "leased", "busy", "held") if totals[k]]
     if totals["unknown"]:
@@ -212,13 +226,48 @@ def _settle(leases: list[ls.Lease], reservations: list[ls.Reservation]) -> None:
         ls.mark_yields(r, leases)
 
 
+def cpu_run_states(leases: list[ls.Lease], pools: list[Pool]) -> dict[str, set[str]]:
+    """For each box holding CPU leases, the stage dirs whose run is gone there (one ssh per box, in parallel).
+
+    Args:
+        leases: The leases (only CPU leases of the given pools' ssh boxes are looked at).
+        pools: Pools whose boxes to check.
+
+    Returns:
+        Report label (``<pool>/<host>``) -> ended stage dirs; a box that could not be read is left out.
+    """
+    by_label: dict[str, list[str]] = {}
+    for lease in leases:
+        if ls.is_cpu(lease):
+            by_label.setdefault(lease.report, []).append(lease.stage)
+    ssh_pools = {p.name: p for p in pools if p.kind == "ssh"}
+    tasks = []
+    for label, stages in by_label.items():
+        name, _, host = label.partition("/")
+        pool = ssh_pools.get(name)
+        if pool is not None and host in pool.settings.get("hosts", []) and pool.settings.get("user"):
+            tasks.append((label, ssh_target(pool, host), [s for s in stages if s]))
+    if not tasks:
+        return {}
+    start_min = ls.CPU_START_S // 60
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        states = list(ex.map(lambda t: box_cpu_state(t[1], t[2], start_min), tasks))
+    return {label: state[1] for (label, _, _), state in zip(tasks, states, strict=True) if state is not None}
+
+
 def cmd_status(args: argparse.Namespace, pools: list[Pool]) -> None:
     """Probe, reconcile leases and print every card; a lease store problem only hides the lease column."""
-    reports = probe_all(select_pools(pools, args.pool))
+    chosen = select_pools(pools, args.pool)
+    reports = probe_all(chosen)
     windows = lease_windows()
     try:
+        with ls.locked_store() as leases:
+            cpu_leases = [x for x in leases if ls.is_cpu(x)]
+        ended = cpu_run_states(cpu_leases, chosen)  # outside the lock: it reaches the boxes
         with ls.locked_state() as (leases, reservations):
             _report_released(ls.reconcile(leases, reports, **windows))
+            for label, stages in ended.items():
+                _report_released(ls.reap_cpu(leases, label, stages))
             _settle(leases, reservations)
             held = {lease.key: lease for lease in leases}
             reserved = list(reservations)
@@ -586,6 +635,8 @@ def cmd_leases(_args: argparse.Namespace, _pools: list[Pool]) -> None:
         print("no leases")
     for x in rows:
         act = f"active {_ago(x.last_active)} ago" if x.last_active else f"claimed {_ago(x.created)} ago, not used yet"
+        if ls.is_cpu(x):  # no card to watch: it ends with its run
+            act = f"{x.cpus} cores ({x.cores}) since {_ago(x.created)} ago, held while its run lives"
         if x.idle_since:
             act += f", idle since {_ago(x.idle_since)} ago"
         box = f", time box ends in {int((x.expires - time.time()) // 60)}m" if x.expires else ""

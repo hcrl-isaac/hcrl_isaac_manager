@@ -199,6 +199,17 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
 - Everything goes to `<stage>/log`, which starts with a MANIFEST of each repo's commit and dirty count. The stage is
   removed after success; a failed run keeps its log, MANIFEST and run.sh (its checkpoints and credentials are always
   removed). A lease the run took is released whatever happens. Old snapshots are not pruned yet.
+- `--cpus N` runs on N cores of an ssh box and leases no card, for a job that needs no GPU (`--on <host>`):
+  `pls run --on <host> --cpus 24 --root <root> --detach --cmd -- python -m holosoma_retargeting ...`.
+  The run sees no CUDA device (`CUDA_VISIBLE_DEVICES=""`), is pinned with `taskset` to the highest-numbered cores
+  your other CPU runs there do not hold, runs at `nice -n 10` so GPU jobs' feeder threads come first, and gets
+  `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=N` (an `--env` value wins). Its lease's card is `<host>:cpu` with
+  `cpus = N`: it never blocks a card claim, never yields to a reservation and never lapses for idling; it ends when
+  the run does (the run's own release, `pls run --stop`, or `pls res status` finding its process group gone on the
+  box). Your CPU runs on one box hold at most its budget: `cpu_budget = <cores>` under the ssh pool's
+  `[compute.<name>]`, else half the box's `nproc`; a run that would exceed it is refused. Staging, `--wt`, `--root`,
+  `--venv`, `--detach`, `--timeout`, `--stall` and the W&B refs work as on a card; `{DEVICE}` is refused, and SLURM
+  (its own CPU allocation) and Ray refuse `--cpus`.
 - Pool settings: `workspace` (the manager checkout on the target, providing the venv and the asset repos; default
   `/var/local/<user>/hcrl_isaac_manager` on ssh pools, this machine's checkout locally), `scratch` (default
   `/var/local/<user>`, `~/tmp` locally) and `pin`. Keep `scratch` on local disk, never a quota'd NFS home: snapshots,
@@ -211,7 +222,7 @@ Every compute pool has a `kind`, which picks the backend that probes it:
 | kind | probes | settings |
 |---|---|---|
 | `local` | `nvidia-smi` on this machine | |
-| `ssh` | `nvidia-smi` on each host over ssh (keys, BatchMode) | `hosts`, `user`, `domain`, `pin`, `render`, `workspace`, `scratch` |
+| `ssh` | `nvidia-smi` on each host over ssh (keys, BatchMode) | `hosts`, `user`, `domain`, `pin`, `render`, `workspace`, `scratch`, `cpu_budget` |
 | `slurm` | your jobs (`squeue`) and, per running job, `nvidia-smi` in an `srun --overlap` step over the cluster's SSH master | from the cluster profile |
 | `ray` | the Ray dashboard API (nodes, GPUs, running jobs) | `address` |
 
