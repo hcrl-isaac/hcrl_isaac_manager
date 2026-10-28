@@ -3,6 +3,9 @@
 Reservations give one holder priority on cards (named ones, or N of a pool) from an ETA: others may lease the cards
 meanwhile, and those leases yield (move to the priority holder) when it claims them. A reservation ends at its time
 box, or once its holder has claimed under it and holds none of its cards any more (the prioritized run is done).
+
+A CPU lease (`pls run --cpus N`) holds cores of an ssh box and no card: its card is ``<host>:cpu``, it never blocks
+a card claim nor yields to a reservation, and it ends with its run (checked on the box), not by idling.
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ STORE = Path.home() / ".local" / "state" / "hcrl_res" / "leases.json"
 # Beside the leases, in its own file, so a res that predates reservations still reads the lease store.
 RESERVATIONS = "reservations.json"
 LOCK_WAIT_S = 10
+CPU_KEY = "cpu:"  # key prefix of a CPU lease (cpu:<host>:<id>); no card key starts with it
+CPU_START_S = 3600  # a CPU lease whose run never recorded a stage is released after this long
 # Defaults for compute.toml's [leases] grace_min / idle_min. 30 min covers the ~15 min stall watchdog plus a
 # relaunch and Kit boot, so a crashed run's relaunch keeps its card; a design choice, not a measurement.
 GRACE_MIN = 30
@@ -56,7 +61,10 @@ class Lease:
         run: The run the lease covers (W&B id, job.step, ...), when known.
         previous: Holder the lease came from (transfer) or the run was adopted from.
         yield_to: Id of the reservation this lease gives way to ("" = none).
-        stage: Stage dir of the detached `pls run` holding the card, which `pls run --stop` stops ("" = none).
+        stage: Stage dir of the detached `pls run` holding the card, which `pls run --stop` stops ("" = none); a
+            CPU lease records it for attached runs too, since its run's end on the box is what releases it.
+        cpus: Cores a CPU-only run holds (``pls run --cpus``; 0 for a card lease).
+        cores: The box's cores that run is pinned to, as a taskset list (e.g. ``40-63``).
     """
 
     id: str
@@ -77,6 +85,13 @@ class Lease:
     previous: str = ""
     yield_to: str = ""
     stage: str = ""
+    cpus: int = 0
+    cores: str = ""
+
+
+def is_cpu(lease: Lease) -> bool:
+    """True for a CPU lease: cores of a box, no card."""
+    return lease.key.startswith(CPU_KEY)
 
 
 @dataclass
@@ -123,7 +138,9 @@ def report_pools(label: str) -> set[str]:
 
 
 def covers(res: Reservation, key: str, report_label: str) -> bool:
-    """True if the reservation covers the card ``key``, seen in the report ``report_label``."""
+    """True if the reservation covers the card ``key``, seen in the report ``report_label``; never a CPU lease."""
+    if key.startswith(CPU_KEY):
+        return False
     if res.pool:
         return any(name.startswith(res.pool) for name in report_pools(report_label))
     return key in res.keys.split(",")
@@ -342,6 +359,7 @@ def reconcile(
 
     Idle time runs from the first idle observation, so a lease is only released after two observations at least
     the window apart (grace before any activity was seen, idle after). Cards that could not be read are left alone.
+    CPU leases hold no card, so only their time box applies here; reap_cpu ends them with their run.
 
     Args:
         leases: Lease list from locked_store(), changed in place.
@@ -363,6 +381,8 @@ def reconcile(
         card = cards.get(lease.key)
         if lease.expires and now >= lease.expires:
             released.append((lease, "time box ended"))
+            continue
+        if is_cpu(lease):
             continue
         if card is None:
             if lease.report not in labels and _site_complete(lease, reports, ok):
@@ -415,6 +435,106 @@ def new_lease(
         run=run,
         previous=previous,
     )
+
+
+def new_cpu_lease(
+    report: str, host: str, owner: str, holder: str, note: str, cpus: int, cores: str, run: str = ""
+) -> Lease:
+    """Lease on ``cpus`` cores of an ssh box (``cores``, a taskset list), for a run that needs no card.
+
+    Args:
+        report: The box's report label, ``<pool>/<host>``.
+        host: The box.
+        owner: The ssh user the run runs as.
+        holder: Who holds it (session name).
+        note: What it is for.
+        cpus: How many cores.
+        cores: Which cores.
+        run: The run the lease covers, when known.
+    """
+    lease_id = uuid.uuid4().hex[:6]
+    now = time.time()
+    return Lease(
+        id=lease_id,
+        key=f"{CPU_KEY}{host}:{lease_id}",
+        card=f"{host}:cpu",
+        report=report,
+        holder=holder,
+        owner=owner,
+        note=note,
+        created=now,
+        last_active=now,
+        run=run,
+        cpus=cpus,
+        cores=cores,
+    )
+
+
+def reap_cpu(leases: list[Lease], report: str, ended: set[str], now: float | None = None) -> list[tuple[Lease, str]]:
+    """Release the CPU leases of one box whose run ended there, or that never recorded a stage within CPU_START_S.
+
+    Args:
+        leases: Lease list from locked_store(), changed in place.
+        report: The box's report label, ``<pool>/<host>``.
+        ended: Stage dirs on the box whose run is gone (probe.box_cpu_state).
+        now: Current Unix time (tests inject it).
+
+    Returns:
+        The released leases with the reason for each.
+    """
+    now = time.time() if now is None else now
+    released = []
+    for lease in list(leases):
+        if not is_cpu(lease) or lease.report != report:
+            continue
+        if lease.stage in ended:
+            released.append((lease, "its run ended"))
+        elif not lease.stage and now - lease.created >= CPU_START_S:
+            released.append((lease, f"no run started in {CPU_START_S // 60} min"))
+    for lease, _ in released:
+        leases.remove(lease)
+    return released
+
+
+def parse_cores(text: str) -> set[int]:
+    """Core numbers of a taskset list like ``0-3,8``."""
+    out: set[int] = set()
+    for part in filter(None, text.split(",")):
+        lo, _, hi = part.partition("-")
+        out.update(range(int(lo), int(hi or lo) + 1))
+    return out
+
+
+def format_cores(cores: list[int]) -> str:
+    """Sorted core numbers as a taskset list (``[0, 1, 2, 8]`` -> ``0-2,8``)."""
+    runs: list[list[int]] = []
+    for c in sorted(cores):
+        if runs and c == runs[-1][1] + 1:
+            runs[-1][1] = c
+        else:
+            runs.append([c, c])
+    return ",".join(f"{a}-{b}" if b > a else str(a) for a, b in runs)
+
+
+def pick_cores(nproc: int, count: int, pinned: set[int]) -> str:
+    """``count`` of a box's ``nproc`` cores as a taskset list: the highest-numbered ones no other CPU run is pinned
+    to, else (too few left) the last ``count``."""
+    free = [c for c in range(nproc - 1, -1, -1) if c not in pinned]
+    chosen = free[:count] if len(free) >= count else list(range(nproc - count, nproc))
+    return format_cores(chosen)
+
+
+def cpu_budget(setting: object, nproc: int) -> int:
+    """Cores one user's CPU runs may hold on a box at once: the pool's ``cpu_budget``, else half of ``nproc``.
+
+    Raises:
+        ValueError: when the setting is not a positive integer.
+    """
+    if setting is None:
+        return max(1, nproc // 2)
+    if isinstance(setting, bool) or not isinstance(setting, int) or setting < 1:
+        raise ValueError(f"cpu_budget must be a positive number of cores, not {setting!r}")
+    return setting
 
 
 def parse_duration(text: str) -> float:

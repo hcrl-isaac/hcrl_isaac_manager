@@ -38,6 +38,8 @@ pls run --on <target> [--detach] -- train --task <id> --run_name <delta> --run_g
   a recorder on an RT card renders the clips.
 - `--run_name` is the change from the previous run (e.g. `resample=1-5s`); `--run_group` is the dimension being
   explored (e.g. `teacher`). Never a repeat, a status or a one-run group.
+- A job that needs no GPU runs on an ssh box's cores with no card leased: `pls run --on <host> --cpus N [--root DIR]
+  --detach --cmd -- <command>` (pinned, nice 10, within your per-box CPU budget).
 - On a SLURM cluster, `--batch` queues it as a job; on a held node it runs on its cards. Launch one run per command.
   When several Kit processes start at once, give each its own `TMPDIR`, `XDG_CACHE_HOME` and `OMNI_CACHE_DIR`, and
   stagger launches about 20 s apart (concurrent URDF imports race).

@@ -46,6 +46,19 @@ defaults with env vars: `LARG_USER` (your login, when the pools name several or 
 5. **Smoke it:** `pls run --on <host>:0 --root <dir> -- train --task <id> --num_envs 64 --max_iterations 2
    --logger tensorboard --video off`.
 
+## CPU-only runs
+
+A job that needs no GPU (e.g. multiprocess motion retargeting) runs on a box's cores without leasing a card:
+
+```bash
+pls run --on debruyne --cpus 24 --root /var/local/sturman/retarget --detach --cmd -- python -m holosoma_retargeting ...
+```
+
+It sees no CUDA device, is pinned to 24 cores with `taskset` at `nice -n 10`, and its thread pools are sized to 24.
+Your CPU runs on one box hold at most half its cores, or the pool's `cpu_budget = <cores>` in `compute.local.toml`.
+`pls res status` lists it under the box as a CPU run; `pls run --stop <lease>` stops it. Details in
+[`scripts/cluster/res/README.md`](../cluster/res/README.md).
+
 ## One-time setup
 
 Rsync the tree to a box, then build the `ilab` venv + install Isaac Lab in the background (the long install

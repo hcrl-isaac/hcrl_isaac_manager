@@ -255,6 +255,46 @@ def probe_ssh_host(pool: Pool, host: str) -> Report:
         return Report(label, pool.kind, error=f"{exc}{f' ({tail})' if tail else ''}")
 
 
+# The core count of an ssh box, then for each stage dir given as an argument whether its run is gone: its pid's
+# process group has no live (non-zombie) process, or its dir is gone. A stage with no pid yet is still staging
+# (alive), unless it is older than CPU_START_MIN minutes.
+CPU_QUERY = r"""
+echo "@@NPROC $(nproc)"
+for d in "$@"; do
+    if [ -f "$d/pid" ]; then
+        p=$(cat "$d/pid")
+        ps -eo pgid=,stat= | awk -v p="$p" '$1 == p && $2 !~ /^Z/ {f=1} END {exit !f}' || echo "@@ENDED $d"
+    elif [ ! -d "$d" ] || [ -n "$(find "$d" -maxdepth 0 -mmin +"$CPU_START_MIN")" ]; then
+        echo "@@ENDED $d"
+    fi
+done
+"""
+
+
+def box_cpu_state(target: str, stages: list[str], start_min: int = 60) -> tuple[int, set[str]] | None:
+    """An ssh box's core count, and which of the given ``pls run`` stage dirs' runs are gone there.
+
+    Args:
+        target: ``user@fqdn`` of the box.
+        stages: Stage dirs of CPU runs on the box.
+        start_min: Minutes a stage may stay without a pid (staging) before it counts as gone.
+
+    Returns:
+        (nproc, ended stage dirs), or None when the box could not be read (its leases are then left alone).
+    """
+    script = f"CPU_START_MIN={int(start_min)}; {CPU_QUERY}"
+    remote = " ".join(["bash", "-c", shlex.quote(script), "_", *(shlex.quote(s) for s in stages)])
+    try:
+        res = _run(["ssh", *SSH_OPTS, target, remote], timeout=40)
+    except subprocess.TimeoutExpired:
+        return None
+    lines = res.stdout.splitlines()
+    nproc = next((_int(x.split(" ", 1)[1]) for x in lines if x.startswith("@@NPROC ")), None)
+    if res.returncode != 0 or not nproc:
+        return None
+    return nproc, {x.split(" ", 1)[1] for x in lines if x.startswith("@@ENDED ")}
+
+
 def _num(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
