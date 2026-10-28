@@ -179,7 +179,10 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   trained it. A script that takes the path as an argument gets it through `{NAME}` in its arguments, e.g.
   `--checkpoint CKPT=T1_Balance/8ufa90cl -- --checkpoint '{CKPT}'`; braces naming no checkpoint stay as written.
 - The script runs this machine's code: the package repos (`hcrl_isaaclab`, `robot_rl`, `*_tasks`; a `--wt` worktree
-  set where one exists) go on `PYTHONPATH`. A local pool imports the checkouts in place. On an ssh pool each repo
+  set where one exists) go on `PYTHONPATH`. A set's `holosoma` worktree ships too (its main checkout never does:
+  without one the target's own install is imported), imported from `src/holosoma_retargeting` rather than the repo
+  root, so `$PLS_RESOURCES/holosoma/src/holosoma_retargeting/<script>.py` or `holosoma:src/...` runs that branch.
+  A local pool imports the checkouts in place. On an ssh pool each repo
   becomes an immutable snapshot `<scratch>/res-eval/code/<repo>-<fingerprint>` (tracked and non-ignored files, written
   under a `.partial` name and renamed into place, hardlinked from the previous snapshot), and the run gets a fresh
   `<stage>/resources/` of links to those snapshots and to the target's own asset repos. A changed or deleted file

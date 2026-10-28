@@ -79,7 +79,11 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--on", default="", metavar="TARGET", help="where to run (default: this machine)")
     p.add_argument(
-        "--wt", default="", metavar="NAME", help="run this machine's worktree set resources/<repo>/worktrees/<NAME>"
+        "--wt",
+        default="",
+        metavar="NAME",
+        help="run this machine's worktree set resources/<repo>/worktrees/<NAME>; a holosoma worktree in the set"
+        " ships too, imported from its src/holosoma_retargeting",
     )
     p.add_argument("--cmd", action="store_true", help="the words after -- are a command, not a script")
     p.add_argument("--batch", action="store_true", help="submit a batch job on SLURM cluster TARGET (train only)")
