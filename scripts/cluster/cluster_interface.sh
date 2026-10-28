@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SLURM backend of `pls cluster <name>` and `pls run --on <name> --batch`: builds/pushes the shared Isaac .sif,
+# SLURM backend of `pls setup --on|--add`, `pls jobs --on <name>` and `pls run --on <name> --batch`: builds/pushes the shared Isaac .sif,
 # lists, tails and stops this profile's jobs, submits batch jobs and drives the dev node. CLUSTER=<name> selects
 # config/<name>/.
 set -e
@@ -8,13 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 CLUSTER="${CLUSTER:-default}"
 
 IMAGE_NAME="${HCRL_IMAGE_NAME:-hcrl-isaac}"
-IMAGE_TAG="${HCRL_IMAGE_TAG:-isaaclab3}"
-# the .sif follows the image tag (hcrl-isaac-isaaclab3.sif), so it never replaces the Isaac Lab 2.x hcrl-isaac.sif
-# (image tag latest) on a cluster; jobs and develop exec run the .sif of this name
-SIF_NAME="${IMAGE_NAME}"
-[ "$IMAGE_TAG" = latest ] || SIF_NAME="${IMAGE_NAME}-${IMAGE_TAG}"
 SIF_DIR="${HCRL_SIF_DIR:-${SCRIPT_DIR}/exports}"
-SIF_PATH="${SIF_DIR}/${SIF_NAME}.sif"
+SIF_PATH="${SIF_DIR}/${IMAGE_NAME}.sif"
 # profiles are gitignored and per user, so a manager worktree has none: it uses the main checkout's (as res does)
 CONFIG_DIR="${SCRIPT_DIR}/config"
 if [ ! -f "${CONFIG_DIR}/${CLUSTER}/.env.cluster" ]; then
@@ -31,7 +26,7 @@ source "${SCRIPT_DIR}/tools/restore_profiles.sh"
 
 source_cluster_env() {
     if [ ! -f "$CLUSTER_ENV_FILE" ]; then
-        echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'pls cluster add'). Available:" \
+        echo "[ERROR] Cluster config not found: $CLUSTER_ENV_FILE (run 'pls setup --add <name>'). Available:" \
             "$(ls "$CONFIG_DIR" 2>/dev/null | paste -sd, -)." >&2
         exit 1
     fi
@@ -40,15 +35,15 @@ source_cluster_env() {
 }
 
 ensure_ssh_master() {
-    echo "[INFO] Opening SSH control master to $CLUSTER_LOGIN (enter 2FA once)"
+    echo "[INFO] Connecting to $CLUSTER_LOGIN (the open connection, or 2FA once)"
     ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" true
 }
 
 # Build the HPC Apptainer (.sif) from the shared docker image (building the image first if needed).
 build_sif() {
     command -v apptainer >/dev/null 2>&1 || { echo "[cluster] apptainer not found (see README)." >&2; exit 1; }
-    local image="${IMAGE_NAME}:${IMAGE_TAG}"
-    docker image inspect "$image" >/dev/null 2>&1 || { echo "[cluster] image $image missing; building"; HCRL_IMAGE_TAG="$IMAGE_TAG" "${SCRIPT_DIR}/../docker/docker_interface.sh" build; }
+    local image="${IMAGE_NAME}:${HCRL_IMAGE_TAG:-latest}"
+    docker image inspect "$image" >/dev/null 2>&1 || { echo "[cluster] image $image missing; building"; "${SCRIPT_DIR}/../docker/docker_interface.sh" build; }
     mkdir -p "$SIF_DIR"
     echo "[cluster] apptainer build ${SIF_PATH} from docker-daemon://${image}"
     apptainer build --force "$SIF_PATH" "docker-daemon://${image}"
@@ -67,7 +62,7 @@ push_sif() {
 # `apptainer build --fakeroot` in a batch job with the profile's resources, replacing the .sif only once built.
 build_remote_sif() {
     source_cluster_env
-    local build="${CLUSTER_SIF_PATH}/build-${SIF_NAME}" submit="${CONFIG_DIR}/${CLUSTER}/submit_job_slurm.sh"
+    local build="${CLUSTER_SIF_PATH}/build-${IMAGE_NAME}" submit="${CONFIG_DIR}/${CLUSTER}/submit_job_slurm.sh"
     local dockerfile="${SCRIPT_DIR}/../docker/Dockerfile" base flags="" flag value free min="${CLUSTER_BUILD_MIN_FREE_GB:-40}"
     local build_args="" arg
     # the same base image as the docker build, from its ARG, and the same Isaac Lab ref and extras
@@ -107,10 +102,10 @@ if [ \"\$(cat base.ref 2>/dev/null)\" != '${base}' ]; then
     mv -f base.sif.\$SLURM_JOB_ID base.sif
     echo '${base}' > base.ref
 fi
-apptainer build --fakeroot --force${build_args} ${SIF_NAME}.sif.partial.\$SLURM_JOB_ID hcrl-isaac.def
-mv -f ${SIF_NAME}.sif.partial.\$SLURM_JOB_ID '${CLUSTER_SIF_PATH}/${SIF_NAME}.sif'
-echo \"[cluster] built ${CLUSTER_SIF_PATH}/${SIF_NAME}.sif\""
-    local opts="-N 1 -t ${CLUSTER_BUILD_TIME:-02:00:00} -J ${SIF_NAME}-build -o '${build}/build-%j.log'${flags}"
+apptainer build --fakeroot --force${build_args} ${IMAGE_NAME}.sif.partial.\$SLURM_JOB_ID hcrl-isaac.def
+mv -f ${IMAGE_NAME}.sif.partial.\$SLURM_JOB_ID '${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif'
+echo \"[cluster] built ${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif\""
+    local opts="-N 1 -t ${CLUSTER_BUILD_TIME:-02:00:00} -J ${IMAGE_NAME}-build -o '${build}/build-%j.log'${flags}"
     echo "[cluster] building in a batch job (sbatch ${opts}); it can take ~15 min"
     local rc=0 out id
     out="$(printf '%s\n' "$job" | ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "sbatch --parsable --wait ${opts}")" || rc=$?
@@ -129,7 +124,7 @@ echo \"[cluster] built ${CLUSTER_SIF_PATH}/${SIF_NAME}.sif\""
 }
 
 # Submit a batch job on the login node: the cluster's submit_job_slurm.sh holds its #SBATCH config and
-# runs scripts/cluster/run_singularity.sh in the shared ${SIF_NAME}.sif.
+# runs scripts/cluster/run_singularity.sh in the shared hcrl-isaac.sif.
 submit_job() {
     case "$CLUSTER_JOB_SCHEDULER" in
         SLURM) job_script=submit_job_slurm.sh ;;
@@ -137,10 +132,10 @@ submit_job() {
         *) echo "[ERROR] Unsupported CLUSTER_JOB_SCHEDULER '$CLUSTER_JOB_SCHEDULER' (SLURM|PBS)" >&2; exit 1 ;;
     esac
     ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
-        "cd $CLUSTER_ISAACLAB_DIR && bash scripts/cluster/config/${CLUSTER}/${job_script} \"$CLUSTER_ISAACLAB_DIR\" ${SIF_NAME} ${*}"
+        "cd $CLUSTER_ISAACLAB_DIR && bash scripts/cluster/config/${CLUSTER}/${job_script} \"$CLUSTER_ISAACLAB_DIR\" hcrl-isaac ${*}"
 }
 
-cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: the workspace, staged as `default`)
+cmd_job() {  # job [--tree NAME] [--script PATH] [args]: a batch job on a staged tree (default: the workspace as `default`)
     source_cluster_env
     [ -f "$SCRIPT_DIR/../.env.wandb" ] || {
         echo "[ERROR] scripts/.env.wandb not found: a job without W&B credentials cannot log. Create it from" \
@@ -149,10 +144,23 @@ cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: 
     }
     # the API key: owner-only here, which the copy below carries to the cluster
     chmod go-rwx "$SCRIPT_DIR/../.env.wandb"
-    local tree_name="" dev="$SCRIPT_DIR/cluster_dev/cluster_dev.sh"
-    if [ "${1:-}" = --tree ]; then
-        [ -n "${2:-}" ] || { echo "[ERROR] --tree needs a tree name or <name>-<fingerprint>" >&2; exit 1; }
-        tree_name="$2"; shift 2
+    local tree_name="" script="" dev="$SCRIPT_DIR/cluster_dev/cluster_dev.sh"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --tree) [ -n "${2:-}" ] || { echo "[ERROR] --tree needs a tree name or <name>-<fingerprint>" >&2; exit 1; }
+                    tree_name="$2"; shift 2 ;;
+            --script) [ -n "${2:-}" ] || { echo "[ERROR] --script needs the script's path in the container" >&2; exit 1; }
+                      script="$2"; shift 2 ;;
+            *) break ;;
+        esac
+    done
+    local exe="$CLUSTER_PYTHON_EXECUTABLE"
+    if [ -n "$script" ]; then  # this job's script in place of the profile's train.py, keeping any launcher before it
+        case "$exe" in
+            *scripts/train.py) exe="${exe%scripts/train.py}${script}" ;;
+            *) echo "[ERROR] this profile's CLUSTER_PYTHON_EXECUTABLE ($exe) does not end in scripts/train.py," \
+                   "so a batch job cannot swap in $script" >&2; exit 1 ;;
+        esac
     fi
     ensure_ssh_master
     if [ -z "$tree_name" ]; then
@@ -172,7 +180,10 @@ cmd_job() {  # job [--tree NAME] [args]: a batch job on a staged tree (default: 
     for f in "$CONFIG_DIR/${CLUSTER}"/submit_job_*.sh; do
         [ -f "$f" ] && { rsync -t -e "ssh ${SSH_OPTS[*]}" "$f" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/config/${CLUSTER}/" || exit 1; }
     done
-    rsync -t -e "ssh ${SSH_OPTS[*]}" "$CLUSTER_ENV_FILE" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/.env.cluster" || exit 1
+    local job_env; job_env="$(mktemp)"
+    { cat "$CLUSTER_ENV_FILE"; printf 'CLUSTER_PYTHON_EXECUTABLE=%q\n' "$exe"; } > "$job_env"
+    rsync -t -e "ssh ${SSH_OPTS[*]}" "$job_env" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/.env.cluster" || { rm -f "$job_env"; exit 1; }
+    rm -f "$job_env"
     rsync -tp -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/../.env.wandb" "$CLUSTER_LOGIN:${job_dir}/scripts/cluster/.env.wandb" || exit 1
     [ ! -f "$SCRIPT_DIR/../.env.base" ] || {
         rsync -t -e "ssh ${SSH_OPTS[*]}" "$SCRIPT_DIR/../.env.base" "$CLUSTER_LOGIN:${job_dir}/scripts/.env.base" || exit 1; }
@@ -258,18 +269,12 @@ case "$cmd" in
     logs)        cmd_logs "$@" ;;
     stop)        cmd_stop "$@" ;;
     job)         cmd_job "$@" ;;   # `pls run --on <name> --batch`
-    develop)     exec env CLUSTER="$CLUSTER" "${SCRIPT_DIR}/cluster_dev/cluster_dev.sh" "$@" ;;
     -h | --help | help)
-        echo "usage: pls cluster <name> <command> [args]"
-        echo "  setup [--build-only|--push-only]  build the shared .sif and rsync it to the cluster (CLUSTER_ARCH=arm64:"
-        echo "                         build it there); --push-only reuses a built .sif"
-        echo "  list [squeue args]     this profile's queued and running jobs"
-        echo "  logs <job> [tail args] the job's output (default: its last 100 lines; -f follows)"
-        echo "  stop <job>...          cancel jobs"
-        echo "  status                 this cluster's cards and leases"
-        echo "  add [--update]         create or regenerate the profile (scripts/cluster/config/<name>, gitignored)"
-        echo "  develop ...            manage a persistent dev node (start/status/attach/exec/stage/trees/kill/stop)"
-        echo "batch jobs: pls run --on <name> --batch [--tree N] -- train [args]"
+        echo "The SLURM backend of pls (CLUSTER=<profile>); run it through:"
+        echo "  pls setup --on <cluster> [--build-only|--push-only]  build the shared .sif and push it (arm64: built there)"
+        echo "  pls setup --add <name> [--update]                    create or regenerate a profile"
+        echo "  pls jobs --on <cluster> [list|logs <job>|stop <job>]  this profile's batch jobs"
+        echo "  pls run --on <cluster> --batch [--tree N | --wt S] -- <script> [args]  submit one"
         ;;
     *) echo "[ERROR] unknown command '$cmd' (try: help)" >&2; exit 1 ;;
 esac

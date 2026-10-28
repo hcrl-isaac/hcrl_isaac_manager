@@ -556,7 +556,7 @@ def ensure_deps(peer: Machine, *, dry: bool) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("host", help="ssh host of the peer (e.g. hcrl2, ebuntu)")
+    ap.add_argument("host", help="ssh host of the peer box")
     ap.add_argument("--dry-run", action="store_true", help="print what would happen; touch nothing")
     ap.add_argument(
         "--force",

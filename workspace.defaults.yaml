@@ -9,8 +9,7 @@ isaaclab:
   # IsaacLab uv extras synced into the ilab venv; add isaacsim (Isaac Sim 6.1, ~20 GB) for Kit RTX renders
   extras: [rsl-rl, ovphysx, importers, video]
 always: [hcrl_isaaclab, robot_rl, hcrl_sim2real]   # repos always present (core extension, RL package, sim2real infra)
-# this branch composes every repo's Isaac Lab 3.0 port
-refs: {hcrl_isaaclab: feature/isaac-3.0, robot_rl: feature/isaac-3.0, hcrl_sim2real: feature/isaac-3.0, hhlm_tasks: feature/isaac-3.0, ssti_tasks: feature/isaac-3.0, holosoma: feature/isaac-3.0}
+refs: {}                            # per-repo ref overrides (default is main)
 
 # Selectable project task repos (each -> <name>_tasks + its transitive robot/data deps). `default`
 # marks the ones pre-checked in the selector and used when no per-user workspace.yaml exists.

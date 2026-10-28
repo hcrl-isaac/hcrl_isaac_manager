@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Docker interface for the shared Isaac image (reused by Ray + the HPC .sif). Ubuntu 24.04 + a uv venv from the
-# Isaac Lab 3 lock; workspace code is mounted at job start. Tagged hcrl-isaac:isaaclab3, so the Isaac Lab 2.x image
-# (hcrl-isaac:latest) is never overwritten.
+# Isaac Lab 3 lock; workspace code is mounted at job start.
 set -euo pipefail
 cd "$(dirname "$0")"  # scripts/docker/
 
@@ -18,7 +17,7 @@ isaaclab_args() {
 
 # Build the shared image from ./Dockerfile.
 build_image() {
-    local image="${HCRL_IMAGE_NAME:-hcrl-isaac}:${HCRL_IMAGE_TAG:-isaaclab3}" ref extras
+    local image="${HCRL_IMAGE_NAME:-hcrl-isaac}:${HCRL_IMAGE_TAG:-latest}" ref extras
     isaaclab_args
     echo "[docker] building ${image}: Isaac Lab ${ref}, extras: ${extras}"
     docker build \
@@ -35,7 +34,7 @@ case "${1:-build}" in
     # the same Isaac Lab inputs as KEY=VALUE lines, for the .sif built on an arm64 cluster (hcrl-isaac.def)
     isaaclab-args)  isaaclab_args; printf 'ISAACLAB_REF=%s\nISAACLAB_EXTRAS=%s\n' "$ref" "$extras" ;;
     -h | --help | help)
-        echo "usage: $(basename "$0") build          -- build the shared Isaac docker image (hcrl-isaac:isaaclab3)"
+        echo "usage: $(basename "$0") build          -- build the shared Isaac docker image (hcrl-isaac:latest)"
         echo "       $(basename "$0") isaaclab-args  -- print the Isaac Lab ref and uv extras the image installs" ;;
     *)              echo "[ERROR] unknown command '${1}' (try: build)" >&2; exit 1 ;;
 esac

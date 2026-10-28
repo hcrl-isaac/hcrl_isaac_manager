@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Resolve a per-project workspace into a flat, deduped gitman config, then materialize it.
 
-Each repo declares only its direct deps in a ``dependencies.yaml`` (``deps: [{name, git?, ref?}]``); they are
+Each repo declares only its direct deps in a ``dependencies.yaml`` (``deps: [{name, git?, ref?, optional?, note?}]``;
+``optional: true`` marks data a user may lack access to: it is skipped with a warning, never fatal); they are
 resolved by name into one flat ``gitman.yaml`` (all repos siblings under ``resources/``) for ``gitman update``.
 
 The manifest is the committed ``workspace.defaults.yaml`` (``org``, ``always``, ``refs``, ``isaaclab``,
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata
+import os
 import shutil
 import subprocess
 import sys
@@ -27,10 +29,10 @@ DEFAULTS = MANAGER_DIR / "workspace.defaults.yaml"
 
 
 def _isaaclab_mode(isaaclab: dict) -> str:
-    """Return the IsaacLab install mode (pip/source/none), accepting the legacy ``source: bool`` form."""
+    """Return the IsaacLab install mode (source/none; a legacy pip or ``source: bool`` passes through as given)."""
     if "mode" in isaaclab:
         return isaaclab["mode"]
-    return "source" if isaaclab.get("source") else "pip"
+    return "source" if isaaclab.get("source", True) else "pip"
 
 
 # renamed project -> current name, named in the error when a per-user selection still uses the old one
@@ -146,7 +148,8 @@ def resolve(manifest: dict) -> dict[str, dict]:
         manifest: The parsed ``workspace.yaml``.
 
     Returns:
-        A name-keyed map of every repo to check out, with its git URL and ref.
+        A name-keyed map of every repo to check out, with its git URL, ref, and whether it is optional (data a
+        user may lack access to) with its note.
 
     Raises:
         SystemExit: Two repos request the same dependency name at different refs (unresolved conflict).
@@ -173,10 +176,52 @@ def resolve(manifest: dict) -> dict[str, dict]:
                     f"{resolved[name]['ref']!r} and {ref!r}. Pin one ref in workspace.yaml."
                 )
             continue
-        resolved[name] = {"git": url, "ref": ref}
+        resolved[name] = {"git": url, "ref": ref, "optional": bool(dep.get("optional")), "note": dep.get("note", "")}
         # recurse into this repo's declared deps (if it is already checked out)
         queue.extend(_read_deps(RESOURCES / name))
     return resolved
+
+
+PROBE_TIMEOUT_S = 20  # a dropped network or a silent firewall must not hang setup
+
+
+def reachable(url: str, ref: str) -> bool:
+    """Whether ``url`` answers ``git ls-remote`` for ``ref`` without asking for credentials.
+
+    A missing login fails at once instead of prompting: no terminal prompt, no askpass helper, ssh in batch mode. A
+    host that never answers counts as unreachable after ``PROBE_TIMEOUT_S``.
+    """
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": ""}
+    env["GIT_SSH_COMMAND"] = f"{env.get('GIT_SSH_COMMAND', 'ssh')} -o BatchMode=yes"
+    try:
+        r = subprocess.run(
+            ["git", "ls-remote", "--exit-code", url, ref], env=env, capture_output=True, timeout=PROBE_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return r.returncode == 0
+
+
+def drop_unreachable(resolved: dict[str, dict], warned: set[str]) -> dict[str, dict]:
+    """Leave out every optional dep whose remote this user can't read, warning once per dep.
+
+    Args:
+        resolved: The resolved repo map.
+        warned: Names already warned about (updated in place).
+
+    Returns:
+        The map without the unreachable optional deps; a required repo is always kept, so its fetch fails loudly.
+    """
+    kept = {}
+    for name, info in resolved.items():
+        if info.get("optional") and (name in warned or not reachable(info["git"], info["ref"])):
+            if name not in warned:
+                note = f"; {info['note']}" if info.get("note") else ""
+                print(f"[resolve] WARNING {name}: no access to {info['git']}; tasks that load it stop at load{note}")
+                warned.add(name)
+            continue
+        kept[name] = info
+    return kept
 
 
 def to_gitman(resolved: dict[str, dict], manifest: dict) -> dict:
@@ -312,9 +357,12 @@ def main() -> None:
 
     # A repo's own deps are readable only once it is checked out, so resolve and update to a fixpoint.
     prev_names: set[str] | None = None
+    warned: set[str] = set()
     try:
         while True:
             resolved = resolve(manifest)
+            if args.update:  # only a fetch needs access; writing gitman.yaml alone lists everything
+                resolved = drop_unreachable(resolved, warned)
             out.write_text(yaml.safe_dump(to_gitman(resolved, manifest), sort_keys=False))
             names = set(resolved)
             print(f"[resolve] wrote {out} with {len(resolved)} repos: {', '.join(sorted(resolved))}")
@@ -352,7 +400,7 @@ def main() -> None:
                     "(the stash is preserved)."
                 )
 
-    mode = manifest.get("isaaclab", {}).get("mode", "pip")
+    mode = manifest.get("isaaclab", {}).get("mode", "source")
     if mode == "source":
         print(f"[resolve] IsaacLab: source mode ({manifest['isaaclab'].get('ref', 'main')} in resources/IsaacLab)")
     elif mode == "none":

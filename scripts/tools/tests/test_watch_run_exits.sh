@@ -117,10 +117,10 @@ check "a hanging probe ends as BLIND" '[ "$rc" = 1 ] && case $out in *BLIND*) tr
 out="$(PATH="$T/bin:$PATH" timeout 4 bash "$T/watch_blind.sh" probe "x@host:/log" 4000 20 0 2>&1)"; rc=$?
 check "a few failed probes inside stall_min are retried" '[ "$rc" = 124 ] && [ -z "$out" ]'
 
-# ray:<job>: the log comes through `pls cluster ray logs`, the job's state through `pls cluster ray list --status_of`
+# ray:<job>: the log comes through `pls jobs --on ray logs`, the job's state through `pls jobs --on ray list --status_of`
 cat > "$T/pls" <<EOF
 #!/usr/bin/env bash
-case "\$3" in logs) cat "$T/ray.log" ;; list) cat "$T/ray.status" ;; esac
+case "\$4" in logs) cat "$T/ray.log" ;; list) cat "$T/ray.status" ;; esac
 EOF
 chmod +x "$T/pls"
 sed 's/^POLL_S=120 /POLL_S=1 /' "$REPO/scripts/tools/watch_run.sh" > "$T/watch_ray.sh"

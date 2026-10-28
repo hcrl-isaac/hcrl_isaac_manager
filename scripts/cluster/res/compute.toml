@@ -1,25 +1,27 @@
-# Compute pools `pls res` probes; `kind` picks the backend. compute.local.toml (gitignored) is merged over this
-# file for per-user settings, and SLURM pools come from the cluster profiles (scripts/cluster/config/).
+# Compute pools `pls res` probes; `kind` picks the backend (local, ssh, slurm, ray). This file ships only this
+# machine. Your own pools go in compute.local.toml (gitignored, merged over this file): `pls setup --add <name>
+# --kind ssh|ray ...` writes them there, or edit it by hand. SLURM pools come from the cluster profiles
+# (scripts/cluster/config/<name>/, made by `pls setup --add <name>`).
 
 [compute.local]
 kind = "local"
 
-[compute.larg-a100]
-kind = "ssh"
-hosts = ["mckennie", "hazard", "debruyne", "aaronson"]
-domain = "cs.utexas.edu"
-# user: your LARG login, in compute.local.toml (or $LARG_USER)
-
-[compute.larg-a40]
-kind = "ssh"
-hosts = ["pepi", "pulisic", "salah", "pogba"]
-domain = "cs.utexas.edu"
-# Kit has refused masked CUDA_VISIBLE_DEVICES on these boxes, so card runs (`pls run --on`) read RES_EVAL_DEVICE
-pin = "device"
-
-[compute.ray]
-kind = "ray"
-address = "http://100.95.64.90:8265"
+# Examples for compute.local.toml:
+#
+# [compute.lab-a100]                  # GPU boxes reached over ssh with a key
+# kind = "ssh"
+# hosts = ["box1", "box2"]            # short names; `domain` is appended to each
+# domain = "lab.example.edu"
+# user = "<your login>"
+# # pin = "device"                    # runs pick the card by device index, when Kit refuses a masked CUDA_VISIBLE_DEVICES
+# # render = true                     # RT-core cards: scripts/larg/train.sh records video in-process
+#
+# [compute.ray]                       # a Ray cluster; the pool named `ray` is what `pls run --on ray` submits to
+# kind = "ray"
+# address = "http://<head>:8265"
+#
+# [compute.delta]                     # a setting over a SLURM pool (the pool itself comes from its profile)
+# enabled = false
 
 # Lease windows in minutes (a design choice: the ~15 min stall watchdog plus a relaunch and Kit boot).
 [leases]

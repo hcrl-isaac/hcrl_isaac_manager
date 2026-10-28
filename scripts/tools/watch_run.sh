@@ -4,7 +4,7 @@
 #   watch_run.sh [--wandb <entity/project/run_id>] <label> <log> <target-iters> [stall_min] [report_every] [metric-grep]
 #
 # <log> is a local path, user@host:/path when the log lands on a different host from the process, or ray:<job_id>
-# for a Ray job (read through `pls cluster ray logs`; a job Ray reports FAILED or STOPPED is FAILED here). A run that
+# for a Ray job (read through `pls jobs --on ray logs`; a job Ray reports FAILED or STOPPED is FAILED here). A run that
 # logs every N iterations finishes when it closes (W&B's sync lines after its last iteration) within N of the target.
 # With --wandb, a log that cannot be read (its login node down) is replaced by the run's W&B state, iteration and last
 # log time, so a login outage is not BLIND while the run still logs.
@@ -77,10 +77,10 @@ run_remote() {  # stdin: the probe script
 
 RAY_STATUS=""
 ray_refresh() {  # a Ray job's log into $LOG, replaced only when it changed, so its mtime is the last new output
-    timeout "$PROBE_S" "$PLS" cluster ray logs "$RAY_JOB" > "$LOG.new" 2>/dev/null || { rm -f "$LOG.new"; return 1; }
+    timeout "$PROBE_S" "$PLS" jobs --on ray logs "$RAY_JOB" > "$LOG.new" 2>/dev/null || { rm -f "$LOG.new"; return 1; }
     if cmp -s "$LOG.new" "$LOG"; then rm -f "$LOG.new"; else mv "$LOG.new" "$LOG"; fi
     # probe runs in a subshell, so the state goes through a file the loop reads
-    timeout "$PROBE_S" "$PLS" cluster ray list --all_statuses --status_of "$RAY_JOB" 2>/dev/null | tail -1 > "$LOG.status"
+    timeout "$PROBE_S" "$PLS" jobs --on ray list --all_statuses --status_of "$RAY_JOB" 2>/dev/null | tail -1 > "$LOG.status"
 }
 
 wandb_probe() {  # `state=.. it=.. age=..` for $WANDB_RUN, or nothing (WATCH_RUN_WANDB_PROBE stands in for tests)

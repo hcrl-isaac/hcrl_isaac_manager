@@ -25,7 +25,7 @@ venv() {  # venv DIR SERVES: a fake venv whose hcrl_isaaclab resolves to SERVES
     printf '#!/usr/bin/env bash\necho %q\n' "$2" > "$1/bin/python"
     chmod +x "$1/bin/python"
 }
-sync() { rm -f "$T/uv_calls"; env PATH="$T/bin:$PATH" HOME="$T" LARG_LOCAL_DIR="$T/local" LARG_REMOTE_DIR="$T/remote" \
+sync() { rm -f "$T/uv_calls"; env PATH="$T/bin:$PATH" HOME="$T" LARG_USER=tester LARG_LOCAL_DIR="$T/local" LARG_REMOTE_DIR="$T/remote" \
     bash "$REPO/scripts/larg/sync.sh" box > "$T/out" 2>&1; }
 
 fails=0

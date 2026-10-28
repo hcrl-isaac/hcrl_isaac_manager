@@ -47,7 +47,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # Config -- sourced from the selected cluster's .env.cluster, with dev-box overrides.
 #============================================================================
 # Cluster config: CLUSTER=<name> picks ../config/<name>/.env.cluster (default "default"); matches
-# cluster_interface.sh, which sets CLUSTER when invoked as `cluster_interface.sh develop`.
+# `pls`, which sets CLUSTER from --on <cluster>.
 CLUSTER="${CLUSTER:-default}"
 ENV_FILE="${SCRIPT_DIR}/../config/${CLUSTER}/.env.cluster"
 # profiles are gitignored and per user, so a manager worktree has none: it borrows the main checkout's for the
@@ -61,7 +61,7 @@ if [ ! -f "$ENV_FILE" ]; then
         echo "[cluster_dev] using the main checkout's profile ${ENV_FILE}" >&2
     fi
 fi
-MAIN_PROFILE_COMMANDS=" stage trees exec status tail open attach __resolve_tree __free_gb help -h --help "
+MAIN_PROFILE_COMMANDS=" stage trees exec status tail open attach __resolve_tree __free_gb __master_up help -h --help "
 if [ -n "$MAIN_CHECKOUT" ] && [[ "$MAIN_PROFILE_COMMANDS" != *" ${1:-help} "* ]]; then
     echo "[cluster_dev] '${1}' changes the shared sentinel state; run it from the main checkout ${MAIN_CHECKOUT}" >&2
     exit 1
@@ -97,7 +97,7 @@ SRUN_ACCT_OPT=""; [ -n "$DEV_ACCOUNT" ]   && SRUN_ACCT_OPT="-A ${DEV_ACCOUNT}"
 # included) ran pinned to core 0 of the whole allocation -- measured ~2.9x slower. Reuse the sentinel's
 # own --cpus-per-task so a step gets the same share the batch job asked for.
 SRUN_CPUS_OPT=""; [ -n "$DEV_CPUS" ]      && SRUN_CPUS_OPT="--cpus-per-task=${DEV_CPUS}"
-# squeue lowercases every account, and TACC's step filter refuses "cda26011" for CDA26011: the profile's spelling
+# squeue lowercases every account, and TACC's step filter refuses "abc12345" for ABC12345: the profile's spelling
 # when it names the same account, else a TACC project id (three letters, five digits) in upper case
 _acct_spelling() {
     local a="$1"
@@ -202,7 +202,7 @@ cmd_start() {
     ensure_master
     # 1) stage the workspace as `default` first, so the node runs the latest on attach.
     if [ -z "$stage" ]; then
-        log "Skipping the stage: exec runs the newest staged \`default\` (or --tree); stage one with 'develop stage'."
+        log "Skipping the stage: exec runs the newest staged \`default\` (or --tree); stage one with 'pls stage --on ${CLUSTER}'."
     else
         ( cmd_stage default ) || err "staging failed (continuing; re-run './cluster_dev.sh stage')."
     fi
@@ -387,7 +387,7 @@ cmd_attach() {  # interactive shell on the compute node
     fi
 }
 
-cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tmp] [--root DIR] -- <command...>
+cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tmp] [--root DIR] [--cards N] -- <command...>
     #
     # Default (foreground): run the container command tethered to this SSH master. Stdout/stderr
     # stream back to the caller; exit code propagates. Good for short ops (smoke tests, status
@@ -399,7 +399,7 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tm
     # redirected to a log file on the login node (default: $HOME/cluster_dev_run_<ts>.log).
     # Follow it with `cluster_dev.sh tail`. The latest --detach log path is recorded in
     # ~/.cluster_dev/state (LAST_RUN_LOG) so `tail` finds it without args.
-    local detach="" logfile="" tree="" space_check=1 own_tmp="" root=""
+    local detach="" logfile="" tree="" space_check=1 own_tmp="" root="" cards=1
     while [ $# -gt 0 ]; do
         case "${1:-}" in
             --detach) detach="1"; shift;;
@@ -411,11 +411,15 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tm
                     root="NODE_EXEC_ROOT=$(printf %q "$2") "; shift 2;;
             --tree) [ -n "${2:-}" ] || { err "--tree needs a tree name or <name>-<fingerprint>"; exit 1; }
                     tree="$2"; shift 2;;
+            # a step for N cards' work (a multi-GPU run): N sentinel tasks' CPUs, not one's
+            --cards) [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] || { err "--cards needs a card count"; exit 1; }
+                     cards="$2"; shift 2;;
             --) shift; break;;
             *) break;;
         esac
     done
     require_running
+    if [ "$cards" -gt 1 ] && [ -n "$DEV_CPUS" ]; then SRUN_CPUS_OPT="--cpus-per-task=$((DEV_CPUS * cards))"; _srun_opts; fi
     [ -n "$space_check" ] && check_space "${CLUSTER_LOGS_DIR:-${REMOTE_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs}" "run logs"
     # exec always runs with the current local config, pushed before every run
     push_env_cluster || { err "could not push ${ENV_FILE} to ${REMOTE_ENV_FILE}"; exit 1; }
@@ -423,7 +427,7 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tm
     local args; args="$(printf '%q ' "$@")"
     # resolved once, here: the step runs this tree for its whole life, whatever is staged after it starts
     if [ -z "$tree" ]; then
-        tree="$(resolve_tree default)" || { err "no --tree given and no tree named default: pass --tree <name> (develop trees lists them)"; exit 1; }
+        tree="$(resolve_tree default)" || { err "no --tree given and no tree named default: pass --tree <name> (pls stage --on ${CLUSTER} list shows them)"; exit 1; }
     else
         tree="$(resolve_tree "$tree")" || exit 1
     fi
@@ -518,7 +522,7 @@ cmd_kill() {  # cluster_dev.sh kill [--all | STEP...] : scancel launched run ste
 
 cmd_stop() {  # stop [JOBID]: cancel one sentinel. Several sessions share the state file and the master, so the
     # job is named (argument or DEV_JOBID) unless this user has exactly one; the master stays up (`close` ends it)
-    master_alive || { err "SSH master is down: open it first (pls cluster ${CLUSTER} develop open)"; exit 1; }
+    master_alive || { err "SSH master is down: open it first (pls connect --on ${CLUSTER})"; exit 1; }
     local jobid="${1:-${DEV_JOBID:-}}" live
     live="$(on_login "squeue -u \$USER -h -n cluster-dev-box -o '%i %T %N' 2>/dev/null" || true)"
     if [ -z "$jobid" ]; then
@@ -536,7 +540,7 @@ cmd_stop() {  # stop [JOBID]: cancel one sentinel. Several sessions share the st
         [ -f "$WATCH_PID" ] && kill "$(cat "$WATCH_PID")" 2>/dev/null || true; rm -f "$WATCH_PID"
         state_set JOB_STATE "STOPPED"
     fi
-    log "Cancelled ${jobid}. The SSH master stays up for other sessions (close it with: develop close)."
+    log "Cancelled ${jobid}. The SSH master stays up for other sessions (close it with: pls disconnect --on ${CLUSTER})."
 }
 
 cmd_close() {  # close the SSH master: ends every session's link to this cluster until the next `open`
@@ -557,6 +561,7 @@ case "${1:-}" in
     trees)    shift; cmd_trees "$@" ;;
     __resolve_tree) shift; ensure_master >&2; resolve_tree "$@" ;;   # internal: tests, `pls run --batch`
     __free_gb) shift; ensure_master >/dev/null; remote_free_gb "$1" ;;   # internal (tests)
+    __master_up) master_alive ;;   # internal: `pls` checks the connection before a command that needs it
     start)    shift; cmd_start "$@" ;;
     open)     shift; cmd_open "$@" ;;
     status)   shift; cmd_status "$@" ;;

@@ -1,15 +1,23 @@
-import subprocess
+"""GPU use on every host of your ssh pools (scripts/cluster/res/compute.local.toml), one nvidia-smi over ssh each."""
 
-SERVERS = [
-    "sturman@mckennie.cs.utexas.edu",
-    "sturman@hazard.cs.utexas.edu",
-    "sturman@debruyne.cs.utexas.edu",
-    "sturman@aaronson.cs.utexas.edu",
-    "sturman@pepi.cs.utexas.edu",
-    "sturman@pulisic.cs.utexas.edu",
-    "sturman@salah.cs.utexas.edu",
-    "sturman@pogba.cs.utexas.edu",
-]
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "cluster" / "res"))
+from inventory import load_pools, ssh_target
+
+
+def servers() -> list[str]:
+    """The ssh target of every host of the ssh pools that name a user."""
+    pools = [p for p in load_pools() if p.kind == "ssh"]
+    if not pools:
+        sys.exit("[gpu_stats] no ssh pools: `pls setup --add <pool> --kind ssh --hosts ... --user ...` adds one")
+    for p in pools:
+        if not p.settings.get("user"):
+            print(f"[gpu_stats] skipping pool {p.name}: no user set in compute.local.toml", file=sys.stderr)
+    return [ssh_target(p, h) for p in pools if p.settings.get("user") for h in p.settings.get("hosts", [])]
+
 
 NVIDIA_CMD = "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits"
 
@@ -35,7 +43,7 @@ def main() -> None:
     print(f"{'SERVER':<20} | {'ID':<3} | {'GPU NAME':<20} | {'UTIL':<5} | {'MEM USED':<10}")
     print("-" * 75)
 
-    for server in SERVERS:
+    for server in servers():
         output = get_gpu_stats(server)
 
         if output.startswith("Error"):

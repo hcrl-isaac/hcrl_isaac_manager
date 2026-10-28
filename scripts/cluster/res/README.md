@@ -5,7 +5,7 @@ One view of every GPU we can use, probed live from each pool rather than declare
 ```bash
 pls res                      # = pls res status: every card on every pool
 pls res status --free        # only free cards
-pls res status --pool larg   # pools whose name starts with "larg" (repeatable)
+pls res status --pool lab    # pools whose name starts with "lab" (repeatable)
 pls res status --json        # machine-readable
 pls res pools                # the configured pools
 pls res claim / release / leases   # card leases, below
@@ -27,8 +27,8 @@ A lease says who is using a card. There is no daemon: every `pls res` call recon
 probe, so a lease's state only changes when someone runs `res`.
 
 ```bash
-pls res claim mckennie:1 --holder "<session>" --note "T1 kick seed 3"   # host:gpu (host:job:gpu on SLURM)
-pls res claim --any --count 2 --min-free-gb 40 --pool larg --holder "<session>"
+pls res claim box1:1 --holder "<session>" --note "T1 kick seed 3"   # host:gpu (host:job:gpu on SLURM)
+pls res claim --any --count 2 --min-free-gb 40 --pool lab --holder "<session>"
 pls res claim gpub065:2 --holder "<session>" --for 2h                   # time-boxed interactive work
 pls res leases                                                          # list (no probe)
 pls res release <id|host:gpu|host:job:gpu> --holder "<session>"         # --force for someone else's
@@ -60,7 +60,7 @@ pls res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take o
   whose card is gone from a complete probe (allocation ended, node removed) is released only when it is still gone
   on a complete probe at least `idle_min` later.
 - The store is `~/.local/state/hcrl_res/leases.json`, one per home directory: other OS users see none of it, and
-  machines that share a home (the LARG boxes' NFS home) share it. It is locked with `flock`, which an NFS mount may
+  machines that share a home (e.g. boxes with one NFS home) share it. It is locked with `flock`, which an NFS mount may
   not honour, so run `res` from one machine. A store that cannot be read or has wrong-typed fields is moved aside:
   `status` then shows no leases and `claim`/`release`/`leases` refuse.
 
@@ -102,14 +102,14 @@ dev sentinel, with its checkpoints brought along (`pls run --help` for the whole
 card options):
 
 ```bash
-pls run --on larg-a100 --holder "<session>" \
-    --checkpoint REORIENT_CKPT=hcrl-ssti/Crab_Agile/d1tafrx7@5999 \
-    --checkpoint TRAVERSE_CKPT=https://wandb.ai/hcrl-ssti/Crab_Agile/runs/d1tafrx7 \
+pls run --on lab-a100 --holder "<session>" \
+    --checkpoint REORIENT_CKPT=<entity>/<project>/<run_id>@5999 \
+    --checkpoint TRAVERSE_CKPT=https://wandb.ai/<entity>/<project>/runs/<run_id> \
     --env CENSUS_N=512 -- path/to/census.py --script-flag value                       # any free card of a pool
-pls run --on hazard:2 --holder "<session>" --checkpoint ./model_200.pt -- probe.py     # exported as CHECKPOINT
+pls run --on box1:2 --holder "<session>" --checkpoint ./model_200.pt -- probe.py     # exported as CHECKPOINT
 pls run --on lease:<id> --holder "<session>" --wt my-feature -- probe.py               # your lease, a worktree set
-pls run --on pepi:1 --wt legacy --holder "<session>" --detach \
-    -- train --task hhlm/T1-Kick-v0 --headless --video on                              # train a branch on LARG
+pls run --on box3:1 --wt legacy --holder "<session>" --detach \
+    -- train --task hhlm/T1-Kick-v0 --headless --video on                              # train a branch on an ssh box
 pls run --on local:0 --holder "<session>" -- probe.py                                  # this machine's card 0
 pls run --on c571-003:3 --holder "<session>" --wt my-feature --detach -- census.py     # a sentinel's free card
                                                      # (c571-003:3557743:3 when the node runs several of your jobs)
@@ -133,7 +133,7 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
 - `--root DIR` runs the script with the venv of an Isaac Lab install root (`<DIR>/venv/bin/python`) instead of ilab,
   e.g. an Isaac Lab 3 root: `pls run --on <host>:<gpu> --root <isaac-lab-root> --wt <set> --holder <you> -- <script>`.
   The code ships as for any run (`--wt` picks the worktree set, so pick 3.x-ported branches), never the root's own
-  `resources/` copies. On a box card PATH is `/usr/bin:/bin` behind the venv, since an unreadable dir on a LARG
+  `resources/` copies. On a box card PATH is `/usr/bin:/bin` behind the venv, since an unreadable dir on a shared
   default PATH breaks `torch.compile`. On a SLURM card the step runs the venv in a stock Debian bookworm image,
   `<DIR>/bookworm.sif` (pulled on first use; the 3.x wheels need glibc >= 2.35, newer than the clusters' hosts), with
   the same `/workspace/ext` mounts, stop file and heartbeat as any SLURM run, and the staged package repos on
@@ -152,9 +152,9 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   yours. `any` stays on the local and ssh pools; name a cluster pool to use its sentinel. Ray is its own target,
   `--on ray`.
 - On a SLURM card (a running job of yours, normally a held dev sentinel) the script runs in the container through a
-  `develop exec` step on that job, with the job's own partition, account and GPU request. The stage dir is
+  step on that job (`cluster_dev.sh exec`), with the job's own partition, account and GPU request. The stage dir is
   `<cluster checkout>/artifacts/res-eval/<id>`, which the container sees as `/workspace/artifacts/res-eval/<id>`; the
-  package repos are staged as a code tree (`develop stage`), as above; asset repos come from the cluster's
+  package repos are staged as a code tree (`pls stage`), as above; asset repos come from the cluster's
   newest `default` tree. The card is pinned by its GPU
   UUID, and a step that cannot see it fails with status 98 (on Delta a step holding the job's GPUs can starve
   another). The container's `/tmp` is the job's node-local dir, which every step of the sentinel shares, so the run
@@ -169,8 +169,8 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   exists before it starts exits 130 without launching. Each new SLURM stage prunes earlier ones: credentials of
   runs that never started after 30 min, and stages and work dirs older than 7 days whose run is not alive;
   `res-eval` code trees unused for 14 days (reuse counts) that no running step marks are removed when one is staged.
-- From a manager worktree, `res` and `develop stage|exec|status|tail` use the main checkout's cluster profiles (a
-  worktree has none of its own); `develop start|sync|stop|kill` refuse there, since they change the shared sentinel
+- From a manager worktree, `res`, `pls stage`, `pls shell` and `pls run --on <cluster>` use the main checkout's cluster profiles (a
+  worktree has none of its own); `pls res hold`/`drop`, `pls disconnect` and `pls jobs ... kill` refuse there, since they change the shared sentinel
   state.
 - `--checkpoint [NAME=]<ref>` (repeatable) exports the checkpoint's path on the target as `NAME` (default
   `CHECKPOINT`). A ref is a local path, a W&B run URL or `entity/project/run_id`, with `@<iter>` for
@@ -211,19 +211,21 @@ Every compute pool has a `kind`, which picks the backend that probes it:
 | kind | probes | settings |
 |---|---|---|
 | `local` | `nvidia-smi` on this machine | |
-| `ssh` | `nvidia-smi` on each host over ssh (keys, BatchMode) | `hosts`, `domain`, `user` |
+| `ssh` | `nvidia-smi` on each host over ssh (keys, BatchMode) | `hosts`, `user`, `domain`, `pin`, `render`, `workspace`, `scratch` |
 | `slurm` | your jobs (`squeue`) and, per running job, `nvidia-smi` in an `srun --overlap` step over the cluster's SSH master | from the cluster profile |
 | `ray` | the Ray dashboard API (nodes, GPUs, running jobs) | `address` |
 
-`compute.toml` lists the lab's pools (`local` is the machine you run on). Put per-user settings (your LARG login,
-extra pools, `enabled = false` to hide one) in `compute.local.toml` (gitignored), which is merged over it. The LARG
-pools need a user (there or in `$LARG_USER`); without one they read UNKNOWN with a hint:
+The tracked `compute.toml` holds only `local` (the machine you run on) and commented examples. Every other pool is
+yours, in `compute.local.toml` (gitignored, merged over it; the main checkout's serves every worktree):
 
-```toml
-[compute.larg-a100]
-user = "<your LARG login>"
+```bash
+pls setup --add lab-a40 --kind ssh --hosts box3,box4 --user <login> --domain lab.example.edu [--pin device] [--render]
+pls setup --add ray --kind ray --address http://<head>:8265      # the pool `pls run --on ray` submits to
+pls setup --add lab-a40 ... --update                              # replace a pool
 ```
 
-SLURM pools come from your cluster profiles (`scripts/cluster/config/<name>/`); profiles that share a login are
-probed once. Adding compute of an existing kind is a new `[compute.<name>]` entry; a new kind is a new probe function
-in `probe.py`.
+or by hand, e.g. `enabled = false` under `[compute.<name>]` to hide a pool. An ssh pool without a `user` (and no
+`$LARG_USER`) reads UNKNOWN with a hint. SLURM pools come from your cluster profiles
+(`scripts/cluster/config/<name>/`, `pls setup --add <name>`); profiles that share a login are probed once. A new kind
+is a new probe function in `probe.py`. `python3 scripts/cluster/res/inventory.py` answers the shell helpers' queries
+(an ssh host's target, the Ray address).

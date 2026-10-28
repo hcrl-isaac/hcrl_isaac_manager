@@ -49,8 +49,8 @@ sync_resources() {
 
 # Render the job configs from their templates. WT=<name> routes ext_dir + file mounts
 # through resources/<repo>/worktrees/<name> wherever one exists.
-render_job_configs() {  # render_job_configs <ut_eid>
-    local ut_eid="$1" manager_dir="$WORKSPACE_DIR" venv_py
+render_job_configs() {  # render_job_configs <ray_user_id>
+    local user_id="$1" manager_dir="$WORKSPACE_DIR" venv_py
     venv_py="$manager_dir/ilab/bin/python"
     [ -x "$venv_py" ] || venv_py="python3"
     export WT="${WT:-}"
@@ -63,21 +63,39 @@ render_job_configs() {  # render_job_configs <ut_eid>
     export WORKSPACE_EXT_DIR
     local cfg
     for cfg in job_config bench_job_config job_config_distributed; do
-        UT_EID="$ut_eid" MANAGER_DIR="$RAY_ENV_ROOT" \
-            envsubst '$UT_EID $MANAGER_DIR $WORKSPACE_FILE_MOUNTS $WORKSPACE_EXT_DIR' \
+        RAY_USER_ID="$user_id" MANAGER_DIR="$RAY_ENV_ROOT" \
+            envsubst '$RAY_USER_ID $MANAGER_DIR $WORKSPACE_FILE_MOUNTS $WORKSPACE_EXT_DIR' \
             < "$SCRIPT_DIR/tools/$cfg.template.yaml" > "$SCRIPT_DIR/$cfg.yaml"
     done
 }
 
-# Re-render the job configs before a submit so the mounts match this job's WT, not the one setup saw.
-prepare_submit() {
-    local env_ray="$RAY_ENV_ROOT/scripts/ray/.env.ray" ut_eid
+# Read .env.ray: RAY_USER_ID (whose jobs list/stop/logs show) and RAY_IMAGE (the image setup pushes). A .env.ray
+# written before RAY_USER_ID existed names the id UT_EID, which still counts.
+load_env_ray() {
+    local env_ray="$RAY_ENV_ROOT/scripts/ray/.env.ray"
     if [ ! -f "$env_ray" ]; then
-        echo "[ERROR] $env_ray not found. Run 'pls cluster ray setup' first." >&2
+        echo "[ERROR] $env_ray not found. Run 'pls setup --on ray' first." >&2
         exit 1
     fi
-    ut_eid="$( . "$env_ray"; echo "$UT_EID" )"
-    render_job_configs "$ut_eid"
+    # read in a subshell, so the file's credentials stay out of this shell's environment
+    RAY_USER_ID="$( . "$env_ray"; echo "${RAY_USER_ID:-${UT_EID:-}}" )"
+    RAY_IMAGE="$( . "$env_ray"; echo "${RAY_IMAGE:-}" )"
+    if [ -z "$RAY_USER_ID" ]; then
+        echo "[ERROR] $env_ray sets no RAY_USER_ID (your id on the Ray cluster's jobs)." >&2
+        exit 1
+    fi
+}
+
+# The Ray dashboard address: the `ray` pool in scripts/cluster/res/compute.local.toml.
+ray_address() {
+    python3 "$SCRIPT_DIR/../cluster/res/inventory.py" ray-address
+}
+
+# Re-render the job configs before a submit so the mounts match this job's WT, not the one setup saw.
+prepare_submit() {
+    load_env_ray
+    RAY_ADDRESS="$(ray_address)"
+    render_job_configs "$RAY_USER_ID"
 }
 
 #==
@@ -153,23 +171,29 @@ case $command in
                 echo "[ERROR] $MANAGER_DIR/scripts/.env.wandb not found. Run 'pls deps' first." >&2
                 exit 1
             fi
-            read -p "UT EID: " ut_eid
+            read -p "Ray user id (tags your jobs; list/stop/logs show only yours): " ray_user_id
+            read -p "Docker image the Ray cluster pulls (<registry user>/<name>, e.g. me/isaac-ray): " ray_image
             source "$MANAGER_DIR/scripts/.env.wandb"
-            UT_EID=$ut_eid envsubst < "$SCRIPT_DIR/tools/.env.ray.template" > "$SCRIPT_DIR/.env.ray"
-            render_job_configs "$ut_eid"
+            RAY_USER_ID=$ray_user_id RAY_IMAGE=$ray_image envsubst < "$SCRIPT_DIR/tools/.env.ray.template" > "$SCRIPT_DIR/.env.ray"
+            render_job_configs "$ray_user_id"
             echo "[INFO] Created Ray config files in $SCRIPT_DIR (.env.ray + job_config/bench_job_config/job_config_distributed .yaml)."
         fi
         [ "$mode" = --config ] && exit 0
+        if [ "$mode" != --build-only ]; then
+            load_env_ray
+            if [ -z "$RAY_IMAGE" ]; then
+                echo "[ERROR] set RAY_IMAGE=<registry user>/<name> (the image the Ray cluster pulls) in .env.ray" >&2
+                exit 1
+            fi
+        fi
         if [ "$mode" != --push-only ]; then
             echo "Building the shared Isaac image for Ray"
             check_docker_version
             "$SCRIPT_DIR/../docker/docker_interface.sh" build
         fi
         if [ "$mode" != --build-only ]; then
-            # pushed under the image's own tag (isaaclab3), never over the Isaac Lab 2.x isaac-ray:latest
-            tag="${HCRL_IMAGE_TAG:-isaaclab3}"
-            docker tag "hcrl-isaac:${tag}" "esturman/isaac-ray:${tag}"
-            docker push "esturman/isaac-ray:${tag}"
+            docker tag hcrl-isaac:latest "$RAY_IMAGE:latest"
+            docker push "$RAY_IMAGE:latest"
         fi
         ;;
     job)
@@ -179,7 +203,7 @@ case $command in
         job_config=$SCRIPT_DIR/job_config.yaml
         echo "[INFO] Executing job script..."
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
-            --config_file $SCRIPT_DIR/ray.cfg \
+            --address "$RAY_ADDRESS" \
             --job_config $job_config \
             --aggregate_jobs ray/wrap_resources.py \
                 --gpu_per_worker 1 \
@@ -199,7 +223,7 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         [ -f "$local_copy" ] || { echo "[ERROR] no $local_copy to ship" >&2; exit 1; }
         echo "[INFO] Running $script on the Ray cluster ($worker)"
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
-            --config_file $SCRIPT_DIR/ray.cfg \
+            --address "$RAY_ADDRESS" \
             --job_config $SCRIPT_DIR/job_config.yaml \
             --python_script "$worker" \
             --aggregate_jobs ray/wrap_resources.py \
@@ -214,7 +238,7 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         job_config=$SCRIPT_DIR/job_config_distributed.yaml
         echo "[INFO] Executing distributed job script..."
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
-            --config_file $SCRIPT_DIR/ray.cfg \
+            --address "$RAY_ADDRESS" \
             --job_config $job_config \
             --aggregate_jobs ray/wrap_resources.py \
                 --gpu_per_worker 1 \
@@ -227,7 +251,7 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         job_config=$SCRIPT_DIR/bench_job_config.yaml
         echo "[INFO] Executing bench script..."
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
-            --config_file $SCRIPT_DIR/ray.cfg \
+            --address "$RAY_ADDRESS" \
             --job_config $job_config \
             --aggregate_jobs ray/wrap_resources.py \
                 --gpu_per_worker 1 \
@@ -237,32 +261,35 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         job_id=$1
         shift
         stop_args="$@"
-        source $SCRIPT_DIR/.env.ray
-        if python $SCRIPT_DIR/list_jobs.py --user_id $UT_EID --check_id $job_id; then
-            ray job stop --address http://100.95.64.90:8265 $job_id $stop_args
+        load_env_ray
+        RAY_ADDRESS="$(ray_address)"
+        if python $SCRIPT_DIR/list_jobs.py --address "$RAY_ADDRESS" --user_id "$RAY_USER_ID" --check_id $job_id; then
+            ray job stop --address "$RAY_ADDRESS" $job_id $stop_args
         else
             echo "[ERROR] The specified job $job_id cannot be stopped."
             echo "[ERROR] Only running jobs started by you can be cancelled."
-            echo "[ERROR] You can view these jobs with \`pls cluster ray list\`." 
+            echo "[ERROR] You can view these jobs with \`pls jobs --on ray\`." 
             exit 1
         fi
         ;;
     list)
         list_args="$@"
-        source $SCRIPT_DIR/.env.ray
-        python $SCRIPT_DIR/list_jobs.py --user_id $UT_EID $list_args
+        load_env_ray
+        RAY_ADDRESS="$(ray_address)"
+        python $SCRIPT_DIR/list_jobs.py --address "$RAY_ADDRESS" --user_id "$RAY_USER_ID" $list_args
         ;;
     logs)
         job_id=$1
         shift 1
         logs_args="$@"
-        source $SCRIPT_DIR/.env.ray
-        if python $SCRIPT_DIR/list_jobs.py --user_id $UT_EID --all_statuses --check_id $job_id; then
-            ray job logs --address http://100.95.64.90:8265 $job_id $logs_args
+        load_env_ray
+        RAY_ADDRESS="$(ray_address)"
+        if python $SCRIPT_DIR/list_jobs.py --address "$RAY_ADDRESS" --user_id "$RAY_USER_ID" --all_statuses --check_id $job_id; then
+            ray job logs --address "$RAY_ADDRESS" $job_id $logs_args
         else
             echo "[ERROR] The specified job $job_id cannot be stopped."
             echo "[ERROR] You may only view the logs of jobs started by you."
-            echo "[ERROR] You can view these jobs with \`pls cluster ray list --all_statuses\`." 
+            echo "[ERROR] You can view these jobs with \`pls jobs --on ray list --all_statuses\`." 
             exit 1
         fi
         ;;

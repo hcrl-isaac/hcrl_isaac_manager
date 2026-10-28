@@ -29,7 +29,7 @@ GPU-a, 351842, 18570
 GPU-d, 777, 2048
 """
 PS = """\
- 351842 sturman  01:02:03 /isaac-sim/kit/python/bin/python3 scripts/train.py --task T1-Kick-v0 --headless
+ 351842 testusr  01:02:03 /isaac-sim/kit/python/bin/python3 scripts/train.py --task T1-Kick-v0 --headless
     777 other    5-01:00:00 python serve.py --task=Serve
 """
 
@@ -51,7 +51,7 @@ class ParseGpuQueryTest(unittest.TestCase):
     def test_owner_and_command(self) -> None:
         proc = self.cards[0].procs[0]
         self.assertEqual(
-            (proc.pid, proc.user, proc.elapsed, proc.cmd), (351842, "sturman", "01:02:03", "train.py T1-Kick-v0")
+            (proc.pid, proc.user, proc.elapsed, proc.cmd), (351842, "testusr", "01:02:03", "train.py T1-Kick-v0")
         )
 
     def test_memory_takes_process_total_when_card_reads_zero(self) -> None:
@@ -80,9 +80,9 @@ class StrayContextTest(unittest.TestCase):
 3, GPU-3, NVIDIA A40, 21000, 46068, 90
 """
     PS = """\
-    100 sturman  02:00:00 python scripts/train.py --task T1-CubeLift-v0 --headless
-    200 sturman  00:10:00 python scripts/train.py --task T1-Kick-v0 --headless
-    300 sturman  00:00:05 python probe.py
+    100 testusr  02:00:00 python scripts/train.py --task T1-CubeLift-v0 --headless
+    200 testusr  00:10:00 python scripts/train.py --task T1-Kick-v0 --headless
+    300 testusr  00:00:05 python probe.py
 """
 
     def parse(self, apps: str) -> list[Card]:
@@ -138,7 +138,7 @@ class ParseFailureTest(unittest.TestCase):
     def test_a_job_wrapper_around_the_query_is_ignored(self) -> None:
         # TACC's srun prints its checks on the step's stdout and leaves the first marker mid-line
         text = (
-            "--> Verifying valid jobname...OK\n--> Checking available allocation (IRI26004)..."
+            "--> Verifying valid jobname...OK\n--> Checking available allocation (XYZ67890)..."
             + output()
             + "OK\n--> Quotas are not currently enabled for filesystem /home1/x...OK\n"
         )
@@ -233,8 +233,8 @@ class SlurmUnseenCardsTest(unittest.TestCase):
 
 class SlurmAccountRetryTest(unittest.TestCase):
     def test_an_unknown_lowercase_project_is_retried_uppercased(self) -> None:
-        """A job moved to an account no profile names: squeue gives cda26011, TACC only knows CDA26011."""
-        squeue = "42|gpu-a100|cda26011|RUNNING|c571-003|1|10:00|N/A|gres/gpu:1|box\n"
+        """A job moved to an account no profile names: squeue gives abc12345, TACC only knows ABC12345."""
+        squeue = "42|gpu-a100|abc12345|RUNNING|c571-003|1|10:00|N/A|gres/gpu:1|box\n"
         good = "@@CARDS\n0, GPU-a, A100, 0, 40960, 0\n@@APPS rc=0\n@@PS rc=0\n@@END\n"
         steps: list[str] = []
 
@@ -243,7 +243,7 @@ class SlurmAccountRetryTest(unittest.TestCase):
                 return subprocess.CompletedProcess(cmd, 0, squeue, "")
             steps.append(cmd[-1])
             out = (
-                good if "-A CDA26011" in cmd[-1] else "ERROR: Unknown project cda26011 (in accounting_check_prod.pl)\n"
+                good if "-A ABC12345" in cmd[-1] else "ERROR: Unknown project abc12345 (in accounting_check_prod.pl)\n"
             )
             return subprocess.CompletedProcess(cmd, 0, out, "")
 
@@ -258,7 +258,7 @@ class SlurmAccountRetryTest(unittest.TestCase):
             probe._run, probe._master_alive = saved
         self.assertEqual(len(reports[0].cards), 1)
         self.assertEqual(reports[1:], [])
-        self.assertEqual([("-A cda26011" in s, "-A CDA26011" in s) for s in steps], [(True, False), (False, True)])
+        self.assertEqual([("-A abc12345" in s, "-A ABC12345" in s) for s in steps], [(True, False), (False, True)])
 
 
 class PartialReportTest(unittest.TestCase):
@@ -372,19 +372,19 @@ if __name__ == "__main__":
 
 class ProfileAccountsTest(unittest.TestCase):
     def test_squeue_accounts_map_back_to_the_profiles_spelling(self) -> None:
-        """squeue lowercases the account (cda26011); the overlap step needs the profile's (CDA26011)."""
+        """squeue lowercases the account (abc12345); the overlap step needs the profile's (ABC12345)."""
         import tempfile
         from unittest import mock
 
         cfg = Path(tempfile.mkdtemp())
         (cfg / "horizon").mkdir()
-        (cfg / "horizon" / "submit_job_slurm.sh").write_text("#!/bin/bash\n#SBATCH -p debug\n#SBATCH -A CDA26011\n")
+        (cfg / "horizon" / "submit_job_slurm.sh").write_text("#!/bin/bash\n#SBATCH -p debug\n#SBATCH -A ABC12345\n")
         (cfg / "delta").mkdir()
         (cfg / "delta" / "submit_job_slurm.sh").write_text("#SBATCH --account=bggq-delta-gpu\n")
         pools = [Pool("horizon", "slurm", {}), Pool("delta", "slurm", {}), Pool("noprofile", "slurm", {})]
         with mock.patch.object(probe, "CLUSTER_CONFIG_DIR", cfg):
             spelling = probe.profile_accounts(pools)
-        self.assertEqual(spelling.get("cda26011"), "CDA26011")
+        self.assertEqual(spelling.get("abc12345"), "ABC12345")
         self.assertEqual(spelling.get("bggq-delta-gpu"), "bggq-delta-gpu")
         self.assertNotIn("otherproj", spelling)
 

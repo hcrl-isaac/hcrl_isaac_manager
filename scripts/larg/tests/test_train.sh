@@ -2,10 +2,30 @@
 # scripts/larg/train.sh through an ssh stub against a fake box: the flat layout's train.py under the workspace's
 # ilab python, torchrun only for several GPUs, argv quoting, the GPU pin, and per-run/per-GPU scratch dirs.
 set -u
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/ws/ilab/bin" "$T/ws/scripts" "$T/ws/resources/hcrl_isaaclab/scripts"
+# a copy of the scripts outside any git checkout, so the ssh pools are this test's own compute.local.toml
+REPO="$T/repo"
+mkdir -p "$REPO/scripts/cluster"
+cp -r "$SRC/scripts/larg" "$REPO/scripts/"
+cp -r "$SRC/scripts/cluster/res" "$REPO/scripts/cluster/"
+cat > "$REPO/scripts/cluster/res/compute.local.toml" <<'EOF'
+[compute.a100]
+kind = "ssh"
+hosts = ["hazard"]
+domain = "example.org"
+user = "tester"
+
+[compute.a40]
+kind = "ssh"
+hosts = ["pogba"]
+domain = "example.org"
+user = "tester"
+render = true
+EOF
+REAL_PY="$(command -v python3)"
 cat > "$T/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
 while [ $# -gt 0 ]; do
@@ -56,13 +76,17 @@ wait_ran
 check "several GPUs run under torchrun with --distributed" \
     "grep -qx 'ARG<torch.distributed.run>' '$T/ran' && grep -qx 'ARG<--nproc_per_node=2>' '$T/ran' && grep -qx 'ARG<--distributed>' '$T/ran'"
 
-check "an A40 host records video in-process" "sed -n '/^ARG<--video>$/{n;p}' '$T/ran' | grep -qx 'ARG<on>'"
+check "a host of a render pool records video in-process" "sed -n '/^ARG<--video>$/{n;p}' '$T/ran' | grep -qx 'ARG<on>'"
 check "an unleased launch says so" "grep -q 'LARG_HOLDER unset' '$T/out2'"
 
 rm -f "$T/ran"
 launch CUDA_VISIBLE_DEVICES=3 bash "$REPO/scripts/larg/train.sh" hazard hhlm/T1-CubeLift-v0 r > "$T/out3" 2>&1
 wait_ran
-check "an A100 host passes --video async" "sed -n '/^ARG<--video>$/{n;p}' '$T/ran' | grep -qx 'ARG<async>'"
+check "a host of a pool without render passes --video async" "sed -n '/^ARG<--video>$/{n;p}' '$T/ran' | grep -qx 'ARG<async>'"
+check "a short host name reaches its pool's login and domain" \
+    "[ \"\$(source '$REPO/scripts/larg/common.sh'; larg_target hazard)\" = tester@hazard.example.org ]"
+check "the default remote paths use the pools' login" \
+    "[ \"\$(source '$REPO/scripts/larg/common.sh'; echo \$LARG_REMOTE_DIR \$(larg_scratch))\" = '/var/local/tester/hcrl_isaac_manager /var/local/tester' ]"
 check "a run without a tree reports python's own pid" "grep -qx \"SELF=\$(sed -n 's/^started pid //p' '$T/out3')\" '$T/ran'"
 
 # `--` right after run_group: num_envs is omitted, not the separator
@@ -77,7 +101,11 @@ sleep 1
 check "a num_envs that is not a number launches nothing" "[ ! -e '$T/ran' ] && grep -q 'num_envs must be a number' '$T/out10'"
 
 # LARG_HOLDER leases the pinned cards through `pls res claim` first; a refused claim launches nothing
-printf '#!/usr/bin/env bash\necho "$@" > "%s/claimed"\nexit "${CLAIM_RC:-0}"\n' "$T" > "$T/bin/python3"
+cat > "$T/bin/python3" <<EOF
+#!/usr/bin/env bash
+case "\$1" in *res.py) shift; echo "\$@" > "$T/claimed"; exit "\${CLAIM_RC:-0}" ;; esac
+exec "$REAL_PY" "\$@"
+EOF
 chmod +x "$T/bin/python3"
 rm -f "$T/ran"
 launch LARG_HOLDER=me CUDA_VISIBLE_DEVICES=0,2 bash "$REPO/scripts/larg/train.sh" pogba hhlm/T1-CubeLift-v0 r > "$T/out4" 2>&1

@@ -10,7 +10,7 @@ mkdir -p "$T/bin" "$T/scripts/cluster/cluster_dev" "$T/shared/resources/hcrl_isa
 cp "$REPO/scripts/cluster/cluster_dev/node_exec.sh" "$T/scripts/cluster/cluster_dev/"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@"\nls "%s/shared/trees/t-0123456789/.in-use" 2>/dev/null | sed "s/^/marker /"\necho "envkey $APPTAINERENV_WANDB_API_KEY"\necho "xdg ${APPTAINERENV_XDG_CONFIG_DIRS:-none}"\n' "$T" > "$T/bin/apptainer"
 chmod +x "$T/bin/apptainer"
-touch "$T/sif/hcrl-isaac-isaaclab3.sif"
+touch "$T/sif/hcrl-isaac.sif"
 cat > "$T/env" <<EOF
 CLUSTER_SIF_PATH=$T/sif
 CLUSTER_ISAAC_SIM_CACHE_DIR=$T/cache/docker-isaac-sim
@@ -101,7 +101,7 @@ check "the package repos and package asset repos are on PYTHONPATH, pure asset a
     "pythonpath /workspace/ext/hcrl_isaaclab:/workspace/ext/robot_rl:/workspace/ext/ssti_robots"
 check "XALT's preload is dropped" "preload none"
 check "staged repos are mounted as in the image" "$TREE/resources/hcrl_isaaclab:/workspace/ext/hcrl_isaaclab:rw"
-if grep -q "hcrl-entrypoint\|hcrl-isaac-isaaclab3.sif" "$T/out"; then
+if grep -q "hcrl-entrypoint\|hcrl-isaac.sif" "$T/out"; then
     echo "FAIL the hcrl-isaac image and entrypoint are not used"; fails=$((fails + 1))
 else
     echo "PASS the hcrl-isaac image and entrypoint are not used"
