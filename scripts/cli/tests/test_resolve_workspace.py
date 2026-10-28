@@ -66,6 +66,14 @@ class OptionalDepsTest(unittest.TestCase):
         self.assertEqual(seen["env"]["GIT_TERMINAL_PROMPT"], "0")
         self.assertIn("BatchMode=yes", seen["env"]["GIT_SSH_COMMAND"])
 
+    def test_a_host_that_never_answers_is_unreachable(self) -> None:
+        def run(cmd: list[str], timeout: float, **_kw: object) -> None:
+            self.assertEqual(timeout, rw.PROBE_TIMEOUT_S)
+            raise rw.subprocess.TimeoutExpired(cmd, timeout)
+
+        with mock.patch.object(rw.subprocess, "run", run):
+            self.assertFalse(rw.reachable("https://example.org/data", "main"))
+
 
 if __name__ == "__main__":
     unittest.main()

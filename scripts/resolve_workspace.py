@@ -182,15 +182,21 @@ def resolve(manifest: dict) -> dict[str, dict]:
     return resolved
 
 
+PROBE_TIMEOUT_S = 20  # a dropped network or a silent firewall must not hang setup
+
+
 def reachable(url: str, ref: str) -> bool:
     """Whether ``url`` answers ``git ls-remote`` for ``ref`` without asking for credentials.
 
-    A missing login fails at once instead of prompting: no terminal prompt, no askpass helper, ssh in batch mode.
+    A missing login fails at once instead of prompting: no terminal prompt, no askpass helper, ssh in batch mode. A
+    host that never answers counts as unreachable after ``PROBE_TIMEOUT_S``.
     """
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": ""}
     env["GIT_SSH_COMMAND"] = f"{env.get('GIT_SSH_COMMAND', 'ssh')} -o BatchMode=yes"
     try:
-        r = subprocess.run(["git", "ls-remote", "--exit-code", url, ref], env=env, capture_output=True, timeout=60)
+        r = subprocess.run(
+            ["git", "ls-remote", "--exit-code", url, ref], env=env, capture_output=True, timeout=PROBE_TIMEOUT_S
+        )
     except subprocess.TimeoutExpired:
         return False
     return r.returncode == 0
