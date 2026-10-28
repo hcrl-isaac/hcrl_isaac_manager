@@ -213,6 +213,20 @@ class TargetTest(unittest.TestCase):
         self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
         self.assertIn("ilab/bin/python", ev.runner_script(t, "/s", "x.py", [], []))
 
+    def test_runners_default_openblas_to_one_thread(self) -> None:
+        """Kit's startup fork crashes in OpenBLAS's atfork thread shutdown when scipy loaded first."""
+        box = ev.runner_script(ev.make_target(Pool("larg", "ssh", {"user": "u"}), "pogba", 1), "/s", "x.py", [], [])
+        slurm = ev.slurm_runner_script(
+            ev.Target("horizon", "slurm", "c1", 0, "u@login", "/w", "/w/artifacts", job="7", uuid="GPU-a"),
+            "/x",
+            "/s.py",
+            [],
+            "/c",
+        )
+        for runner in (box, slurm):
+            self.assertIn('export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"', runner)
+            self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
+
     def test_an_install_root_runs_its_venv_python_on_a_clean_path(self) -> None:
         t = ev.make_target(Pool("larg", "ssh", {"user": "u"}), "pogba", 1)
         runner = ev.runner_script(t, "/s", "x.py", [], ["/s/code/r"], root="/var/local/u/isaac3")
