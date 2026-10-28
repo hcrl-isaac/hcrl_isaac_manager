@@ -4,13 +4,17 @@
 
 Make accounts (or use existing accounts):
 
-- [Tailscale](https://tailscale.com/) (use a non-utexas.edu email)
-    - Follow the instructions on account creation to install Tailscale on your local machine
-    - When prompted to add a second device, skip the tutorial
+- A network path to the Ray head's dashboard (port 8265), e.g. [Tailscale](https://tailscale.com/) when the head is on
+  a tailnet: install it locally and have the head's owner share the machine with you
 - [Github](https://github.com/signup)
 - [wandb](https://wandb.ai/signup) (select Models under "What do you want to try first?", if prompted)
+- A container registry account (e.g. Docker Hub) for the image the cluster's workers pull
 
-Add the server machine to your Tailnet (get link from Slack).
+Add the cluster's dashboard as your `ray` pool (it goes in the gitignored `scripts/cluster/res/compute.local.toml`,
+where `pls res`, `pls run --on ray` and `pls jobs --on ray` all read it):
+```bash
+pls setup --add ray --kind ray --address http://<head>:8265
+```
 
 ## Dependencies
 
@@ -23,7 +27,8 @@ The ray scripts assume that you will be developing on hcrl_isaaclab within manag
 > - Commands below are consistent for Unix-like systems, i.e. Linux and Mac. If running on Windows, some commands may
 > be different.
 
-Write the Ray configuration (it asks for your UT EID) and push the shared image with
+Write the Ray configuration (`scripts/ray/.env.ray`: it asks for `RAY_USER_ID`, the id your jobs are tagged with, and
+`RAY_IMAGE`, the `<registry user>/<name>` image the workers pull) and push the shared image with
 ```bash
 pls setup --on ray               # --config: only rewrite the config files; --build-only / --push-only: the image
 ```
@@ -175,7 +180,7 @@ options, and the cron listener are documented in the top-level README:
 
 There are a couple of limitations on the server setup. They may be fixed over time, but if you need one immediately for your research, please let Emily know on Slack.
 
-- **Isaac Lab only** *(plan to fix: no)*. Currently, the server is in an Isaac Lab docker container, so it can *only* run Isaac Lab jobs. If you need more general clusters, we recommend using TACC.
+- **Isaac Lab only** *(plan to fix: no)*. Currently, the server is in an Isaac Lab docker container, so it can *only* run Isaac Lab jobs. If you need more general clusters, use a SLURM cluster (`pls setup --add <name>`).
 - **Fixed Isaac Lab** *(plan to fix: if demand)*. The runs assume that Isaac Lab itself is unmodified. If you edit Isaac Lab locally, those changes will not be reflected in the runs.
 - **Coarse-grained resource allocation** *(plan to fix: yes)*: Currently, resources are allocated as a single GPU node per job (or multiple GPU nodes per job, if required). Some jobs may require fewer resources (e.g. 50% of the gpu, 20% of memory). We may eventually change this so that we can execute more jobs at once.
 

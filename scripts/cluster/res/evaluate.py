@@ -576,7 +576,7 @@ def _ilab_lines() -> str:
 
 
 def _root_lines(root: str) -> str:
-    """run.sh lines selecting an Isaac Lab install root's venv python (e.g. pogba's Isaac Lab 3 root)."""
+    """run.sh lines selecting an Isaac Lab install root's venv python (e.g. an ssh box's Isaac Lab 3 root)."""
     q = shlex.quote
     return (
         f"py={q(root + '/venv/bin/python')}\n"

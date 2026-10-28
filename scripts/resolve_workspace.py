@@ -27,10 +27,10 @@ DEFAULTS = MANAGER_DIR / "workspace.defaults.yaml"
 
 
 def _isaaclab_mode(isaaclab: dict) -> str:
-    """Return the IsaacLab install mode (pip/source/none), accepting the legacy ``source: bool`` form."""
+    """Return the IsaacLab install mode (source/none; a legacy pip or ``source: bool`` passes through as given)."""
     if "mode" in isaaclab:
         return isaaclab["mode"]
-    return "source" if isaaclab.get("source") else "pip"
+    return "source" if isaaclab.get("source", True) else "pip"
 
 
 # renamed project -> current name, named in the error when a per-user selection still uses the old one
@@ -352,7 +352,7 @@ def main() -> None:
                     "(the stash is preserved)."
                 )
 
-    mode = manifest.get("isaaclab", {}).get("mode", "pip")
+    mode = manifest.get("isaaclab", {}).get("mode", "source")
     if mode == "source":
         print(f"[resolve] IsaacLab: source mode ({manifest['isaaclab'].get('ref', 'main')} in resources/IsaacLab)")
     elif mode == "none":

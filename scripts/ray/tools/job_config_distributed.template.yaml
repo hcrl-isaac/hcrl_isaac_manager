@@ -7,7 +7,7 @@
 #     --distributed. See source/hcrl_isaaclab/scripts/ray/torchrun_wrapper.py.
 #   * Everything else (env_file, file_mounts, py_executable, excludes) is identical.
 env_file: ${MANAGER_DIR}/scripts/ray/.env.ray
-user_id: ${UT_EID}
+user_id: ${RAY_USER_ID}
 ext_dir: ${WORKSPACE_EXT_DIR}
 # Two identical sub-jobs joined with `+` so wrap_resources splits and dispatches one per node.
 # The wrapper assigns RANK from the worker's IP, so both sub-jobs can be byte-identical.

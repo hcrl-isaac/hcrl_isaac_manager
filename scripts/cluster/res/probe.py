@@ -10,7 +10,7 @@ import subprocess
 import urllib.request
 from dataclasses import asdict, dataclass, field
 
-from inventory import CLUSTER_CONFIG_DIR, Pool
+from inventory import CLUSTER_CONFIG_DIR, Pool, ssh_target
 
 # Idle cards read 0-545 MiB and the smallest card seen in use reads ~2.4 GB, so 1 GiB sits in that gap: at or
 # above this with no visible process a card is held (e.g. Isaac kept its VRAM after exit).
@@ -236,13 +236,6 @@ def probe_local(pool: Pool) -> list[Report]:
         return [Report(pool.name, pool.kind, error=str(exc) or "nvidia-smi timed out")]
 
 
-def _ssh_target(pool: Pool, host: str) -> str:
-    if "@" in host:
-        return host
-    fqdn = host if "." in host or not pool.settings.get("domain") else f"{host}.{pool.settings['domain']}"
-    return f"{pool.settings['user']}@{fqdn}"
-
-
 def probe_ssh_host(pool: Pool, host: str) -> Report:
     """Probe one ssh host of a pool."""
     label = f"{pool.name}/{host}"
@@ -251,12 +244,12 @@ def probe_ssh_host(pool: Pool, host: str) -> Report:
             label, pool.kind, error=f"no ssh user: set user under [compute.{pool.name}] in compute.local.toml"
         )
     try:
-        res = _run(["ssh", *SSH_OPTS, _ssh_target(pool, host), REMOTE_QUERY], timeout=40)
+        res = _run(["ssh", *SSH_OPTS, ssh_target(pool, host), REMOTE_QUERY], timeout=40)
     except subprocess.TimeoutExpired:
         return Report(label, pool.kind, error="unreachable (ssh timed out)")
     try:
         cards = parse_gpu_query(res.stdout, pool.name, host)
-        return Report(label, pool.kind, cards, owner=_ssh_target(pool, host).split("@")[0])
+        return Report(label, pool.kind, cards, owner=ssh_target(pool, host).split("@")[0])
     except ProbeError as exc:
         tail = res.stderr.strip().splitlines()[-1] if res.stderr.strip() else ""
         return Report(label, pool.kind, error=f"{exc}{f' ({tail})' if tail else ''}")
@@ -361,7 +354,7 @@ def _gres_gpus(gres: str) -> int | None:
 def profile_accounts(pools: list[Pool]) -> dict[str, str]:
     """The accounts these pools' profiles submit with (``#SBATCH -A``), keyed by their lowercase form.
 
-    squeue reports an account lowercased (cda26011), and TACC's submit filter refuses that spelling in an overlap step.
+    squeue reports an account lowercased (abc12345), and TACC's submit filter refuses that spelling in an overlap step.
     """
     found = {}
     for pool in pools:
