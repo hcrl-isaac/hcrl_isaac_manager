@@ -21,6 +21,9 @@ dependencies = [
     "wandb",
     "pyyaml",
     "tensorboard",
+    # `pls test` (a workspace repo's smoke tests) runs pytest from ilab
+    "pytest",
+    "pytest-timeout",
 ]
 
 [project.scripts]
