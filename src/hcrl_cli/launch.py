@@ -161,6 +161,8 @@ def _here(argv: list[str], wt: str, command: bool) -> None:
     env = {
         "PYTHONPATH": ":".join(p for p in (pythonpath, os.environ.get("PYTHONPATH", "")) if p),
         "OMNI_KIT_ACCEPT_EULA": "YES",
+        # Kit forks at startup; with scipy loaded first, OpenBLAS's atfork shutdown of its worker threads crashes it
+        "OPENBLAS_NUM_THREADS": os.environ.get("OPENBLAS_NUM_THREADS", "1"),
     }
     if command:
         env["PATH"] = f"{ROOT / VENV}/bin{os.pathsep}{os.environ.get('PATH', '')}"
