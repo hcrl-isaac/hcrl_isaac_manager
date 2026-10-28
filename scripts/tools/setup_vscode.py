@@ -78,7 +78,11 @@ def main() -> None:
     if "--no-kit" in sys.argv[1:]:
         ext_paths = _cached_kit_paths(settings_path)
     else:
-        ext_paths, app = _kit_ext_paths()
+        try:
+            ext_paths, app = _kit_ext_paths()
+        except ImportError:  # no Isaac Sim runtime (the isaacsim extra): Kit's extension dirs don't exist here
+            print("[vscode] Isaac Sim isn't installed; writing settings without Kit's extension paths")
+            ext_paths = _cached_kit_paths(settings_path) if settings_path.is_file() else []
     extra_paths = _package_paths() + ext_paths
 
     # NOTE: SimulationApp.close() terminates the process, so write the file *before* closing.
