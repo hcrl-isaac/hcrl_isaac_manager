@@ -27,6 +27,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 import checkpoints as ck
 import leases as ls
@@ -360,8 +361,8 @@ def sibling_args(specs: list[str]) -> dict[str, str]:
 
 
 def local_code(workspace: str, wt: str) -> dict[str, str]:
-    """The package repos a run imports (core, RL package, ``*_tasks``, ``TOOL_REPOS``), as worktree-set or main
-    checkout paths.
+    """The package repos a run imports (core, RL package, ``*_tasks``, ``TOOL_REPOS``, and a ``WT_ONLY_REPOS`` repo
+    the set has a worktree of), as worktree-set or main checkout paths.
 
     Args:
         workspace: Manager checkout whose resources/ holds the repos.
@@ -370,8 +371,8 @@ def local_code(workspace: str, wt: str) -> dict[str, str]:
     Returns:
         Repo name -> path; asset repos (``*_robots``) are left to the target's own copies.
     """
-    sys.path.insert(0, str(MANAGER_DIR / "scripts"))
-    from worktree_env import workspace_repos
+    wenv = _worktree_env()
+    workspace_repos, WT_ONLY_REPOS = wenv.workspace_repos, wenv.WT_ONLY_REPOS
 
     resources = os.path.join(workspace, "resources")
     code, overridden = {}, False
@@ -382,9 +383,22 @@ def local_code(workspace: str, wt: str) -> dict[str, str]:
         wdir = os.path.join(main, "worktrees", wt) if wt else ""
         overridden |= bool(wdir) and os.path.isdir(wdir)
         code[repo] = wdir if wdir and os.path.isdir(wdir) else main
+    for repo in WT_ONLY_REPOS:  # without its worktree in the set, the target's own install is imported
+        wdir = os.path.join(resources, repo, "worktrees", wt) if wt else ""
+        if wdir and os.path.isdir(wdir):
+            code[repo], overridden = wdir, True
     if wt and not overridden and not local_data(workspace, wt):
         sys.exit(f"[res] --wt {wt}: no repo under {resources} has worktrees/{wt}")
     return code
+
+
+def _worktree_env() -> ModuleType:
+    """``scripts/worktree_env.py`` of this checkout (the repo layouts a run's PYTHONPATH follows)."""
+    if str(MANAGER_DIR / "scripts") not in sys.path:
+        sys.path.insert(0, str(MANAGER_DIR / "scripts"))
+    import worktree_env
+
+    return worktree_env
 
 
 def _git(src: str, *args: str) -> bytes:
@@ -1074,8 +1088,10 @@ class Stage:
             data: Data repo name -> worktree path.
 
         Returns:
-            The PYTHONPATH entries and the MANIFEST lines.
+            The PYTHONPATH entries (each ``code`` repo's, in order, at its ``SRC_LAYOUT`` package root, then any
+            importable asset repos) and the MANIFEST lines.
         """
+        at = _worktree_env().import_root
         data = data or {}
         if data and self.t.kind != "ssh":
             where = (
@@ -1095,7 +1111,8 @@ class Stage:
             self.refs = {repo: ref for repo, src in code.items() if (ref := git_ref(src))}
             ws = self.t.workspace
             importable = [data.get(r, os.path.join(ws, "resources", r)) for r in importable_assets(ws)]
-            return [*code.values(), *importable], [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
+            lines = [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
+            return [*(at(src, repo) for repo, src in code.items()), *importable], lines
         main = os.path.join(local_workspace(), "resources")
         worktree = {
             repo: src
@@ -1122,7 +1139,7 @@ class Stage:
                     lines.append(f"{repo} {src} {heads[repo][:12]} (main checkout HEAD) -> tree {self.tree}")
                 else:
                     lines.append(f"{repo} {kept}/{repo} (not a git checkout here: the cluster's copy)")
-            return [f"/workspace/ext/{repo}" for repo in code], lines
+            return [at(f"/workspace/ext/{repo}", repo) for repo in code], lines
         q = shlex.quote
         res = f"{self.dir}/resources"
         snaps, lines = {}, []
@@ -1146,7 +1163,7 @@ class Stage:
             sys.exit(f"[res] could not link the stage's resources on {self.t.host}")
         # an importable asset repo is imported from the stage's link to it (the box's copy, or the --wt snapshot)
         importable = [f"{res}/{r}" for r in importable_assets(local_workspace()) if r not in code]
-        return [*(f"{res}/{repo}" for repo in code), *importable], lines
+        return [*(at(f"{res}/{repo}", repo) for repo in code), *importable], lines
 
     def start(self, argv: list[str]) -> subprocess.Popen:
         """Start the runner in its own process group (pid in ``<stage>/pid``), stdout and stderr merged.
@@ -1818,10 +1835,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if args.cmd:  # from the box workspace (its manager root), or the run's work dir in a SLURM container
             target_script, cwd = "", work if t.kind == "slurm" else ""
         elif repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
-            # the shipped repos lead pythonpath; importable asset repos (ssti_robots) follow them
-            root = (
-                f"/workspace/ext/{repo}" if args.tree else dict(zip(code, pythonpath[: len(code)], strict=True))[repo]
-            )
+            # the shipped repos lead pythonpath, each at its package root; importable asset repos (ssti_robots) follow
+            entries = dict(zip(code, pythonpath[: len(code)], strict=True)) if not args.tree else {}
+            root = f"/workspace/ext/{repo}" if args.tree else _worktree_env().repo_root(entries[repo], repo)
             target_script, cwd = f"{root}/{rel}", work
         else:
             put = stage.put(script, os.path.basename(script), mode=0o644)

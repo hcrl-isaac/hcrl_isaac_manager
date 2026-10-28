@@ -5,7 +5,8 @@ every repo's ``<name>`` worktree where one exists, with the main checkout as the
 so one name selects a coherent cross-repo feature line. Prints shell exports:
 
   WT_PYTHONPATH  colon list of the worktree'd package roots (prepend to PYTHONPATH: it precedes the
-                 editable installs of the main checkouts, so only diverging repos are overridden)
+                 editable installs of the main checkouts, so only diverging repos are overridden); a repo in
+                 ``SRC_LAYOUT`` contributes its package dir inside the repo rather than the repo root
   WT_CORE        the hcrl_isaaclab root whose scripts/ should be used
 
 With no name (or an empty one) both fall back to the main checkouts, so callers can eval it
@@ -21,6 +22,23 @@ import sys
 
 MANAGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RESOURCES_DIR = os.path.join(MANAGER_DIR, "resources")
+# repos that join a set only through a worktree of their own: without one, a run imports the target's own install
+WT_ONLY_REPOS = ("holosoma",)
+# repo -> its importable package root inside the repo, where that is not the repo root (holosoma's is the
+# retargeting package the workspace installs editable); every other repo imports from its root
+SRC_LAYOUT = {"holosoma": "src/holosoma_retargeting"}
+
+
+def import_root(root: str, repo: str) -> str:
+    """The PYTHONPATH entry that imports ``repo`` from its checkout, or staged copy, at ``root``."""
+    sub = SRC_LAYOUT.get(repo)
+    return f"{root}/{sub}" if sub else root
+
+
+def repo_root(entry: str, repo: str) -> str:
+    """The checkout (or staged copy) whose ``import_root`` is the PYTHONPATH entry ``entry``."""
+    sub = SRC_LAYOUT.get(repo)
+    return entry.removesuffix(f"/{sub}") if sub else entry
 
 
 def workspace_repos(resources: str = RESOURCES_DIR) -> list[str]:
@@ -61,7 +79,8 @@ def resolve(name: str) -> tuple[dict[str, str], list[str]]:
         name: Worktree-set name, or empty for main checkouts only.
 
     Returns:
-        ``(paths, overridden)``: repo name -> resolved root, and the repos taken from a worktree.
+        ``(paths, overridden)``: repo name -> resolved root, and the repos taken from a worktree; a
+        ``WT_ONLY_REPOS`` repo is listed only when the set has a worktree of it.
     """
     paths, overridden = {}, []
     for repo in workspace_repos():
@@ -74,6 +93,11 @@ def resolve(name: str) -> tuple[dict[str, str], list[str]]:
             overridden.append(repo)
         else:
             paths[repo] = main
+    for repo in WT_ONLY_REPOS:
+        wt = os.path.join(RESOURCES_DIR, repo, "worktrees", name)
+        if name and os.path.isdir(wt):
+            paths[repo] = wt
+            overridden.append(repo)
     return paths, overridden
 
 
@@ -82,7 +106,7 @@ def select(name: str) -> tuple[str, str, list[str]]:
     paths, overridden = resolve(name)
     if name and not overridden:
         raise SystemExit(f"[worktree] no repo has worktrees/{name}; nothing to select")
-    return ":".join(paths[r] for r in overridden), paths["hcrl_isaaclab"], overridden
+    return ":".join(import_root(paths[r], r) for r in overridden), paths["hcrl_isaaclab"], overridden
 
 
 def main() -> None:

@@ -456,6 +456,19 @@ class LocalCodeTest(unittest.TestCase):
         self.assertTrue(code["ssti_tasks"].endswith("resources/ssti_tasks"))
         self.assertTrue(ev.local_code(str(self.tmp), "")["hcrl_sim2real"].endswith("resources/hcrl_sim2real"))
 
+    def test_a_holosoma_worktree_joins_the_set(self) -> None:
+        (self.tmp / "resources" / "holosoma" / "worktrees" / "wt").mkdir(parents=True)
+        code = ev.local_code(str(self.tmp), "wt")
+        self.assertTrue(code["holosoma"].endswith("holosoma/worktrees/wt"))
+        (self.tmp / "resources" / "holosoma" / "worktrees" / "solo").mkdir()
+        self.assertTrue(ev.local_code(str(self.tmp), "solo")["holosoma"].endswith("holosoma/worktrees/solo"))
+
+    def test_a_set_without_a_holosoma_worktree_is_unchanged(self) -> None:
+        """holosoma's main checkout is never shipped: without its worktree the target's own install is imported."""
+        (self.tmp / "resources" / "holosoma" / "worktrees" / "other").mkdir(parents=True)
+        self.assertEqual(sorted(ev.local_code(str(self.tmp), "wt")), ["hcrl_isaaclab", "robot_rl", "ssti_tasks"])
+        self.assertNotIn("holosoma", ev.local_code(str(self.tmp), ""))
+
     def test_unknown_worktree_set_is_refused(self) -> None:
         with self.assertRaises(SystemExit):
             ev.local_code(str(self.tmp), "nope")
@@ -543,6 +556,36 @@ class SshStageTest(Isolated):
         self.assertTrue(manifest[-1].endswith("(data)"))
         self.assertFalse((self.ws / "resources" / "motion_datasets").exists(), "nothing created in the box workspace")
         self.assertFalse((snap / "logs").exists(), "no run-output links in a data snapshot")
+
+    def test_a_holosoma_worktree_ships_and_imports_from_its_src_package(self) -> None:
+        """holosoma's package is <repo>/src/holosoma_retargeting: that, not the repo root, goes on PYTHONPATH."""
+        holo = self.tmp / "local" / "holosoma_wt"
+        _git_repo(holo)
+        pkg = holo / "src" / "holosoma_retargeting" / "holosoma_retargeting"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("")
+        subprocess.run(["git", "-C", str(holo), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(holo), "commit", "-qm", "pkg"], check=True)
+        stage = ev.Stage(self.t)
+        stage.make()
+        with contextlib.redirect_stderr(io.StringIO()):
+            pp, manifest = stage.sync_code({"robot_rl": str(self.src), "holosoma": str(holo)})
+        res = f"{stage.dir}/resources"
+        self.assertEqual(pp, [f"{res}/robot_rl", f"{res}/holosoma/src/holosoma_retargeting"])
+        snap = Path(os.path.realpath(f"{res}/holosoma"))
+        self.assertTrue(snap.name.startswith("holosoma-") and (snap / ".complete").is_file())
+        self.assertTrue(any(line.startswith(f"holosoma {holo} ") and f"-> {snap}" in line for line in manifest))
+        self.assertIn("holosoma", stage.refs, "pls_refs records its commit")
+        imported = subprocess.run(
+            [sys.executable, "-c", "import holosoma_retargeting as h; print(h.__file__)"],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": ":".join(pp)},
+            cwd=self.tmp,
+        )
+        self.assertEqual(
+            imported.stdout.strip(), f"{res}/holosoma/src/holosoma_retargeting/holosoma_retargeting/__init__.py"
+        )
 
     def test_a_data_worktree_with_lfs_pointers_is_refused(self) -> None:
         data = self._data()
@@ -1230,6 +1273,29 @@ class EvalRunTest(Isolated):
             rc, out = self._eval("--any")
         self.assertEqual(rc, 0, out)
         self.assertIn("RAN", out)
+
+    def test_a_holosoma_script_of_a_wt_set_runs_its_worktree_with_its_package_imported(self) -> None:
+        """``holosoma:src/...`` resolves to the set's holosoma worktree, which imports from its src/ package; the
+        MANIFEST lists it."""
+        holo = self.tmp / "ws" / "resources" / "holosoma"
+        holo.mkdir()
+        wt = holo / "worktrees" / "wt"
+        _git_repo(wt)
+        pkg = wt / "src" / "holosoma_retargeting" / "holosoma_retargeting"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("")
+        (pkg.parent / "examples").mkdir()
+        (pkg.parent / "examples" / "probe.py").write_text(
+            "import holosoma_retargeting as h, os\nprint('FILE', h.__file__)\nprint('RES', os.environ['PLS_RESOURCES'])\n"
+        )
+        subprocess.run(["git", "-C", str(wt), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(wt), "commit", "-qm", "pkg"], check=True)
+        self.script = "holosoma:src/holosoma_retargeting/examples/probe.py"
+        with mock.patch.object(ev, "local_workspace", return_value=str(self.tmp / "ws")):
+            rc, out = self._eval("--any", "--wt", "wt")
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"FILE {pkg / '__init__.py'}", out)
+        self.assertIn(f"holosoma {wt} ", out, "MANIFEST is printed with holosoma's line")
 
     def test_an_unshipped_repo_script_is_refused_before_a_lease(self) -> None:
         self.script = "nope:scripts/train.py"

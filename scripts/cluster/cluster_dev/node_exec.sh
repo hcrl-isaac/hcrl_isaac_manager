@@ -193,6 +193,8 @@ run_root() {  # the root's venv in the bookworm image, with the same /workspace/
         name="$(basename "$d")"
         case "$name" in IsaacLab | motion_datasets) continue ;; esac
         case "$name" in *_robots) [ -f "${d}pyproject.toml" ] || [ -f "${d}setup.py" ] || continue ;; esac
+        # a repo whose package is not at its root imports from inside it (worktree_env.py SRC_LAYOUT)
+        case "$name" in holosoma) name="holosoma/src/holosoma_retargeting" ;; esac
         pkgs="${pkgs:+$pkgs:}/workspace/ext/${name}"
     done
     export APPTAINERENV_PYTHONPATH="$pkgs"
