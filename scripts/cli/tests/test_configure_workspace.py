@@ -7,6 +7,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+try:
+    import yaml  # noqa: F401
+except ImportError:  # the CI test env is stdlib-only; the mode logic under test never reads or writes YAML
+    sys.modules["yaml"] = types.ModuleType("yaml")
 import configure_workspace as cw
 
 
