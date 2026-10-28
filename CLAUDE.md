@@ -122,6 +122,8 @@ Project skills live in `.claude/skills/`. Use them rather than re-deriving the s
 ## Git and PRs
 
 - Work on a branch, never on `main`. Commit and push feature branches as you go.
+- Branch names start with a type prefix: `feat/`, `fix/`, `docs/`, `refactor/` or `test/`, then a short description
+  (e.g. `fix/rss-reorient-hcrl-env-cfg`).
 - PRs follow each repo's `.github/PULL_REQUEST_TEMPLATE.md`: one framing sentence plus a bullet per change, related
   PRs as full URLs, and an honest checklist. Design docs go in the repo's gitignored `.claude/`, not the PR.
 - Dependent PRs in one repo are stacked (`gh stack`). After each push, `git diff --name-only origin/<base>...HEAD`
