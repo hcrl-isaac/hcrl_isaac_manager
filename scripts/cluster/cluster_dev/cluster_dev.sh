@@ -20,6 +20,7 @@
 #                           ./cluster_dev.sh stage <name> <repo>=<ref|/path/to/worktree> ...  (those repos; the
 #                                                                      rest from the newest `default`)
 #                           ./cluster_dev.sh trees [rm <name>-<fp> | rm --partials]   (list / remove trees)
+#                           ./cluster_dev.sh data             (new data-repo files -> the shared copy; no tree)
 # Use it:                   ./cluster_dev.sh attach           (interactive shell on the node)
 #                           ./cluster_dev.sh exec [--tree <name>[-<fp>]] -- <cmd>   (run in container against the
 #                                                                      newest `default`, or that tree; SSH-tethered)
@@ -559,6 +560,7 @@ case "${1:-}:${2:-}" in stage:-h|stage:--help|trees:-h|trees:--help|exec:-h|exec
 case "${1:-}" in
     stage)    shift; cmd_stage "$@" ;;
     trees)    shift; cmd_trees "$@" ;;
+    data)     shift; cmd_data "$@" ;;
     __resolve_tree) shift; ensure_master >&2; resolve_tree "$@" ;;   # internal: tests, `pls run --batch`
     __free_gb) shift; ensure_master >/dev/null; remote_free_gb "$1" ;;   # internal (tests)
     __master_up) master_alive ;;   # internal: `pls` checks the connection before a command that needs it

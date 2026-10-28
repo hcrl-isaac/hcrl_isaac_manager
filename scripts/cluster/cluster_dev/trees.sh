@@ -42,15 +42,32 @@ _check_inodes() {  # _check_inodes DIR
 
 # The data repos' training files (the allowlist sync used), added to the shared copy: never deleted, never a tree.
 _push_data() {
-    local repo
+    local repo src skip
     for repo in "${TREE_DATA_REPOS[@]}"; do
-        [ -d "${LOCAL_ISAACLAB_DIR}/resources/${repo}" ] || continue
+        src="${LOCAL_ISAACLAB_DIR}/resources/${repo}"
+        [ -d "$src" ] || continue
+        # a file left as its Git LFS pointer (not fetched here) would overwrite the cluster's real copy
+        skip="$(_lfs_pointers "$src")"
         log "Adding new ${repo} files -> ${REMOTE_ISAACLAB_DIR}/resources/${repo} (shared, never deleted)"
-        rsync -rlpt --info=progress2 --include='*/' --include='*.pt' --include='*.arena.json' --include='*.courts.json' \
+        rsync -rlpt --info=progress2 --exclude-from=<(printf '%s' "$skip") --exclude='/worktrees/' \
+            --include='*/' --include='*.pt' --include='*.arena.json' --include='*.courts.json' \
             --include='*.manifest.json' --exclude='*' --prune-empty-dirs -e "ssh ${SSH_OPTS[*]}" \
             --rsync-path="mkdir -p $(printf %q "${REMOTE_ISAACLAB_DIR}/resources/${repo}") && rsync" \
-            "${LOCAL_ISAACLAB_DIR}/resources/${repo}/" "${CLUSTER_LOGIN}:${REMOTE_ISAACLAB_DIR}/resources/${repo}/" || return 1
+            "${src}/" "${CLUSTER_LOGIN}:${REMOTE_ISAACLAB_DIR}/resources/${repo}/" || return 1
     done
+}
+
+_lfs_pointers() {  # _lfs_pointers DIR -> rsync patterns (one per line) for the small files that are Git LFS pointers
+    local f
+    find "$1" -path "$1/worktrees" -prune -o -type f -size -1025c -print0 | while IFS= read -r -d '' f; do
+        head -c 40 "$f" | grep -q '^version https://git-lfs' && printf '/%s\n' "${f#"$1"/}"
+    done
+}
+
+cmd_data() {  # data : add the data repos' new files to the cluster's shared copy, without staging a tree
+    [ $# -eq 0 ] || { err "data takes no arguments"; exit 1; }
+    ensure_master
+    _push_data || { err "could not add the data repos' new files"; exit 1; }
 }
 
 # Keep the newest TREE_KEEP complete trees of NAME; an older one goes unless a run still uses it.
