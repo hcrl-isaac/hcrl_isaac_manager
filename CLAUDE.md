@@ -56,6 +56,13 @@ Project skills live in `.claude/skills/`. Use them rather than re-deriving the s
   and your Ray dashboard go in the gitignored `compute.local.toml` (`pls setup --add <name> --kind ssh|ray ...`),
   SLURM clusters in `scripts/cluster/config/<name>/` (`pls setup --add <name>`), Ray credentials, job id and image in
   `scripts/ray/.env.ray` (`pls setup --on ray`). The `add-compute` skill walks through each kind.
+- **SLURM clusters:** `pls connect --on <c>` opens the shared SSH connection (2FA once). Either queue a job
+  (`pls run --on <c> --batch -- ...`) or hold a node (`pls res hold --on <c>`, release with `pls res drop`) and run
+  on its cards (`pls run --on <c> -- ...`, `--gpus N` for one run across N cards). `pls jobs --on <c>` lists,
+  follows and stops jobs; `pls shell --on <c>` opens a shell on the held node.
+- **Runtimes:** an ssh box runs from an Isaac Lab 3 install root (`pls run --root <dir>`); SLURM and Ray run the
+  shared image (`scripts/docker/`, as a `.sif` on SLURM), built and pushed per cluster by `pls setup --on <c>`.
+  The workspace code is mounted into it at job start, so code changes need no rebuild; dependency changes do.
 - **Code reaches remote compute only as staged trees** (`pls stage`, done by `pls run` for you): a snapshot of the
   workspace as on disk, or of named refs/worktrees. Runs must not write tracked files in place (trees share them by
   hardlink). `pls run --cmd -- <command>` starts in that machine's workspace; the staged code is in `$PLS_RESOURCES`.
