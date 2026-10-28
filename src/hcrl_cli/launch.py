@@ -64,7 +64,7 @@ CPU-only runs (--cpus N, --on <ssh host>): no card is leased; the run sees no GP
 pinned to N of the box's cores at nice 10 with OMP/MKL/OPENBLAS/NUMEXPR threads N, and its lease (<host>:cpu) lasts
 as long as the run. Your CPU runs on a box hold at most half its cores (or the pool's cpu_budget). {DEVICE} is
 refused; SLURM and Ray allocate CPUs themselves and refuse it. E.g.
-  pls run --on debruyne --cpus 24 --root /var/local/sturman/retarget --detach --cmd -- python -m holosoma_retargeting ..."""
+  pls run --on <host> --cpus 24 --root <root> --detach --cmd -- python -m holosoma_retargeting ..."""
 
 
 def parser() -> argparse.ArgumentParser:

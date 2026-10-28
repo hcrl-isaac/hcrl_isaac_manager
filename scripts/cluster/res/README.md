@@ -200,7 +200,7 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   removed after success; a failed run keeps its log, MANIFEST and run.sh (its checkpoints and credentials are always
   removed). A lease the run took is released whatever happens. Old snapshots are not pruned yet.
 - `--cpus N` runs on N cores of an ssh box and leases no card, for a job that needs no GPU (`--on <host>`):
-  `pls run --on debruyne --cpus 24 --root /var/local/sturman/retarget --detach --cmd -- python -m holosoma_retargeting ...`.
+  `pls run --on <host> --cpus 24 --root <root> --detach --cmd -- python -m holosoma_retargeting ...`.
   The run sees no CUDA device (`CUDA_VISIBLE_DEVICES=""`), is pinned with `taskset` to the highest-numbered cores
   your other CPU runs there do not hold, runs at `nice -n 10` so GPU jobs' feeder threads come first, and gets
   `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=N` (an `--env` value wins). Its lease's card is `<host>:cpu` with

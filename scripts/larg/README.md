@@ -51,7 +51,7 @@ defaults with env vars: `LARG_USER` (your login, when the pools name several or 
 A job that needs no GPU (e.g. multiprocess motion retargeting) runs on a box's cores without leasing a card:
 
 ```bash
-pls run --on debruyne --cpus 24 --root /var/local/sturman/retarget --detach --cmd -- python -m holosoma_retargeting ...
+pls run --on <host> --cpus 24 --root <root> --detach --cmd -- python -m holosoma_retargeting ...
 ```
 
 It sees no CUDA device, is pinned to 24 cores with `taskset` at `nice -n 10`, and its thread pools are sized to 24.
