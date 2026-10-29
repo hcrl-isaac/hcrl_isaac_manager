@@ -79,6 +79,8 @@ From: base.sif
     mkdir -p /isaac-sim
     printf '#!/bin/bash\nexec %s/bin/python "$@"\n' "${VIRTUAL_ENV}" > /isaac-sim/python.sh
     chmod +x /isaac-sim/python.sh
+    # isaaclab packages run from /workspace/ext/<pkg> read their kit file at ../../../apps = /workspace/apps
+    mkdir -p /workspace && ln -sfn /opt/IsaacLab/apps /workspace/apps
     ln -sf /usr/local/nvidia/bin/nvidia* /usr/bin 2>/dev/null || true
 
     mkdir -p /isaac-sim/kit/cache /root/.cache/ov /root/.cache/pip \
