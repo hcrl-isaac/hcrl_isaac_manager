@@ -1083,7 +1083,9 @@ class Stage:
             sys.exit(f"[res] could not finish the {repo} snapshot on {self.t.host}")
         return snap, line
 
-    def sync_code(self, code: dict[str, str], data: dict[str, str] | None = None) -> tuple[list[str], list[str]]:
+    def sync_code(
+        self, code: dict[str, str], data: dict[str, str] | None = None, root: str = ""
+    ) -> tuple[list[str], list[str]]:
         """PYTHONPATH entries that import ``code`` on the target, and the MANIFEST lines describing them.
 
         ``data`` repos (a worktree set's ``motion_datasets`` / ``*_robots``) ship to an ssh target as snapshots too,
@@ -1098,6 +1100,7 @@ class Stage:
         Args:
             code: Repo name -> local checkout path.
             data: Data repo name -> worktree path.
+            root: An ssh target's ``--root`` install, whose ``resources/`` fills in repos the box workspace lacks.
 
         Returns:
             The PYTHONPATH entries (each ``code`` repo's, in order, at its ``SRC_LAYOUT`` package root, then any
@@ -1169,8 +1172,13 @@ class Stage:
             snaps[repo], line = self.snapshot(repo, src, outputs=False)
             lines.append(f"{line} (data)")
         links = " ".join(f"ln -s {q(s)} {q(res)}/{repo};" for repo, s in snaps.items())
-        assets = f'for d in {q(self.t.workspace)}/resources/*/; do n=$(basename "$d"); '
-        assets += f'[ -e {q(res)}/"$n" ] || ln -s "${{d%/}}" {q(res)}/"$n"; done'
+        # the box workspace's repos, then any only the --root install has (e.g. its motion_datasets)
+        homes = [self.t.workspace, *([root] if root else [])]
+        assets = " ".join(
+            f'for d in {q(h)}/resources/*/; do [ -d "$d" ] || continue; n=$(basename "$d"); '
+            f'[ -e {q(res)}/"$n" ] || ln -s "${{d%/}}" {q(res)}/"$n"; done;'
+            for h in homes
+        )
         if self._ssh(f"{links} {assets}").returncode != 0:
             sys.exit(f"[res] could not link the stage's resources on {self.t.host}")
         # an importable asset repo is imported from the stage's link to it (the box's copy, or the --wt snapshot)
@@ -1832,7 +1840,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             pythonpath, manifest, stage.tree = [], [use_tree(t, args.tree)], args.tree
         else:
             code = local_code(source, args.wt)
-            pythonpath, manifest = stage.sync_code(code, local_data(source, args.wt))
+            pythonpath, manifest = stage.sync_code(code, local_data(source, args.wt), args.root or "")
         for name, src in siblings.items():  # a sibling repo's dirs, found through its variable, on no PYTHONPATH
             sib = SIBLINGS[name]
             if t.kind == "slurm":
