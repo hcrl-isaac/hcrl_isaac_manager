@@ -79,8 +79,6 @@ From: base.sif
     mkdir -p /isaac-sim
     printf '#!/bin/bash\nexec %s/bin/python "$@"\n' "${VIRTUAL_ENV}" > /isaac-sim/python.sh
     chmod +x /isaac-sim/python.sh
-    # isaaclab packages run from /workspace/ext/<pkg> read their kit file at ../../../apps = /workspace/apps
-    mkdir -p /workspace && ln -sfn /opt/IsaacLab/apps /workspace/apps
     ln -sf /usr/local/nvidia/bin/nvidia* /usr/bin 2>/dev/null || true
 
     mkdir -p /isaac-sim/kit/cache /root/.cache/ov /root/.cache/pip \
@@ -89,6 +87,8 @@ From: base.sif
     touch /bin/nvidia-smi /bin/nvidia-debugdump /bin/nvidia-persistenced \
         /bin/nvidia-cuda-mps-control /bin/nvidia-cuda-mps-server /etc/localtime
     mkdir -p /var/run/nvidia-persistenced && touch /var/run/nvidia-persistenced/socket
+    # isaaclab packages run from /workspace/ext/<pkg> read their kit file at ../../../apps = /workspace/apps
+    ln -sfn /opt/IsaacLab/apps /workspace/apps
     chmod +x /usr/local/bin/hcrl-entrypoint
     rm -rf /opt/hcrl-build  # the build's inputs and uv cache (%files go here: the build mounts its own /tmp over %post)
     rm -f /etc/apt/apt.conf.d/99-build-sandbox
