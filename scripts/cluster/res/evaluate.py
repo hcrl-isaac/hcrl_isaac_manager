@@ -191,17 +191,25 @@ def run_device(t: Target) -> str:
     return "cuda:0" if t.kind == "slurm" or t.pin == "cvd" else f"cuda:{t.gpu}"
 
 
-def fill_device(script_args: list[str], t: Target) -> list[str]:
+def fill_device(script_args: list[str], t: Target, launcher: bool = False) -> list[str]:
     """The script's arguments with ``{DEVICE}`` replaced by the leased card's device; exits on any other ``cuda:N``.
 
     Boxes pin a card differently (CUDA_VISIBLE_DEVICES or not), so a hand-written ``cuda:N`` is wrong on some of them:
     an invalid ordinal, or silently another user's card.
+
+    Args:
+        script_args: The script's arguments.
+        t: The run's target.
+        launcher: The script takes Isaac Lab's launcher arguments; where every card stays visible, one given no
+            ``--device`` gets the leased card's (its default, cuda:0, is another card).
     """
     if t.cores:
         refuse_device(script_args)
         return list(script_args)
     device = run_device(t)
     filled = [arg.replace("{DEVICE}", device) for arg in script_args]
+    if launcher and device != "cuda:0" and not any(a == "--device" or a.startswith("--device=") for a in filled):
+        filled = ["--device", device, *filled]
     if wrong := sorted({f"cuda:{n}" for arg in filled for n in _CUDA.findall(arg)} - {device}):
         sys.exit(
             f"[res] the script arguments name {', '.join(wrong)}, but the leased card is {device} inside this run on"
@@ -1519,6 +1527,14 @@ def _interrupt(signum: int, _frame: object) -> None:
     raise KeyboardInterrupt(signal.Signals(signum).name)
 
 
+def _takes_launcher_args(path: str) -> bool:
+    """Whether the script registers Isaac Lab's launcher arguments (``--device`` among them)."""
+    try:
+        return "add_app_launcher_args" in Path(path).read_text(errors="replace")
+    except OSError:
+        return False
+
+
 def _repo_script(spec: str, wt: str) -> tuple[str, str]:
     """``(repo, path)`` for a ``<repo>:<path>`` script inside a shipped package repo, else ``("", "")``.
 
@@ -1720,6 +1736,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if not repo and not os.path.isfile(script):
             sys.exit(f"[res] no script {args.script}")
     run_args = [args.script, *args.script_args] if args.cmd else args.script_args
+    local_file = script if not repo else os.path.join(local_code(local_workspace(), args.wt)[repo], rel)
+    launcher = not args.cmd and _takes_launcher_args(local_file)
     if args.lease and "," in args.lease:
         sys.exit("[res] several leases (lease:A,B) run a job list: add --jobs FILE --out DIR")
     if sum(map(bool, (args.on, args.any, args.lease))) != 1:
@@ -1800,7 +1818,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         t = make_target(pool, host, gpu, job, uuid)
         t.extra_uuids = tuple(c.uuid for _, c, _ in claimed[1:]) if extra else ()
         t.cores = taken.cores if args.cpus else ""
-        run_args = fill_device(run_args, t)  # before staging, so a wrong cuda:N costs nothing
+        run_args = fill_device(run_args, t, launcher)  # before staging, so a wrong cuda:N costs nothing
         staging = _LeaseHeartbeat(taken.id if taken is not None else args.lease or "", *(x.id for x in extra)).start()
         stage = Stage(t)
         stage.make()
