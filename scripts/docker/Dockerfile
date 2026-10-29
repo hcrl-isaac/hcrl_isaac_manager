@@ -94,6 +94,8 @@ RUN mkdir -p /isaac-sim/kit/cache /root/.cache/ov /root/.cache/pip \
     touch /bin/nvidia-smi /bin/nvidia-debugdump /bin/nvidia-persistenced \
     /bin/nvidia-cuda-mps-control /bin/nvidia-cuda-mps-server /etc/localtime && \
     mkdir -p /var/run/nvidia-persistenced && touch /var/run/nvidia-persistenced/socket
+# isaaclab packages shipped to /workspace/ext/<pkg> (Ray) read their kit file at ../../../apps = /workspace/apps
+RUN ln -sfn /opt/IsaacLab/apps /workspace/apps
 
 # The entrypoint PYTHONPATHs the mounted workspace packages ahead of the baked Isaac Lab, and preloads libgomp on aarch64.
 COPY entrypoint.sh /usr/local/bin/hcrl-entrypoint
