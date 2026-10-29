@@ -571,6 +571,26 @@ class SshStageTest(Isolated):
         self.assertFalse((self.ws / "resources" / "motion_datasets").exists(), "nothing created in the box workspace")
         self.assertFalse((snap / "logs").exists(), "no run-output links in a data snapshot")
 
+    def test_a_root_install_fills_in_repos_the_box_workspace_lacks(self) -> None:
+        """A box workspace without motion_datasets still resolves it, from the --root install's copy."""
+        root = self.tmp / "isaac3"
+        for repo in ("motion_datasets", "hcrl_robots"):
+            (root / "resources" / repo).mkdir(parents=True)
+        stage = ev.Stage(self.t)
+        stage.make()
+        with contextlib.redirect_stderr(io.StringIO()):
+            stage.sync_code({"robot_rl": str(self.src)}, root=str(root))
+        res = f"{stage.dir}/resources"
+        self.assertEqual(os.path.realpath(f"{res}/motion_datasets"), str(root / "resources/motion_datasets"))
+        self.assertEqual(
+            os.path.realpath(f"{res}/hcrl_robots"), str(self.ws / "resources/hcrl_robots"), "the workspace's copy wins"
+        )
+        bare = ev.Stage(self.t)
+        bare.make()
+        with contextlib.redirect_stderr(io.StringIO()):
+            bare.sync_code({"robot_rl": str(self.src)})
+        self.assertFalse(os.path.exists(f"{bare.dir}/resources/motion_datasets"), "no --root, no fallback")
+
     def test_a_holosoma_worktree_ships_and_imports_from_its_src_package(self) -> None:
         """holosoma's package is <repo>/src/holosoma_retargeting: that, not the repo root, goes on PYTHONPATH."""
         holo = self.tmp / "local" / "holosoma_wt"
