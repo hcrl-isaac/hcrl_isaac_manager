@@ -278,6 +278,28 @@ class TargetTest(unittest.TestCase):
         self.assertIn("over pool desk's max_hours 2", str(cm.exception.code))
         self.assertEqual(ev.pool_timeout(Pool("p", "ssh", {"user": "u"}), 0), 0, "no setting, no limit")
 
+    def test_a_launcher_script_without_device_gets_the_leased_card(self) -> None:
+        """Every card stays visible on a device-pinned box, so Isaac's default (cuda:0) is another card."""
+        cvd = ev.make_target(Pool("a100", "ssh", {"user": "u", "pin": "cvd"}), "mckennie", 2)
+        dev = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pepi", 2)
+        dev0 = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pepi", 0)
+        args = ["--task", "T", "agent.x=1"]
+        self.assertEqual(ev.fill_device(args, dev, launcher=True), ["--device", "cuda:2", *args])
+        self.assertEqual(ev.fill_device(args, dev), args, "a script without launcher args is left alone")
+        self.assertEqual(ev.fill_device(args, cvd, launcher=True), args, "CUDA_VISIBLE_DEVICES already pins it")
+        self.assertEqual(ev.fill_device(args, dev0, launcher=True), args, "card 0 is the default")
+        given = ["--device={DEVICE}", "--task", "T"]
+        self.assertEqual(ev.fill_device(given, dev, launcher=True), ["--device=cuda:2", "--task", "T"])
+
+    def test_launcher_scripts_are_recognised_by_their_launcher_args(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            train, plain = os.path.join(d, "train.py"), os.path.join(d, "plot.py")
+            Path(train).write_text("cli_args.add_app_launcher_args(parser)\n")
+            Path(plain).write_text("print(1)\n")
+            self.assertTrue(ev._takes_launcher_args(train))
+            self.assertFalse(ev._takes_launcher_args(plain))
+            self.assertFalse(ev._takes_launcher_args(os.path.join(d, "missing.py")))
+
     def test_jax_does_not_preallocate_a_shared_card(self) -> None:
         runner = ev.runner_script(ev.make_target(Pool("a", "ssh", {"user": "u"}), "h", 0), "/s", "x.py", [], [])
         self.assertIn('XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"', runner)
@@ -469,6 +491,52 @@ class SlurmTest(unittest.TestCase):
         self.assertEqual(sum(c.args[0][2:3] == ["stage"] for c in run.call_args_list), 1)
 
 
+class LocalDataInPlaceTest(unittest.TestCase):
+    """A local run reads data repos from resources/ in place: a --wt data worktree must match that copy."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.main = self.tmp / "resources" / "ssti_robots"
+        _git_repo(self.main)
+        self.wt = self.main / "worktrees" / "wt"
+        subprocess.run(["git", "-C", str(self.main), "worktree", "add", "-q", str(self.wt)], check=True)
+
+    def _check(self) -> dict:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return ev._local_data_in_place({"ssti_robots": str(self.wt)}, str(self.tmp))
+
+    def test_a_worktree_at_the_shared_commit_reads_in_place(self) -> None:
+        self.assertEqual(self._check(), {}, "nothing to ship")
+
+    def test_a_worktree_on_another_commit_is_refused(self) -> None:
+        (self.wt / "mod.py").write_text("x = 2\n")
+        subprocess.run(["git", "-C", str(self.wt), "commit", "-qam", "urdf"], check=True)
+        with self.assertRaises(SystemExit) as cm:
+            self._check()
+        self.assertIn("ssti_robots (worktree", str(cm.exception.code))
+
+    def test_a_squash_merge_of_the_worktrees_branch_counts_as_the_same(self) -> None:
+        """Different commits with the same content: resources/ holds the squash of the worktree's branch."""
+        for repo in (self.wt, self.main):
+            (repo / "mod.py").write_text("x = 2\n")
+            subprocess.run(["git", "-C", str(repo), "commit", "-qam", f"urdf in {repo.name}"], check=True)
+        self.assertEqual(self._check(), {})
+
+    def test_uncommitted_edits_in_resources_are_refused(self) -> None:
+        (self.main / "mod.py").write_text("x = 4\n")
+        with self.assertRaises(SystemExit) as cm:
+            self._check()
+        self.assertIn("resources/ at", str(cm.exception.code))
+        self.assertIn("dirty", str(cm.exception.code))
+
+    def test_uncommitted_edits_in_the_worktree_are_refused(self) -> None:
+        (self.wt / "mod.py").write_text("x = 3\n")
+        with self.assertRaises(SystemExit) as cm:
+            self._check()
+        self.assertIn("dirty", str(cm.exception.code))
+
+
 class LocalCodeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp())
@@ -592,6 +660,26 @@ class SshStageTest(Isolated):
         self.assertTrue(manifest[-1].endswith("(data)"))
         self.assertFalse((self.ws / "resources" / "motion_datasets").exists(), "nothing created in the box workspace")
         self.assertFalse((snap / "logs").exists(), "no run-output links in a data snapshot")
+
+    def test_a_root_install_fills_in_repos_the_box_workspace_lacks(self) -> None:
+        """A box workspace without motion_datasets still resolves it, from the --root install's copy."""
+        root = self.tmp / "isaac3"
+        for repo in ("motion_datasets", "hcrl_robots"):
+            (root / "resources" / repo).mkdir(parents=True)
+        stage = ev.Stage(self.t)
+        stage.make()
+        with contextlib.redirect_stderr(io.StringIO()):
+            stage.sync_code({"robot_rl": str(self.src)}, root=str(root))
+        res = f"{stage.dir}/resources"
+        self.assertEqual(os.path.realpath(f"{res}/motion_datasets"), str(root / "resources/motion_datasets"))
+        self.assertEqual(
+            os.path.realpath(f"{res}/hcrl_robots"), str(self.ws / "resources/hcrl_robots"), "the workspace's copy wins"
+        )
+        bare = ev.Stage(self.t)
+        bare.make()
+        with contextlib.redirect_stderr(io.StringIO()):
+            bare.sync_code({"robot_rl": str(self.src)})
+        self.assertFalse(os.path.exists(f"{bare.dir}/resources/motion_datasets"), "no --root, no fallback")
 
     def test_a_holosoma_worktree_ships_and_imports_from_its_src_package(self) -> None:
         """holosoma's package is <repo>/src/holosoma_retargeting: that, not the repo root, goes on PYTHONPATH."""

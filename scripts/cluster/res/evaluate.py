@@ -242,17 +242,25 @@ def run_device(t: Target) -> str:
     return "cuda:0" if t.kind == "slurm" or t.pin == "cvd" else f"cuda:{t.gpu}"
 
 
-def fill_device(script_args: list[str], t: Target) -> list[str]:
+def fill_device(script_args: list[str], t: Target, launcher: bool = False) -> list[str]:
     """The script's arguments with ``{DEVICE}`` replaced by the leased card's device; exits on any other ``cuda:N``.
 
     Boxes pin a card differently (CUDA_VISIBLE_DEVICES or not), so a hand-written ``cuda:N`` is wrong on some of them:
     an invalid ordinal, or silently another user's card.
+
+    Args:
+        script_args: The script's arguments.
+        t: The run's target.
+        launcher: The script takes Isaac Lab's launcher arguments; where every card stays visible, one given no
+            ``--device`` gets the leased card's (its default, cuda:0, is another card).
     """
     if t.cores:
         refuse_device(script_args)
         return list(script_args)
     device = run_device(t)
     filled = [arg.replace("{DEVICE}", device) for arg in script_args]
+    if launcher and device != "cuda:0" and not any(a == "--device" or a.startswith("--device=") for a in filled):
+        filled = ["--device", device, *filled]
     if wrong := sorted({f"cuda:{n}" for arg in filled for n in _CUDA.findall(arg)} - {device}):
         sys.exit(
             f"[res] the script arguments name {', '.join(wrong)}, but the leased card is {device} inside this run on"
@@ -543,6 +551,50 @@ def dirty_worktrees(workspace: str, wt: str) -> list[str]:
         if ref and ref["dirty"]:
             dirty.append(f"{repo} ({ref['dirty']} changed)")
     return dirty
+
+
+def _local_data_in_place(data: dict[str, str], workspace: str) -> dict[str, str]:
+    """A local run reads data repos from ``<workspace>/resources/`` in place, so its worktrees must match them.
+
+    Args:
+        data: Data repo name -> worktree path.
+        workspace: The local workspace.
+
+    Returns:
+        Nothing left to ship; exits when a worktree's content differs from the workspace's copy, or either has
+        uncommitted edits.
+    """
+
+    def tree(src: str) -> bytes:  # the content, so a squash merge of the worktree's branch counts as the same
+        try:
+            return _git(src, "show", "-s", "--format=%T", "HEAD").strip()
+        except (subprocess.CalledProcessError, OSError):
+            return b""
+
+    def ref(src: str) -> dict | None:  # its repo worktrees and session state are no edit a run would read
+        try:
+            status = _git(src, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+            edits = [p for p in _changed_paths(status) if not p.startswith((b"worktrees/", b".claude/"))]
+            return {"commit": _head(src), "dirty": len(edits)}
+        except (subprocess.CalledProcessError, OSError):
+            return None
+
+    def mark(r: dict | None) -> str:
+        return f"{r['commit'][:7]}{' dirty' if r['dirty'] else ''}" if r else "?"
+
+    differ = []
+    for repo, src in data.items():
+        main_src = os.path.join(workspace, "resources", repo)
+        wt, main = ref(src), ref(main_src)
+        if not wt or not main or wt["dirty"] or main["dirty"] or not tree(src) or tree(src) != tree(main_src):
+            differ.append(f"{repo} (worktree {mark(wt)}, resources/ at {mark(main)})")
+    if differ:
+        sys.exit(
+            f"[res] a local run reads data repos from resources/ in place, but the --wt set's differ: {'; '.join(differ)}."
+            " Commit and bring resources/ to that commit, or run on an ssh box, which ships the worktree"
+        )
+    print(f"[res] --wt data repos {', '.join(data)} match resources/: read in place", file=sys.stderr)
+    return {}
 
 
 def _describe(src: str) -> str:
@@ -1157,7 +1209,9 @@ class Stage:
             sys.exit(f"[res] could not finish the {repo} snapshot on {self.t.host}")
         return snap, line
 
-    def sync_code(self, code: dict[str, str], data: dict[str, str] | None = None) -> tuple[list[str], list[str]]:
+    def sync_code(
+        self, code: dict[str, str], data: dict[str, str] | None = None, root: str = ""
+    ) -> tuple[list[str], list[str]]:
         """PYTHONPATH entries that import ``code`` on the target, and the MANIFEST lines describing them.
 
         ``data`` repos (a worktree set's ``motion_datasets`` / ``*_robots``) ship to an ssh target as snapshots too,
@@ -1172,6 +1226,7 @@ class Stage:
         Args:
             code: Repo name -> local checkout path.
             data: Data repo name -> worktree path.
+            root: An ssh target's ``--root`` install, whose ``resources/`` fills in repos the box workspace lacks.
 
         Returns:
             The PYTHONPATH entries (each ``code`` repo's, in order, at its ``SRC_LAYOUT`` package root, then any
@@ -1179,13 +1234,13 @@ class Stage:
         """
         at = _worktree_env().import_root
         data = data or {}
+        if data and self.t.kind == "local":
+            data = _local_data_in_place(data, self.t.workspace)
         if data and self.t.kind != "ssh":
-            where = (
-                "a local run reads resources/ in place"
-                if self.t.kind == "local"
-                else ("on a cluster, stage them with `pls stage --on <cluster> <name> <repo>=<path>`")
+            sys.exit(
+                f"[res] --wt data repos ({', '.join(data)}) ship to ssh targets only; on a cluster, stage them with"
+                " `pls stage --on <cluster> <name> <repo>=<path>`"
             )
-            sys.exit(f"[res] --wt data repos ({', '.join(data)}) ship to ssh targets only; {where}")
         for repo, src in data.items():
             pointers = lfs_pointers(src)
             if pointers:
@@ -1243,8 +1298,13 @@ class Stage:
             snaps[repo], line = self.snapshot(repo, src, outputs=False)
             lines.append(f"{line} (data)")
         links = " ".join(f"ln -s {q(s)} {q(res)}/{repo};" for repo, s in snaps.items())
-        assets = f'for d in {q(self.t.workspace)}/resources/*/; do n=$(basename "$d"); '
-        assets += f'[ -e {q(res)}/"$n" ] || ln -s "${{d%/}}" {q(res)}/"$n"; done'
+        # the box workspace's repos, then any only the --root install has (e.g. its motion_datasets)
+        homes = [self.t.workspace, *([root] if root else [])]
+        assets = " ".join(
+            f'for d in {q(h)}/resources/*/; do [ -d "$d" ] || continue; n=$(basename "$d"); '
+            f'[ -e {q(res)}/"$n" ] || ln -s "${{d%/}}" {q(res)}/"$n"; done;'
+            for h in homes
+        )
         if self._ssh(f"{links} {assets}").returncode != 0:
             sys.exit(f"[res] could not link the stage's resources on {self.t.host}")
         # an importable asset repo is imported from the stage's link to it (the box's copy, or the --wt snapshot)
@@ -1601,6 +1661,14 @@ def _interrupt(signum: int, _frame: object) -> None:
     raise KeyboardInterrupt(signal.Signals(signum).name)
 
 
+def _takes_launcher_args(path: str) -> bool:
+    """Whether the script registers Isaac Lab's launcher arguments (``--device`` among them)."""
+    try:
+        return "add_app_launcher_args" in Path(path).read_text(errors="replace")
+    except OSError:
+        return False
+
+
 def _repo_script(spec: str, wt: str) -> tuple[str, str]:
     """``(repo, path)`` for a ``<repo>:<path>`` script inside a shipped package repo, else ``("", "")``.
 
@@ -1802,6 +1870,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if not repo and not os.path.isfile(script):
             sys.exit(f"[res] no script {args.script}")
     run_args = [args.script, *args.script_args] if args.cmd else args.script_args
+    local_file = script if not repo else os.path.join(local_code(local_workspace(), args.wt)[repo], rel)
+    launcher = not args.cmd and _takes_launcher_args(local_file)
     if args.lease and "," in args.lease:
         sys.exit("[res] several leases (lease:A,B) run a job list: add --jobs FILE --out DIR")
     if sum(map(bool, (args.on, args.any, args.lease))) != 1:
@@ -1882,7 +1952,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         t = make_target(pool, host, gpu, job, uuid)
         t.extra_uuids = tuple(c.uuid for _, c, _ in claimed[1:]) if extra else ()
         t.cores = taken.cores if args.cpus else ""
-        run_args = fill_device(run_args, t)  # before staging, so a wrong cuda:N costs nothing
+        run_args = fill_device(run_args, t, launcher)  # before staging, so a wrong cuda:N costs nothing
         if t.kind != "slurm":  # the pool's guardrails, before anything is staged
             args.timeout = pool_timeout(pool, args.timeout)
             check_free_disk(t, pool)
@@ -1899,7 +1969,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             pythonpath, manifest, stage.tree = [], [use_tree(t, args.tree)], args.tree
         else:
             code = local_code(source, args.wt)
-            pythonpath, manifest = stage.sync_code(code, local_data(source, args.wt))
+            pythonpath, manifest = stage.sync_code(code, local_data(source, args.wt), args.root or "")
         for name, src in siblings.items():  # a sibling repo's dirs, found through its variable, on no PYTHONPATH
             sib = SIBLINGS[name]
             if t.kind == "slurm":
@@ -1989,6 +2059,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
     except KeyboardInterrupt as exc:
         rc = 130
         print(f"[res] interrupted ({exc or 'SIGINT'})", file=sys.stderr)
+    except SystemExit as exc:  # a refusal before the run started: its reason is the exit, never a log to read
+        rc = exc.code if exc.code is not None else 0
     finally:
         if staging is not None:
             staging.stop()
@@ -2002,7 +2074,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             print(f"[res] stopped the run ({'gone' if gone else 'STILL RUNNING, check the card'})", file=sys.stderr)
         if stage is not None:
             stage.remove(keep_log=rc != 0)
-            if rc != 0:
+            if isinstance(rc, str):
+                print("[res] the run never started, so it has no log; the reason:", file=sys.stderr)
+            elif rc != 0:
                 where = stage.t.ssh if stage.t.kind == "slurm" else stage.t.host
                 print(f"[res] FAILED with status {rc}; log at {where}:{stage.dir}/log", file=sys.stderr)
         mine = [x.id for x in (taken, *extra) if x is not None]
