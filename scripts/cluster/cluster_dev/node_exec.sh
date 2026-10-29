@@ -142,6 +142,9 @@ for d in "${RESOURCES}"/*/; do
 done
 [ -d "${RESOURCES}/IsaacLab/source" ] && \
     EXT_BINDS="$EXT_BINDS -B $(readlink -f "${RESOURCES}/IsaacLab/source"):/workspace/isaaclab_source:rw"
+# isaaclab reads its kit file at <source>/../apps, which is /workspace/apps once the source is bound there
+[ -d "${RESOURCES}/IsaacLab/apps" ] && \
+    EXT_BINDS="$EXT_BINDS -B $(readlink -f "${RESOURCES}/IsaacLab/apps"):/workspace/apps:ro"
 # artifacts/ holds cluster-only INPUT data no tree carries; it still has to be readable inside the container,
 # which the resources/* glob misses.
 [ -d "${CLUSTER_ISAACLAB_DIR}/artifacts" ] && \
