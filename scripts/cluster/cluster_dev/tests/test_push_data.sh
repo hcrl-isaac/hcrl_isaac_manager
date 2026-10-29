@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # trees.sh's data push through an ssh stub: new data files reach the cluster's shared copy, a Git LFS pointer never
 # overwrites the real file there, and the data repo's worktrees never ship.
-set -u
+set -euo pipefail  # as cluster_dev.sh runs: a helper's stray non-zero status must not end the push
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
@@ -28,6 +28,7 @@ echo '{}' > "$L/ibfm/new.manifest.json"
 printf 'version https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 20\n' 0 > "$L/amass/big.pt"
 head -c 3000 /dev/urandom > "$L/worktrees/x/wt.pt"
 echo notes > "$L/README.md"
+echo '{}' > "$L/zz_last_small.manifest.json"  # the last small file found is not a pointer
 head -c 4000 /dev/urandom > "$R/amass/big.pt"
 cp "$R/amass/big.pt" "$T/big.orig"
 
@@ -40,8 +41,13 @@ source "$REPO/scripts/cluster/cluster_dev/trees.sh"
 fails=0
 check() {
     if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
+    return 0
 }
-_push_data > /dev/null 2>&1
+pointers="$(_lfs_pointers "$L")"  # unguarded: a non-zero status here ends this test under set -e
+check "only the LFS pointer is listed" '[ "$pointers" = "/amass/big.pt" ]'
+pushed=0
+_push_data > /dev/null 2>&1 && pushed=1
+check "the push succeeds" '[ "$pushed" -eq 1 ]'
 check "a new data file ships" 'cmp -s "$L/ibfm/new.pt" "$R/ibfm/new.pt"'
 check "its manifest ships" '[ -f "$R/ibfm/new.manifest.json" ]'
 check "an LFS pointer leaves the real file alone" 'cmp -s "$T/big.orig" "$R/amass/big.pt"'

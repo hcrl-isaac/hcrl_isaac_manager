@@ -62,6 +62,7 @@ _lfs_pointers() {  # _lfs_pointers DIR -> rsync patterns (one per line) for the 
     find "$1" -path "$1/worktrees" -prune -o -type f -size -1025c -print0 | while IFS= read -r -d '' f; do
         head -c 40 "$f" | grep -q '^version https://git-lfs' && printf '/%s\n' "${f#"$1"/}"
     done
+    return 0  # the last file checked not being a pointer is no failure
 }
 
 cmd_data() {  # data : add the data repos' new files to the cluster's shared copy, without staging a tree
