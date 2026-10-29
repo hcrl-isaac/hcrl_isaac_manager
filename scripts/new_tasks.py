@@ -151,6 +151,12 @@ def _files(name: str, org: str) -> dict[str, str]:
             "      - id: codespell\n"
             "        additional_dependencies:\n"
             "        - tomli\n"
+            "  - repo: https://github.com/pre-commit/pygrep-hooks\n"
+            "    rev: v1.10.0\n"
+            "    hooks:\n"
+            "      - id: rst-backticks\n"
+            "      - id: rst-directive-colons\n"
+            "      - id: rst-inline-touching-normal\n"
         ),
         "ruff.toml": (
             'line-length = 120\ntarget-version = "py311"\npreview = true\n\n'
