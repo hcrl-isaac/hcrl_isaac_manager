@@ -502,14 +502,33 @@ def _local_data_in_place(data: dict[str, str], workspace: str) -> dict[str, str]
         workspace: The local workspace.
 
     Returns:
-        Nothing left to ship; exits when a worktree differs from the workspace's copy (commit or uncommitted edits).
+        Nothing left to ship; exits when a worktree's content differs from the workspace's copy, or either has
+        uncommitted edits.
     """
+
+    def tree(src: str) -> bytes:  # the content, so a squash merge of the worktree's branch counts as the same
+        try:
+            return _git(src, "show", "-s", "--format=%T", "HEAD").strip()
+        except (subprocess.CalledProcessError, OSError):
+            return b""
+
+    def ref(src: str) -> dict | None:  # its repo worktrees and session state are no edit a run would read
+        try:
+            status = _git(src, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+            edits = [p for p in _changed_paths(status) if not p.startswith((b"worktrees/", b".claude/"))]
+            return {"commit": _head(src), "dirty": len(edits)}
+        except (subprocess.CalledProcessError, OSError):
+            return None
+
+    def mark(r: dict | None) -> str:
+        return f"{r['commit'][:7]}{' dirty' if r['dirty'] else ''}" if r else "?"
+
     differ = []
     for repo, src in data.items():
-        wt, main = git_ref(src), git_ref(os.path.join(workspace, "resources", repo))
-        if not wt or not main or wt["dirty"] or wt["commit"] != main["commit"]:
-            have = f"{wt['commit'][:7]}{' dirty' if wt['dirty'] else ''}" if wt else "?"
-            differ.append(f"{repo} (worktree {have}, resources/ at {main['commit'][:7] if main else '?'})")
+        main_src = os.path.join(workspace, "resources", repo)
+        wt, main = ref(src), ref(main_src)
+        if not wt or not main or wt["dirty"] or main["dirty"] or not tree(src) or tree(src) != tree(main_src):
+            differ.append(f"{repo} (worktree {mark(wt)}, resources/ at {mark(main)})")
     if differ:
         sys.exit(
             f"[res] a local run reads data repos from resources/ in place, but the --wt set's differ: {'; '.join(differ)}."

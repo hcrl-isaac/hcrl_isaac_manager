@@ -457,7 +457,6 @@ class LocalDataInPlaceTest(unittest.TestCase):
         _git_repo(self.main)
         self.wt = self.main / "worktrees" / "wt"
         subprocess.run(["git", "-C", str(self.main), "worktree", "add", "-q", str(self.wt)], check=True)
-        (self.main / ".git" / "info" / "exclude").write_text("worktrees/\n")
 
     def _check(self) -> dict:
         with contextlib.redirect_stderr(io.StringIO()):
@@ -472,6 +471,20 @@ class LocalDataInPlaceTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             self._check()
         self.assertIn("ssti_robots (worktree", str(cm.exception.code))
+
+    def test_a_squash_merge_of_the_worktrees_branch_counts_as_the_same(self) -> None:
+        """Different commits with the same content: resources/ holds the squash of the worktree's branch."""
+        for repo in (self.wt, self.main):
+            (repo / "mod.py").write_text("x = 2\n")
+            subprocess.run(["git", "-C", str(repo), "commit", "-qam", f"urdf in {repo.name}"], check=True)
+        self.assertEqual(self._check(), {})
+
+    def test_uncommitted_edits_in_resources_are_refused(self) -> None:
+        (self.main / "mod.py").write_text("x = 4\n")
+        with self.assertRaises(SystemExit) as cm:
+            self._check()
+        self.assertIn("resources/ at", str(cm.exception.code))
+        self.assertIn("dirty", str(cm.exception.code))
 
     def test_uncommitted_edits_in_the_worktree_are_refused(self) -> None:
         (self.wt / "mod.py").write_text("x = 3\n")
