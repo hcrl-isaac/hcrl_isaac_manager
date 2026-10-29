@@ -256,6 +256,28 @@ class TargetTest(unittest.TestCase):
             ev.fill_device(["--device", "cuda:0"], dev)  # silently another user's card there
         self.assertEqual(ev.fill_device(["--device", "cuda:2"], dev), ["--device", "cuda:2"], "the right one is kept")
 
+    def test_a_launcher_script_without_device_gets_the_leased_card(self) -> None:
+        """Every card stays visible on a device-pinned box, so Isaac's default (cuda:0) is another card."""
+        cvd = ev.make_target(Pool("a100", "ssh", {"user": "u", "pin": "cvd"}), "mckennie", 2)
+        dev = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pepi", 2)
+        dev0 = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pepi", 0)
+        args = ["--task", "T", "agent.x=1"]
+        self.assertEqual(ev.fill_device(args, dev, launcher=True), ["--device", "cuda:2", *args])
+        self.assertEqual(ev.fill_device(args, dev), args, "a script without launcher args is left alone")
+        self.assertEqual(ev.fill_device(args, cvd, launcher=True), args, "CUDA_VISIBLE_DEVICES already pins it")
+        self.assertEqual(ev.fill_device(args, dev0, launcher=True), args, "card 0 is the default")
+        given = ["--device={DEVICE}", "--task", "T"]
+        self.assertEqual(ev.fill_device(given, dev, launcher=True), ["--device=cuda:2", "--task", "T"])
+
+    def test_launcher_scripts_are_recognised_by_their_launcher_args(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            train, plain = os.path.join(d, "train.py"), os.path.join(d, "plot.py")
+            Path(train).write_text("cli_args.add_app_launcher_args(parser)\n")
+            Path(plain).write_text("print(1)\n")
+            self.assertTrue(ev._takes_launcher_args(train))
+            self.assertFalse(ev._takes_launcher_args(plain))
+            self.assertFalse(ev._takes_launcher_args(os.path.join(d, "missing.py")))
+
     def test_jax_does_not_preallocate_a_shared_card(self) -> None:
         runner = ev.runner_script(ev.make_target(Pool("a", "ssh", {"user": "u"}), "h", 0), "/s", "x.py", [], [])
         self.assertIn('XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"', runner)
