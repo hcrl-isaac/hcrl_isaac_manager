@@ -10,13 +10,15 @@ import subprocess
 import urllib.request
 from dataclasses import asdict, dataclass, field
 
-from inventory import CLUSTER_CONFIG_DIR, Pool, ssh_target
+from inventory import CLUSTER_CONFIG_DIR, Pool, ssh_scratch, ssh_target
 
 # Idle cards read 0-545 MiB and the smallest card seen in use reads ~2.4 GB, so 1 GiB sits in that gap: at or
 # above this with no visible process a card is held (e.g. Isaac kept its VRAM after exit).
 HELD_MIB = 1024
 # Utilization at or above this with no visible process also means the card is in use.
 HELD_UTIL = 10
+# On a `desktop` pool, the login user's own processes under this much memory are its desktop apps, not runs.
+DESKTOP_MIB = 2048
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
 # Over an existing master only: with its socket gone, ProxyCommand=false makes the call fail (UNKNOWN) instead
 # of dialing a new connection that would need 2FA.
@@ -51,6 +53,25 @@ class Proc:
     user: str = "?"
     elapsed: str = ""
     cmd: str = ""
+
+
+@dataclass
+class Desktop:
+    """A desktop pool's card: whose small processes are desktop apps, and what marks a pls run.
+
+    Args:
+        user: The pool's login user, who also uses the card as a desktop.
+        max_mib: A process of that user at or above this is never a desktop app.
+        run_marks: Substrings of a pls run's command line (the pool's scratch dir, ``res-eval``).
+    """
+
+    user: str
+    max_mib: int = DESKTOP_MIB
+    run_marks: tuple[str, ...] = ("res-eval",)
+
+    def owns(self, proc: Proc, args: str) -> bool:
+        """Whether ``proc`` (full command line ``args``) is a desktop app that leaves the card free."""
+        return proc.user == self.user and proc.mem_mib < self.max_mib and not any(m in args for m in self.run_marks)
 
 
 @dataclass
@@ -152,30 +173,36 @@ def _sections(out: str) -> dict[str, list[str]]:
     return sections
 
 
-def parse_gpu_query(out: str, pool: str, host: str) -> list[Card]:
+def parse_gpu_query(out: str, pool: str, host: str, desktop: Desktop | None = None) -> list[Card]:
     """Turn GPU_QUERY output into cards with their processes and a free/busy/held/unknown state.
 
     Args:
         out: Stdout of GPU_QUERY.
         pool: Pool name for the cards.
         host: Host name for the cards.
+        desktop: On a desktop pool, whose small processes are desktop apps: noted on the card, never a run.
 
     Returns:
         The cards; raises ProbeError when the output is incomplete, failed or has no cards.
     """
     sections = _sections(out)
-    owners = {}
+    desktop_mib: dict[int, int] = {}  # card index -> memory its desktop apps hold
+    owners, args_of = {}, {}
     for line in sections["ps"]:
         parts = line.split(None, 3)
         if len(parts) >= 3 and parts[0].isdigit():
             owners[int(parts[0])] = (parts[1], parts[2], short_cmd(parts[3]) if len(parts) > 3 else "")
+            args_of[int(parts[0])] = parts[3] if len(parts) > 3 else ""
     procs_by_uuid: dict[str, list[Proc]] = {}
+    apps_by_uuid: dict[str, list[Proc]] = {}  # a desktop pool's desktop apps
     for line in sections["apps"]:
         f = [x.strip() for x in line.split(",")]
         if len(f) != 3 or _int(f[1]) is None:
             raise ProbeError(f"unparsable process line: {line[:120]}")
         user, elapsed, cmd = owners.get(int(f[1]), ("?", "", ""))
-        procs_by_uuid.setdefault(f[0], []).append(Proc(int(f[1]), _int(f[2]) or 0, user, elapsed, cmd))
+        proc = Proc(int(f[1]), _int(f[2]) or 0, user, elapsed, cmd)
+        is_app = desktop is not None and desktop.owns(proc, args_of.get(proc.pid, ""))
+        (apps_by_uuid if is_app else procs_by_uuid).setdefault(f[0], []).append(proc)
     cards = []
     for line in sections["cards"]:
         f = [x.strip() for x in line.split(",")]
@@ -184,23 +211,30 @@ def parse_gpu_query(out: str, pool: str, host: str) -> list[Card]:
         # name may contain commas: index and uuid from the front, the three numbers from the back
         index, uuid, name = int(f[0]), f[1], ", ".join(f[2:-3])
         used, total, util = (_int(x) for x in f[-3:])
-        procs = procs_by_uuid.pop(uuid, [])
+        procs, apps = procs_by_uuid.pop(uuid, []), apps_by_uuid.pop(uuid, [])
         card = Card(
             pool, host, index, name, used if used is not None else -1, total or 0, util or 0, uuid=uuid, procs=procs
         )
+        if apps:
+            card.note = "desktop: " + ", ".join(dict.fromkeys(p.cmd or str(p.pid) for p in apps))
         if used is None or util is None:
             card.state, card.note = "unknown", "memory/utilization not reported"
         cards.append(card)
+        desktop_mib[index] = sum(p.mem_mib for p in apps)
     if not cards:
         raise ProbeError("nvidia-smi listed no cards")
-    if procs_by_uuid:
-        raise ProbeError(f"processes on cards missing from the card table: {', '.join(procs_by_uuid)}")
+    if procs_by_uuid or apps_by_uuid:
+        missing = ", ".join({**procs_by_uuid, **apps_by_uuid})
+        raise ProbeError(f"processes on cards missing from the card table: {missing}")
     _drop_stray_contexts(cards)
     for card in cards:
         if card.state == "unknown":
             continue
         if card.procs:
             card.state, card.mem_used = "busy", max(card.mem_used, sum(p.mem_mib for p in card.procs))
+        elif desktop is not None:  # compositing keeps utilization up, and graphics apps hold unlisted memory
+            if card.mem_used - desktop_mib[card.index] >= max(HELD_MIB, desktop.max_mib):
+                card.state = "held"
         elif card.mem_used >= HELD_MIB or card.util >= HELD_UTIL:
             card.state = "held"
     return cards
@@ -247,9 +281,14 @@ def probe_ssh_host(pool: Pool, host: str) -> Report:
         res = _run(["ssh", *SSH_OPTS, ssh_target(pool, host), REMOTE_QUERY], timeout=40)
     except subprocess.TimeoutExpired:
         return Report(label, pool.kind, error="unreachable (ssh timed out)")
+    user = ssh_target(pool, host).split("@")[0]
+    desktop = None
+    if pool.settings.get("desktop"):
+        marks = (ssh_scratch(pool, user) + "/", "res-eval")
+        desktop = Desktop(user, int(pool.settings.get("desktop_mib", DESKTOP_MIB)), marks)
     try:
-        cards = parse_gpu_query(res.stdout, pool.name, host)
-        return Report(label, pool.kind, cards, owner=ssh_target(pool, host).split("@")[0])
+        cards = parse_gpu_query(res.stdout, pool.name, host, desktop)
+        return Report(label, pool.kind, cards, owner=user)
     except ProbeError as exc:
         tail = res.stderr.strip().splitlines()[-1] if res.stderr.strip() else ""
         return Report(label, pool.kind, error=f"{exc}{f' ({tail})' if tail else ''}")

@@ -14,7 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import probe
 from inventory import Pool
-from probe import Card, ProbeError, Proc, Report, _gres_gpus, parse_gpu_query, ray_card, short_cmd
+from probe import Card, Desktop, ProbeError, Proc, Report, _gres_gpus, parse_gpu_query, ray_card, short_cmd
 from res import merge_duplicates
 
 CARDS = """\
@@ -104,6 +104,59 @@ class StrayContextTest(unittest.TestCase):
         cards = self.parse("GPU-1, 300, 300\nGPU-2, 300, 300\n")
         self.assertEqual([c.state for c in cards[1:3]], ["busy", "busy"])
         self.assertEqual(cards[1].note, "")
+
+
+class DesktopTest(unittest.TestCase):
+    """A desktop pool's card: the login user's small non-pls processes are desktop apps, not runs."""
+
+    CARD = "0, GPU-0, NVIDIA GeForce RTX 5070 Ti, {used}, 16303, {util}\n"
+    PS = """\
+    100 me       01:00:00 /opt/1Password/1password --type=gpu-process
+    101 me       01:00:00 /usr/lib/claude-desktop/claude-desktop --type=gpu-process
+    200 me       00:10:00 /scratch/me/hcrl_isaac_manager/ilab/bin/python /scratch/me/res-eval/code/x/eval.py
+    300 other    00:10:00 /usr/bin/firefox
+    400 me       00:10:00 python small_job.py --from /scratch/me/work
+"""
+    DESKTOP = Desktop("me", 2048, ("/scratch/me/", "res-eval"))
+
+    def parse(self, apps: str, used: int = 900, util: int = 0, desktop: Desktop | None = DESKTOP) -> Card:
+        text = output(cards=self.CARD.format(used=used, util=util), apps=apps, ps=self.PS)
+        return parse_gpu_query(text, "desk", "box", desktop)[0]
+
+    def test_small_own_apps_leave_the_card_free_with_a_note(self) -> None:
+        card = self.parse("GPU-0, 100, 300\nGPU-0, 101, 250\n", used=1800)
+        self.assertEqual((card.state, card.procs), ("free", []))
+        self.assertEqual(card.note, "desktop: 1password, claude-desktop")
+
+    def test_without_the_setting_the_same_apps_make_it_busy(self) -> None:
+        self.assertEqual(self.parse("GPU-0, 100, 300\n", desktop=None).state, "busy")
+
+    def test_a_big_own_process_is_busy(self) -> None:
+        card = self.parse("GPU-0, 100, 3000\n", used=3100)
+        self.assertEqual(([p.pid for p in card.procs], card.state), ([100], "busy"))
+
+    def test_another_users_process_is_busy(self) -> None:
+        self.assertEqual(self.parse("GPU-0, 300, 200\n").state, "busy")
+
+    def test_a_pls_run_is_busy_however_small(self) -> None:
+        for pid in (200, 400):  # a stage under res-eval, or a command naming the pool's scratch dir
+            with self.subTest(pid=pid):
+                self.assertEqual(self.parse(f"GPU-0, {pid}, 400\n").state, "busy")
+
+    def test_high_utilization_alone_does_not_hold_a_desktop_card(self) -> None:
+        self.assertEqual(self.parse("", used=900, util=60).state, "free")
+        self.assertEqual(self.parse("", used=900, util=60, desktop=None).state, "held")
+
+    def test_memory_nobody_lists_still_holds_it(self) -> None:
+        self.assertEqual(self.parse("GPU-0, 100, 300\n", used=12000).state, "held")
+
+    def test_the_ssh_probe_reads_the_pool_settings(self) -> None:
+        pool = Pool("desk", "ssh", {"hosts": ["box"], "user": "me", "scratch": "/scratch/me", "desktop": True})
+        apps = "GPU-0, 100, 300\nGPU-0, 400, 300\n"
+        text = output(cards=self.CARD.format(used=900, util=40), apps=apps, ps=self.PS)
+        with mock.patch.object(probe, "_run", return_value=subprocess.CompletedProcess([], 0, text, "")):
+            card = probe.probe_ssh_host(pool, "box").cards[0]
+        self.assertEqual(([p.pid for p in card.procs], card.note), ([400], "desktop: 1password"))
 
 
 class ParseFailureTest(unittest.TestCase):

@@ -217,6 +217,14 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   `/var/local/<user>/hcrl_isaac_manager` on ssh pools, this machine's checkout locally), `scratch` (default
   `/var/local/<user>`, `~/tmp` locally) and `pin`. Keep `scratch` on local disk, never a quota'd NFS home: snapshots,
   checkpoints and Kit caches live there.
+- Guardrails, for a box someone else also works at (e.g. a desktop with a small disk), all optional:
+  `min_free_gb = N` refuses to stage (and releases the lease) when the filesystem holding `scratch` has less than N
+  GB free; `max_hours = H` refuses a `--timeout` over H and gives a run without one `--timeout H h`, and the runner
+  itself then stops the run's process group at the limit (TERM, KILL 60 s on), so a `--detach` run or one whose
+  session died is bounded too; `desktop = true` lets the login user's own processes under `desktop_mib` (default
+  2048) that are not pls runs (none with `scratch` or `res-eval` in their command line) leave the card free, listed
+  in its note as `desktop: ...`, and drops the utilization test for "held" (compositing keeps it up); memory nobody
+  lists still holds the card at `desktop_mib` or above. `max_hours` and `min_free_gb` apply to `local` pools too.
 
 ## Pools
 
@@ -225,7 +233,7 @@ Every compute pool has a `kind`, which picks the backend that probes it:
 | kind | probes | settings |
 |---|---|---|
 | `local` | `nvidia-smi` on this machine | |
-| `ssh` | `nvidia-smi` on each host over ssh (keys, BatchMode) | `hosts`, `user`, `domain`, `pin`, `render`, `workspace`, `scratch`, `cpu_budget` |
+| `ssh` | `nvidia-smi` on each host over ssh (keys, BatchMode) | `hosts`, `user`, `domain`, `pin`, `render`, `workspace`, `scratch`, `cpu_budget`, `min_free_gb`, `max_hours`, `desktop`, `desktop_mib` |
 | `slurm` | your jobs (`squeue`) and, per running job, `nvidia-smi` in an `srun --overlap` step over the cluster's SSH master | from the cluster profile |
 | `ray` | the Ray dashboard API (nodes, GPUs, running jobs) | `address` |
 
@@ -234,6 +242,7 @@ yours, in `compute.local.toml` (gitignored, merged over it; the main checkout's 
 
 ```bash
 pls setup --add lab-a40 --kind ssh --hosts box3,box4 --user <login> --domain lab.example.edu [--pin device] [--render]
+pls setup --add desk --kind ssh --hosts <box> --user <login> --min-free-gb 25 --max-hours 2 --desktop  # a shared desktop
 pls setup --add ray --kind ray --address http://<head>:8265      # the pool `pls run --on ray` submits to
 pls setup --add lab-a40 ... --update                              # replace a pool
 ```

@@ -7,7 +7,8 @@ compute.local.toml:
     inventory.py ssh-hosts                  every ssh pool's hosts, as "<pool> <host> <target>" lines
     inventory.py host-setting <host> <key>  a setting of the ssh pool that lists the host ("" when unset)
     inventory.py ray-address                the dashboard address of the `ray` pool
-    inventory.py add <name> --kind ssh --hosts a,b --user u [--domain d] [--pin device] [--render] [--update]
+    inventory.py add <name> --kind ssh --hosts a,b --user u [--domain d] [--pin device] [--render]
+                     [--min-free-gb N] [--max-hours H] [--desktop] [--update]
     inventory.py add <name> --kind ray --address http://<head>:8265 [--update]
 """
 
@@ -145,6 +146,11 @@ def ssh_target(pool: Pool, host: str) -> str:
     return f"{pool.settings['user']}@{fqdn}"
 
 
+def ssh_scratch(pool: Pool, user: str) -> str:
+    """The dir an ssh pool's runs stage under: its ``scratch`` setting, else ``/var/local/<user>``."""
+    return pool.settings.get("scratch", f"/var/local/{user}")
+
+
 def ssh_pool_of(host: str, pools: list[Pool]) -> Pool | None:
     """The ssh pool that lists ``host`` (a short name, or one with the pool's domain or a user@ prefix)."""
     bare = host.split("@")[-1]
@@ -213,6 +219,8 @@ def ray_address(pools: list[Pool]) -> str:
 def _toml_value(val: object) -> str:
     if isinstance(val, bool):
         return "true" if val else "false"
+    if isinstance(val, int | float):
+        return str(val)
     if isinstance(val, list):
         return "[" + ", ".join(_toml_value(v) for v in val) + "]"
     return '"' + str(val).replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -246,7 +254,7 @@ def write_pool(path: Path, name: str, settings: dict, update: bool = False) -> N
 
 
 ADD_USAGE = """pls setup --add <name> --kind ssh --hosts <a,b> --user <login> [--domain <d>] [--pin device] [--render]
-                       [--update]
+                       [--min-free-gb N] [--max-hours H] [--desktop] [--update]
        pls setup --add <name> --kind ray --address http://<head>:8265 [--update]"""
 
 
@@ -264,6 +272,11 @@ def cmd_add(argv: list[str]) -> None:
     ap.add_argument(
         "--render", action="store_true", help="ssh: RT-core cards; scripts/larg/train.sh records in-process"
     )
+    ap.add_argument("--min-free-gb", type=float, help="ssh: refuse to stage when scratch has less disk free (GB)")
+    ap.add_argument("--max-hours", type=float, help="ssh: the longest a run may last; runs without --timeout get it")
+    ap.add_argument(
+        "--desktop", action="store_true", help="ssh: the cards are also your desktop's; your small apps leave them free"
+    )
     ap.add_argument("--address", help="ray: the dashboard address, http://<head>:8265")
     ap.add_argument("--update", action="store_true", help="replace the pool if it exists")
     args = ap.parse_args(argv)
@@ -279,11 +292,22 @@ def cmd_add(argv: list[str]) -> None:
         settings.update({k: v for k, v in (("domain", args.domain), ("pin", args.pin)) if v})
         if args.render:
             settings["render"] = True
+        for key, val in (("min_free_gb", args.min_free_gb), ("max_hours", args.max_hours)):
+            if val is not None:
+                if val <= 0:
+                    ap.error(f"--{key.replace('_', '-')} takes a positive number, not {val:g}")
+                settings[key] = int(val) if val == int(val) else val
+        if args.desktop:
+            settings["desktop"] = True
     else:
         if not args.address:
             ap.error("--kind ray needs --address")
-        if args.hosts or args.user or args.domain or args.pin or args.render:
-            ap.error("--hosts, --user, --domain, --pin and --render are for --kind ssh")
+        numbers = (args.min_free_gb, args.max_hours)
+        if any((args.hosts, args.user, args.domain, args.pin, args.render, args.desktop)) or numbers != (None, None):
+            ap.error(
+                "--hosts, --user, --domain, --pin, --render, --min-free-gb, --max-hours and --desktop are for"
+                " --kind ssh"
+            )
         settings = {"kind": "ray", "address": args.address}
     path = local_config_path()
     try:

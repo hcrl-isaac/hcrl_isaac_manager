@@ -79,6 +79,23 @@ class AddPoolTest(unittest.TestCase):
         self.assertEqual(inv.resolve_ssh_target("a", list(pools.values())), "u@a.x.org")
         self.assertEqual(inv.resolve_ssh_target("b.x.org", list(pools.values())), "u@b.x.org")
 
+    def test_guardrail_settings_are_written_as_numbers_and_a_flag(self) -> None:
+        self.add(
+            "desk", "--kind", "ssh", "--hosts", "box", "--user", "u", "--min-free-gb", "25", "--max-hours", "1.5",
+            "--desktop",
+        )  # fmt: skip
+        settings = {p.name: p for p in inv.load_pools()}["desk"].settings
+        self.assertEqual(
+            {k: settings[k] for k in ("min_free_gb", "max_hours", "desktop")},
+            {"min_free_gb": 25, "max_hours": 1.5, "desktop": True},
+        )
+        for argv in (
+            ["x", "--kind", "ssh", "--hosts", "h", "--user", "u", "--max-hours", "0"],
+            ["r", "--kind", "ray", "--address", "http://h", "--desktop"],
+        ):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit), mock.patch("sys.stderr"):
+                self.add(*argv)
+
     def test_a_ray_pool_gives_the_ray_address(self) -> None:
         self.add("ray", "--kind", "ray", "--address", "http://h:8265/")
         self.assertEqual(inv.ray_address(inv.load_pools()), "http://h:8265")
