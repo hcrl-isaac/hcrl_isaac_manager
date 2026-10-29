@@ -75,7 +75,7 @@ VERBS: dict[str, tuple[str, str, str, Callable[[list[str]], None]]] = {
     "connect": ("cluster", "--on C", "open a cluster's SSH connection (2FA once; others reuse it)", infra.connect),
     "disconnect": ("cluster", "--on C", "close it", infra.disconnect),
     "shell": ("cluster", "--on C", "an interactive shell on the cluster's held node", infra.shell),
-    "stage": ("cluster", "--on C [list|rm T|<name> <repo>=<ref>...]", "stage code trees on a cluster (pls run does it for you)", infra.stage),
+    "stage": ("cluster", "--on C [data|list|rm T|<name> <repo>=<ref>...]", "stage code trees on a cluster (pls run does it for you)", infra.stage),
     "setup": ("workspace", "[--on C | --add NAME]", "install this machine; or build/push a cluster's image, or add a cluster", _setup),
     "deps": ("workspace", "", "manager base env: the ilab venv (with pls), uv, gitman, git-lfs, W&B creds", _no_args(workspace.deps)),
     "install": ("workspace", "", "layer Isaac Lab 3 (uv-locked source clone) + every workspace package onto the ilab venv", _no_args(workspace.install)),
