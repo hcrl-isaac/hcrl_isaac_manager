@@ -15,30 +15,35 @@ def flat(text: str) -> str:
     return re.sub(r"\\\n", " ", text)
 
 
-def pip_installs(text: str) -> list[str]:
-    """Every `pip install ...` argument list, whitespace-normalized and with file paths cut to their names, in order."""
-    args = [" ".join(m.split()) for m in re.findall(r"-m pip install ([^&\n]+)", flat(text))]
+def uv_steps(text: str) -> list[str]:
+    """Every `uv sync` / `uv pip ...` argument list, whitespace-normalized and with file paths cut to their names."""
+    args = [" ".join(m.split()) for m in re.findall(r"\buv (sync [^&\n]+|pip [^&\n]+)", flat(text))]
     return [re.sub(r"/\S+/([^/\s]+)", r"\1", a) for a in args]
 
 
 def apt_installs(text: str) -> list[list[str]]:
     """The package list of every `apt-get install`, in order."""
-    return [sorted(m.split()) for m in re.findall(r"apt-get install -y --no-install-recommends ([^&\n]+)", flat(text))]
+    return [sorted(m.split()) for m in re.findall(r"apt-get install -y --no-install-recommends ([^&\n;]+)", flat(text))]
 
 
 def placeholders(text: str) -> set[str]:
-    """Paths the image pre-creates (mkdir -p / touch) as bind points, with ${ISAACSIM_ROOT_PATH} resolved."""
-    text = flat(text).replace("${ISAACSIM_ROOT_PATH}", "/isaac-sim")
+    """Paths the image pre-creates (mkdir -p / touch) as bind points."""
     found = set()
-    for cmd in re.findall(r"(?:mkdir -p|touch) ([^&\n]+)", text):
+    for cmd in re.findall(r"(?:mkdir -p|touch) ([^&\n;]+)", flat(text)):
         found |= {p for p in cmd.split() if p.startswith("/")}
     return found
 
 
+def docker_args(text: str) -> dict[str, str]:
+    """The Dockerfile's Isaac Lab ARG defaults."""
+    return {k: v.strip('"') for k, v in re.findall(r"^ARG (ISAACLAB_\w+)=(.+)$", text, re.M)}
+
+
 class RecipeTest(unittest.TestCase):
-    def test_same_pip_installs_in_the_same_order(self) -> None:
-        self.assertTrue(pip_installs(DOCKERFILE), "the Dockerfile's pip installs were found")
-        self.assertEqual(pip_installs(RECIPE), pip_installs(DOCKERFILE))
+    def test_same_uv_steps_in_the_same_order(self) -> None:
+        steps = uv_steps(DOCKERFILE)
+        self.assertTrue(any(s.startswith("sync ") and "--frozen" in s for s in steps), "the venv comes from the lock")
+        self.assertEqual(uv_steps(RECIPE), steps)
 
     def test_same_apt_installs(self) -> None:
         self.assertTrue(apt_installs(DOCKERFILE))
@@ -48,13 +53,16 @@ class RecipeTest(unittest.TestCase):
         docker_env = set(re.findall(r"^ENV (\w+)=", DOCKERFILE, re.M)) - BUILD_ONLY_ENV
         environment = RECIPE.split("%environment", 1)[1].split("%post", 1)[0]
         self.assertEqual(set(re.findall(r"export (\w+)=", environment)), docker_env)
-        self.assertNotIn("omni.usd", environment, "Kit's USD libraries are Python's alone (setup_python_env.sh)")
 
-    def test_kits_usd_is_one_copy_added_for_python(self) -> None:
-        post = RECIPE.split("%post", 1)[1].split("%test", 1)[0]
-        self.assertIn('[ "$#" -ne 1 ]', post, "more than one omni.usd.libs fails the build")
-        self.assertNotRegex(post, r"\w+=\(|\$\{#\w+\[", "%post runs in sh, which has no arrays")
-        self.assertIn(">> /isaac-sim/setup_python_env.sh", post)
+    def test_same_isaaclab_defaults(self) -> None:
+        arguments = RECIPE.split("%arguments", 1)[1].split("%files", 1)[0]
+        recipe_args = dict(line.strip().split("=", 1) for line in arguments.strip().splitlines())
+        self.assertTrue(docker_args(DOCKERFILE))
+        for key, value in docker_args(DOCKERFILE).items():
+            self.assertEqual(recipe_args.get(key), value, key)
+        uv_image = re.search(r"^FROM ghcr\.io/astral-sh/uv:(\S+) AS uv$", DOCKERFILE, re.M)
+        self.assertIsNotNone(uv_image, "the Dockerfile copies a pinned uv")
+        self.assertEqual(recipe_args.get("UV_VERSION"), uv_image.group(1))
 
     def test_same_bind_point_placeholders(self) -> None:
         self.assertEqual(placeholders(RECIPE) - {"/opt/hcrl-build"}, placeholders(DOCKERFILE))
@@ -65,10 +73,10 @@ class RecipeTest(unittest.TestCase):
         self.assertIn("exec /usr/local/bin/hcrl-entrypoint", RECIPE.split("%runscript", 1)[1])
 
     def test_the_base_is_the_dockerfiles_pulled_as_a_local_image(self) -> None:
-        self.assertIn("Bootstrap: localimage\nFrom: isaac-sim-base.sif", RECIPE)
+        self.assertIn("Bootstrap: localimage\nFrom: base.sif", RECIPE)
         interface = (ROOT / "scripts" / "cluster" / "cluster_interface.sh").read_text()
-        self.assertIn("ARG ISAACSIM_BASE_IMAGE=", interface, "setup pulls the Dockerfile's base, not its own copy")
-        self.assertIn("ARG ISAACSIM_VERSION=", interface)
+        self.assertIn("ARG BASE_IMAGE=", interface, "setup pulls the Dockerfile's base, not its own copy")
+        self.assertIn("isaaclab-args", interface, "and passes the docker build's Isaac Lab ref and extras")
 
 
 if __name__ == "__main__":

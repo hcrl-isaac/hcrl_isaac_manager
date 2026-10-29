@@ -64,8 +64,13 @@ build_remote_sif() {
     source_cluster_env
     local build="${CLUSTER_SIF_PATH}/build-${IMAGE_NAME}" submit="${CONFIG_DIR}/${CLUSTER}/submit_job_slurm.sh"
     local dockerfile="${SCRIPT_DIR}/../docker/Dockerfile" base flags="" flag value free min="${CLUSTER_BUILD_MIN_FREE_GB:-40}"
-    # the same base image as the docker build, from its ARGs
-    base="$(sed -nE 's/^ARG ISAACSIM_BASE_IMAGE=(.+)/\1/p' "$dockerfile"):$(sed -nE 's/^ARG ISAACSIM_VERSION=(.+)/\1/p' "$dockerfile")"
+    local build_args="" arg
+    # the same base image as the docker build, from its ARG, and the same Isaac Lab ref and extras
+    base="$(sed -nE 's/^ARG BASE_IMAGE=(.+)/\1/p' "$dockerfile")"
+    while IFS= read -r arg; do
+        build_args+=" --build-arg '${arg}'"
+    done < <("${SCRIPT_DIR}/../docker/docker_interface.sh" isaaclab-args)
+    [ -n "$build_args" ] || { echo "[ERROR] no Isaac Lab ref from docker_interface.sh isaaclab-args" >&2; exit 1; }
     for flag in -p -A -q --reservation; do  # the profile's own submission flags, in any spelling
         value="$(python3 "${SCRIPT_DIR}/tools/merge_profile.py" get "$submit" "$flag")"
         [ -n "$value" ] && flags+=" ${flag} ${value}"
@@ -92,12 +97,12 @@ unset SINGULARITY_BINDPATH APPTAINER_BINDPATH SINGULARITYENV_LD_PRELOAD APPTAINE
 cd '${build}'
 uname -m; apptainer --version
 # a pulled base: a docker bootstrap loses the image's linked files when unprivileged
-if [ \"\$(cat isaac-sim-base.ref 2>/dev/null)\" != '${base}' ]; then
-    apptainer pull --force isaac-sim-base.sif.\$SLURM_JOB_ID 'docker://${base}'
-    mv -f isaac-sim-base.sif.\$SLURM_JOB_ID isaac-sim-base.sif
-    echo '${base}' > isaac-sim-base.ref
+if [ \"\$(cat base.ref 2>/dev/null)\" != '${base}' ]; then
+    apptainer pull --force base.sif.\$SLURM_JOB_ID 'docker://${base}'
+    mv -f base.sif.\$SLURM_JOB_ID base.sif
+    echo '${base}' > base.ref
 fi
-apptainer build --fakeroot --force ${IMAGE_NAME}.sif.partial.\$SLURM_JOB_ID hcrl-isaac.def
+apptainer build --fakeroot --force${build_args} ${IMAGE_NAME}.sif.partial.\$SLURM_JOB_ID hcrl-isaac.def
 mv -f ${IMAGE_NAME}.sif.partial.\$SLURM_JOB_ID '${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif'
 echo \"[cluster] built ${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif\""
     local opts="-N 1 -t ${CLUSTER_BUILD_TIME:-02:00:00} -J ${IMAGE_NAME}-build -o '${build}/build-%j.log'${flags}"

@@ -272,7 +272,7 @@ Claude sessions use the same commands, with a few differences:
 ### `docker`
 
 - Installs and configures Docker if necessary
-- Builds and starts the Isaac Lab Docker container
+- Builds the shared image `hcrl-isaac:latest` (Ubuntu 24.04 + a uv venv from Isaac Lab 3's lock; scripts/docker/)
 
 ### `run`
 
