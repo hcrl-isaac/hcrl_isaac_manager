@@ -184,8 +184,8 @@ def pool_timeout(pool: Pool, timeout: float) -> float:
 
 
 def check_free_disk(t: Target, pool: Pool) -> None:
-    """Refuse to stage when the filesystem holding the target's scratch dir has less free than ``min_free_gb``."""
-    need = pool.settings.get("min_free_gb")
+    """Refuse to stage when the filesystem holding the target's scratch dir has less free than ``min_free_disk_gb``."""
+    need = pool.settings.get("min_free_disk_gb")
     if not need:
         return
     q = shlex.quote
@@ -198,11 +198,13 @@ def check_free_disk(t: Target, pool: Pool) -> None:
     except subprocess.TimeoutExpired:
         out = ""
     if not out.isdigit():
-        sys.exit(f"[res] could not read the free disk under {t.scratch} on {t.host} (pool min_free_gb): nothing staged")
+        sys.exit(
+            f"[res] could not read the free disk under {t.scratch} on {t.host} (pool min_free_disk_gb): nothing staged"
+        )
     free = int(out) / 1024**2
     if free < float(need):
         sys.exit(
-            f"[res] {t.host} has {free:.1f} GB free under {t.scratch}, below the pool's min_free_gb {need}: nothing staged"
+            f"[res] {t.host} has {free:.1f} GB free under {t.scratch}, below the pool's min_free_disk_gb {need}: nothing staged"
         )
 
 

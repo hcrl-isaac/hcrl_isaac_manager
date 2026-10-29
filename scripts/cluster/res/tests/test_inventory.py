@@ -81,13 +81,13 @@ class AddPoolTest(unittest.TestCase):
 
     def test_guardrail_settings_are_written_as_numbers_and_a_flag(self) -> None:
         self.add(
-            "desk", "--kind", "ssh", "--hosts", "box", "--user", "u", "--min-free-gb", "25", "--max-hours", "1.5",
+            "desk", "--kind", "ssh", "--hosts", "box", "--user", "u", "--min-free-disk-gb", "25", "--max-hours", "1.5",
             "--desktop",
         )  # fmt: skip
         settings = {p.name: p for p in inv.load_pools()}["desk"].settings
         self.assertEqual(
-            {k: settings[k] for k in ("min_free_gb", "max_hours", "desktop")},
-            {"min_free_gb": 25, "max_hours": 1.5, "desktop": True},
+            {k: settings[k] for k in ("min_free_disk_gb", "max_hours", "desktop")},
+            {"min_free_disk_gb": 25, "max_hours": 1.5, "desktop": True},
         )
         for argv in (
             ["x", "--kind", "ssh", "--hosts", "h", "--user", "u", "--max-hours", "0"],

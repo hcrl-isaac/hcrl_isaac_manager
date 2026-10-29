@@ -1434,16 +1434,16 @@ class EvalRunTest(Isolated):
         rc, _ = self._eval("--any", "--root", "/r", "--venv", "hcrl_sim2real[mjx]")
         self.assertIn("pass one", str(rc))
 
-    def test_min_free_gb_refuses_to_stage_on_a_full_disk_and_releases(self) -> None:
-        self.pool.settings["min_free_gb"] = 10**9
+    def test_min_free_disk_gb_refuses_to_stage_on_a_full_disk_and_releases(self) -> None:
+        self.pool.settings["min_free_disk_gb"] = 10**9
         rc, _ = self._eval("--any", "--env", "MODE=ok")
-        self.assertIn("below the pool's min_free_gb 1000000000: nothing staged", str(rc))
+        self.assertIn("below the pool's min_free_disk_gb 1000000000: nothing staged", str(rc))
         self.assertIn(str(self.tmp / "scratch"), str(rc))
         self.assertEqual(self._leases(), [], "the lease is released")
         self.assertFalse((self.tmp / "scratch").exists(), "nothing was staged")
 
-    def test_min_free_gb_below_the_free_disk_runs(self) -> None:
-        self.pool.settings["min_free_gb"] = 0.001
+    def test_min_free_disk_gb_below_the_free_disk_runs(self) -> None:
+        self.pool.settings["min_free_disk_gb"] = 0.001
         rc, out = self._eval("--any", "--env", "MODE=ok")
         self.assertEqual(rc, 0, out)
 

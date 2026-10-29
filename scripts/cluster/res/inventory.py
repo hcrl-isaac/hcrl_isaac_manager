@@ -8,7 +8,7 @@ compute.local.toml:
     inventory.py host-setting <host> <key>  a setting of the ssh pool that lists the host ("" when unset)
     inventory.py ray-address                the dashboard address of the `ray` pool
     inventory.py add <name> --kind ssh --hosts a,b --user u [--domain d] [--pin device] [--render]
-                     [--min-free-gb N] [--max-hours H] [--desktop] [--update]
+                     [--min-free-disk-gb N] [--max-hours H] [--desktop] [--update]
     inventory.py add <name> --kind ray --address http://<head>:8265 [--update]
 """
 
@@ -254,7 +254,7 @@ def write_pool(path: Path, name: str, settings: dict, update: bool = False) -> N
 
 
 ADD_USAGE = """pls setup --add <name> --kind ssh --hosts <a,b> --user <login> [--domain <d>] [--pin device] [--render]
-                       [--min-free-gb N] [--max-hours H] [--desktop] [--update]
+                       [--min-free-disk-gb N] [--max-hours H] [--desktop] [--update]
        pls setup --add <name> --kind ray --address http://<head>:8265 [--update]"""
 
 
@@ -272,7 +272,7 @@ def cmd_add(argv: list[str]) -> None:
     ap.add_argument(
         "--render", action="store_true", help="ssh: RT-core cards; scripts/larg/train.sh records in-process"
     )
-    ap.add_argument("--min-free-gb", type=float, help="ssh: refuse to stage when scratch has less disk free (GB)")
+    ap.add_argument("--min-free-disk-gb", type=float, help="ssh: refuse to stage when scratch has less disk free (GB)")
     ap.add_argument("--max-hours", type=float, help="ssh: the longest a run may last; runs without --timeout get it")
     ap.add_argument(
         "--desktop", action="store_true", help="ssh: the cards are also your desktop's; your small apps leave them free"
@@ -292,7 +292,7 @@ def cmd_add(argv: list[str]) -> None:
         settings.update({k: v for k, v in (("domain", args.domain), ("pin", args.pin)) if v})
         if args.render:
             settings["render"] = True
-        for key, val in (("min_free_gb", args.min_free_gb), ("max_hours", args.max_hours)):
+        for key, val in (("min_free_disk_gb", args.min_free_disk_gb), ("max_hours", args.max_hours)):
             if val is not None:
                 if val <= 0:
                     ap.error(f"--{key.replace('_', '-')} takes a positive number, not {val:g}")
@@ -302,10 +302,10 @@ def cmd_add(argv: list[str]) -> None:
     else:
         if not args.address:
             ap.error("--kind ray needs --address")
-        numbers = (args.min_free_gb, args.max_hours)
+        numbers = (args.min_free_disk_gb, args.max_hours)
         if any((args.hosts, args.user, args.domain, args.pin, args.render, args.desktop)) or numbers != (None, None):
             ap.error(
-                "--hosts, --user, --domain, --pin, --render, --min-free-gb, --max-hours and --desktop are for"
+                "--hosts, --user, --domain, --pin, --render, --min-free-disk-gb, --max-hours and --desktop are for"
                 " --kind ssh"
             )
         settings = {"kind": "ray", "address": args.address}
