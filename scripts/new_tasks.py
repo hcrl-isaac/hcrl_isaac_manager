@@ -52,7 +52,6 @@ def _files(name: str, org: str) -> dict[str, str]:
             "import_packages(__name__, _BLACKLIST_PKGS)\n"
         ),
         f"{pkg}/example/__init__.py": (
-            "import gymnasium as gym  # noqa: F401\n\n"
             "from hcrl_isaaclab.tasks_registry import register_task\n\n"
             "# Registers as '" + name + "/Example-v0' (source auto-derived from the package name).\n"
             "register_task(\n"
@@ -66,15 +65,19 @@ def _files(name: str, org: str) -> dict[str, str]:
             ")\n"
         ),
         f"{pkg}/example/example_cfg.py": (
-            '"""Minimal example task -- subclass a core base and override per-robot bits here.\n\n'
-            "Replace this with real configs; it exists so a freshly-generated repo registers + loads.\n"
+            '"""Example task: T1 velocity tracking, subclassed so a freshly generated repo registers, builds and trains.\n\n'
+            "Replace it with this project's tasks; override per-task terms in the subclasses.\n"
             '"""\n\n'
-            "# from hcrl_isaaclab.tasks.locomotion.locomotion_env_cfg import LocomotionEnvCfg\n"
-            "# from hcrl_isaaclab.tasks.locomotion.g1.ppo_cfg import G1VelocityPPORunnerCfg\n"
-            "#\n"
-            "# @configclass\n"
-            f"# class {Pkg}ExampleTaskCfg(LocomotionEnvCfg): ...\n"
-            f"# class {Pkg}ExamplePPORunnerCfg(G1VelocityPPORunnerCfg): ...\n"
+            "from isaaclab.utils import configclass\n\n"
+            "from hcrl_isaaclab.tasks.locomotion.t1.ppo_cfg import T1VelocityPPORunnerCfg\n"
+            "from hcrl_isaaclab.tasks.locomotion.t1.task_cfg import T1VelocityTaskCfg\n\n\n"
+            "@configclass\n"
+            f"class {Pkg}ExampleTaskCfg(T1VelocityTaskCfg):\n"
+            '    """The example task\'s env cfg."""\n\n\n'
+            "@configclass\n"
+            f"class {Pkg}ExamplePPORunnerCfg(T1VelocityPPORunnerCfg):\n"
+            '    """The example task\'s PPO runner cfg."""\n\n'
+            f'    experiment_name = "{name}_example"\n'
         ),
         "README.md": (
             f"# {pkg}\n\n"
@@ -107,16 +110,72 @@ def _files(name: str, org: str) -> dict[str, str]:
         ),
         "pytest.ini": "[pytest]\ntestpaths = tests\nmarkers =\n    gpu: heavier check that instantiates env cfgs (needs a GPU)\n",
         "tests/conftest.py": (
-            '"""Pytest fixtures: launch Isaac Sim once per session (skip when absent)."""\n\n'
+            '"""Pytest fixtures for the smoke tests.\n\n'
+            "With the full Isaac Sim runtime installed, Kit is launched at conftest import, before the task packages\n"
+            "import. Kit-less Isaac Lab 3 imports without an app, so ``sim_app`` is then ``None``; with no Isaac Lab\n"
+            'at all (e.g. a hosted CI runner) the suite is skipped.\n"""\n\n'
+            "import importlib.util\n"
+            "import sys\n\n"
             "import pytest\n\n"
-            "from hcrl_isaaclab import testing\n\n\n"
+            '_ISAAC_AVAILABLE = importlib.util.find_spec("isaaclab") is not None\n'
+            "# the importer extra installs part of the isaacsim namespace, so test for Kit itself\n"
+            "try:\n"
+            '    _KIT_AVAILABLE = _ISAAC_AVAILABLE and importlib.util.find_spec("isaacsim.simulation_app") is not None\n'
+            "except ValueError:  # Isaac Sim's package rewires its modules, leaving them without a spec\n"
+            "    _KIT_AVAILABLE = True\n"
+            "_APP = None\n"
+            "if _KIT_AVAILABLE:\n"
+            "    from isaaclab.app import AppLauncher\n\n"
+            '    # Kit parses sys.argv and segfaults on pytest\'s flags (e.g. `-m "not gpu"`); hide them for the launch.\n'
+            "    _argv, sys.argv = sys.argv, sys.argv[:1]\n"
+            "    _APP = AppLauncher(headless=True, multi_gpu=False).app\n"
+            "    sys.argv = _argv\n\n\n"
             "def pytest_configure(config):\n"
             '    config.addinivalue_line("markers", "gpu: heavier check that instantiates env cfgs (needs a GPU)")\n\n\n'
             '@pytest.fixture(scope="session")\n'
             "def sim_app():\n"
-            "    if not testing.isaac_sim_available():\n"
-            '        pytest.skip("Isaac Sim not installed")\n'
-            "    return testing.launch_app(headless=True)\n"
+            "    if not _ISAAC_AVAILABLE:\n"
+            '        pytest.skip("Isaac Lab not installed")\n'
+            "    return _APP\n"
+        ),
+        ".pre-commit-config.yaml": (
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    rev: v0.14.0\n"
+            "    hooks:\n"
+            "      - id: ruff-check\n"
+            "      - id: ruff-format\n"
+            "  - repo: https://github.com/codespell-project/codespell\n"
+            "    rev: v2.2.6\n"
+            "    hooks:\n"
+            "      - id: codespell\n"
+            "        additional_dependencies:\n"
+            "        - tomli\n"
+        ),
+        "ruff.toml": (
+            'line-length = 120\ntarget-version = "py311"\npreview = true\n\n'
+            "[lint]\n"
+            'select = ["E", "W", "F", "UP", "N", "B", "SIM", "TID", "ANN", "I", "PERF", "RUF"]\n'
+            'ignore = ["B006", "B007", "B008", "B028", "ANN401", "N801", "N802", "N803", "N806", "N813", "E402", '
+            '"E501", "E741", "RUF012"]\n'
+            'per-file-ignores = {"*/__init__.py" = ["F401", "F403"], "tests/*" = ["ANN"]}\n\n'
+            "[lint.isort]\n"
+            'section-order = ["future", "standard-library", "third-party", "omniverse-extensions", "isaaclab", '
+            '"first-party", "local-folder"]\n'
+            'extra-standard-library = ["numpy", "torch", "tensordict", "warp", "typing_extensions", "git"]\n'
+            f'known-first-party = ["hcrl_isaaclab", "{pkg}"]\n\n'
+            "[lint.isort.sections]\n"
+            '"omniverse-extensions" = ["isaacsim", "omni", "pxr", "carb", "usdrt"]\n'
+            '"isaaclab" = ["isaaclab", "isaaclab_assets", "isaaclab_rl", "isaaclab_tasks"]\n'
+        ),
+        "CLAUDE.md": (
+            f"# CLAUDE.md: {pkg}\n\n"
+            f"Tasks for the `{name}` project, registered under the `{name}/` namespace. This repo lives in an\n"
+            "hcrl_isaac_manager workspace (`resources/` of the manager); the manager's CLAUDE.md holds the workspace\n"
+            "conventions (task ids, reward design, code style, running code with `pls`), which apply here.\n\n"
+            "- Build check: `pls test "
+            f'{pkg}` (the CPU smoke, `pytest -m "not gpu"`); the GPU tier is `pytest -m gpu`.\n'
+            "- Push gate: `pre-commit run --all-files` (ruff + codespell), as CI runs it.\n"
         ),
         "tests/test_smoke.py": (
             f'"""Smoke tests for {pkg} (CPU: register + build; GPU: create + reset)."""\n\n'
@@ -178,7 +237,9 @@ def main() -> None:
     print(f"[new] scaffolded {dest} ({name}/ namespace).")
     print(
         f"[new] next: git init it, push to {args.org}/{name}_tasks, add '{name}' to "
-        "workspace.defaults.yaml available_projects, then pick it in `pls setup`."
+        "workspace.defaults.yaml available_projects, then pick it in `pls setup`. Until it is registered there,\n"
+        "      `pls run --wt <set>` and remote runs skip it (they stage only registered repos); run it locally with\n"
+        f"      `pls test {name}_tasks` and `pls run` after `pls setup` installs it."
     )
 
 
