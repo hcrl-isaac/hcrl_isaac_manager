@@ -31,7 +31,7 @@ from types import ModuleType
 
 import checkpoints as ck
 import leases as ls
-from inventory import MANAGER_DIR, RES_DIR, Pool, profile_value, ssh_pool_of
+from inventory import MANAGER_DIR, RES_DIR, Pool, profile_value, ssh_pool_of, ssh_scratch
 from probe import MASTER_OPTS, SSH_OPTS, box_cpu_state
 
 CLUSTER_DEV = MANAGER_DIR / "scripts" / "cluster" / "cluster_dev" / "cluster_dev.sh"
@@ -43,6 +43,7 @@ CONTAINER_TMP = "/tmp/res-eval"  # in the container's /tmp, the step's own node-
 CKPT_CACHE = Path.home() / ".cache" / "hcrl_res" / "checkpoints"
 TRACEBACK = "Traceback (most recent call last)"
 TIMED_OUT = 124
+LIMIT_GRACE_S = 120  # a foreground run's runner-side limit trails its --timeout by this much
 _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -152,9 +153,59 @@ def make_target(pool: Pool, host: str, gpu: int, job: str = "", uuid: str = "") 
         gpu,
         ssh=f"{user}@{fqdn}",
         workspace=s.get("workspace", f"/var/local/{user}/hcrl_isaac_manager"),
-        scratch=s.get("scratch", f"/var/local/{user}"),
+        scratch=ssh_scratch(pool, user),
         pin=pin,
     )
+
+
+def pool_timeout(pool: Pool, timeout: float) -> float:
+    """The run's timeout under its pool's ``max_hours``: refuses a longer one, and gives a run without one the cap.
+
+    Args:
+        pool: The card's pool.
+        timeout: The run's ``--timeout`` in seconds (0 = none).
+
+    Returns:
+        The timeout to run with, in seconds.
+    """
+    hours = pool.settings.get("max_hours")
+    if not hours:
+        return timeout
+    cap = float(hours) * 3600
+    if timeout > cap:
+        sys.exit(
+            f"[res] --timeout {timeout / 3600:g}h is over pool {pool.name}'s max_hours {hours}: pass at most {hours}h"
+        )
+    if not timeout:
+        print(
+            f"[res] pool {pool.name} caps runs at max_hours {hours}: running with --timeout {hours}h", file=sys.stderr
+        )
+    return timeout or cap
+
+
+def check_free_disk(t: Target, pool: Pool) -> None:
+    """Refuse to stage when the filesystem holding the target's scratch dir has less free than ``min_free_disk_gb``."""
+    need = pool.settings.get("min_free_disk_gb")
+    if not need:
+        return
+    q = shlex.quote
+    df = (
+        f'd={q(t.scratch)}; while [ ! -e "$d" ]; do d=$(dirname "$d"); done; df -Pk "$d" | awk \'NR == 2 {{print $4}}\''
+    )
+    cmd = ["bash", "-c", df] if t.kind == "local" else ["ssh", *t.ssh_opts, t.ssh, df]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60).stdout.strip()
+    except subprocess.TimeoutExpired:
+        out = ""
+    if not out.isdigit():
+        sys.exit(
+            f"[res] could not read the free disk under {t.scratch} on {t.host} (pool min_free_disk_gb): nothing staged"
+        )
+    free = int(out) / 1024**2
+    if free < float(need):
+        sys.exit(
+            f"[res] {t.host} has {free:.1f} GB free under {t.scratch}, below the pool's min_free_disk_gb {need}: nothing staged"
+        )
 
 
 def parse_env(pairs: list[str]) -> dict[str, str]:
@@ -603,6 +654,7 @@ def runner_script(
     venv: tuple[str, list[str], str] | None = None,
     root: str = "",
     refs: str = "",
+    limit: float = 0,
 ) -> str:
     """The bash that runs on the target: a stage log, isolated caches, the given PYTHONPATH, the script's status.
 
@@ -618,6 +670,8 @@ def runner_script(
         root: An Isaac Lab install root on the target whose ``venv`` runs the script instead of ilab.
         refs: The stage's W&B config file, copied into ``cwd`` (the run's own) as the ``config-defaults.yaml`` that
             ``wandb.init`` loads.
+        limit: Seconds after which the runner itself stops the run's process group (0 = no limit), so the limit
+            holds with no session watching.
 
     Returns:
         The run.sh text.
@@ -662,8 +716,36 @@ cat {q(stage + "/MANIFEST")}
 echo "[res] {where} python=$py env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
 {f"cp {q(refs)} config-defaults.yaml" if refs else ""}
+{_limit_lines(stage, limit) if limit else ""}
 {launch}
 """
+
+
+# Outside the run's process group, so it never keeps the run "alive": polls the runner (pid $1, the group leader)
+# until it exits, or the limit ($2 s) passes and it stops the whole group the way Stage.kill does.
+LIMIT_WATCH = r"""
+p=$1; end=$((SECONDS + $2))
+live() { ps -eo pgid=,stat= | awk -v p="$p" '$1 == p && $2 !~ /^Z/ {f=1} END {exit !f}'; }
+while kill -0 "$p" 2>/dev/null; do
+    left=$((end - SECONDS))
+    if [ "$left" -le 0 ]; then
+        echo "[res] the run reached its time limit ($3): stopping it"
+        kill -TERM -- -"$p" 2>/dev/null
+        for _ in $(seq 60); do live || exit 0; sleep 1; done
+        echo "[res] still running 60 s after SIGTERM: killing it"
+        kill -KILL -- -"$p" 2>/dev/null
+        exit 0
+    fi
+    sleep $((left < 30 ? left : 30))
+done
+"""
+
+
+def _limit_lines(stage: str, limit: float) -> str:
+    """run.sh line starting the watcher that stops the run after ``limit`` seconds (see LIMIT_WATCH)."""
+    q = shlex.quote
+    secs, shown = max(1, round(limit)), f"{limit / 3600:g}h" if limit >= 3600 else f"{round(limit)}s"
+    return f"setsid bash -c {q(LIMIT_WATCH)} limit $$ {secs} {shown} >> {q(stage + '/log')} 2>&1 < /dev/null &"
 
 
 def _ilab_lines() -> str:
@@ -1871,6 +1953,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         t.extra_uuids = tuple(c.uuid for _, c, _ in claimed[1:]) if extra else ()
         t.cores = taken.cores if args.cpus else ""
         run_args = fill_device(run_args, t, launcher)  # before staging, so a wrong cuda:N costs nothing
+        if t.kind != "slurm":  # the pool's guardrails, before anything is staged
+            args.timeout = pool_timeout(pool, args.timeout)
+            check_free_disk(t, pool)
         staging = _LeaseHeartbeat(taken.id if taken is not None else args.lease or "", *(x.id for x in extra)).start()
         stage = Stage(t)
         stage.make()
@@ -1954,6 +2039,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
                 venv=venv,
                 root=args.root,
                 refs=refs_file,
+                # a watched run's own timeout fires first; the runner's is the backstop should the session die
+                limit=args.timeout + (0 if args.detach or not args.timeout else LIMIT_GRACE_S),
             )
         stage.write(runner, "run.sh", mode=0o700)
         staging.stop()

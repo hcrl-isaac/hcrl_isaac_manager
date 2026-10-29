@@ -256,6 +256,28 @@ class TargetTest(unittest.TestCase):
             ev.fill_device(["--device", "cuda:0"], dev)  # silently another user's card there
         self.assertEqual(ev.fill_device(["--device", "cuda:2"], dev), ["--device", "cuda:2"], "the right one is kept")
 
+    def test_a_time_limit_wraps_the_runner_in_a_group_killing_watcher(self) -> None:
+        t = ev.make_target(Pool("desk", "ssh", {"user": "u"}), "box", 0)
+        runner = ev.runner_script(t, "/s", "x.py", [], [], limit=7200)
+        self.assertIn("setsid bash -c", runner)
+        self.assertIn("limit $$ 7200 2h >> /s/log 2>&1 < /dev/null &", runner)
+        self.assertIn('kill -TERM -- -"$p"', runner)
+        self.assertIn('kill -KILL -- -"$p"', runner)
+        self.assertLess(runner.index("limit $$"), runner.index('"$py" x.py'), "the watcher starts before the run")
+        self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
+        self.assertNotIn("setsid", ev.runner_script(t, "/s", "x.py", [], []), "no limit, no watcher")
+
+    def test_max_hours_caps_the_timeout(self) -> None:
+        pool = Pool("desk", "ssh", {"user": "u", "max_hours": 2})
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(ev.pool_timeout(pool, 0), 7200)
+        self.assertIn("running with --timeout 2h", err.getvalue())
+        self.assertEqual(ev.pool_timeout(pool, 3600), 3600)
+        with self.assertRaises(SystemExit) as cm:
+            ev.pool_timeout(pool, 3 * 3600)
+        self.assertIn("over pool desk's max_hours 2", str(cm.exception.code))
+        self.assertEqual(ev.pool_timeout(Pool("p", "ssh", {"user": "u"}), 0), 0, "no setting, no limit")
+
     def test_a_launcher_script_without_device_gets_the_leased_card(self) -> None:
         """Every card stays visible on a device-pinned box, so Isaac's default (cuda:0) is another card."""
         cvd = ev.make_target(Pool("a100", "ssh", {"user": "u", "pin": "cvd"}), "mckennie", 2)
@@ -1499,6 +1521,44 @@ class EvalRunTest(Isolated):
     def test_root_and_venv_are_exclusive(self) -> None:
         rc, _ = self._eval("--any", "--root", "/r", "--venv", "hcrl_sim2real[mjx]")
         self.assertIn("pass one", str(rc))
+
+    def test_min_free_disk_gb_refuses_to_stage_on_a_full_disk_and_releases(self) -> None:
+        self.pool.settings["min_free_disk_gb"] = 10**9
+        rc, _ = self._eval("--any", "--env", "MODE=ok")
+        self.assertIn("below the pool's min_free_disk_gb 1000000000: nothing staged", str(rc))
+        self.assertIn(str(self.tmp / "scratch"), str(rc))
+        self.assertEqual(self._leases(), [], "the lease is released")
+        self.assertFalse((self.tmp / "scratch").exists(), "nothing was staged")
+
+    def test_min_free_disk_gb_below_the_free_disk_runs(self) -> None:
+        self.pool.settings["min_free_disk_gb"] = 0.001
+        rc, out = self._eval("--any", "--env", "MODE=ok")
+        self.assertEqual(rc, 0, out)
+
+    def test_a_timeout_over_max_hours_is_refused_and_releases(self) -> None:
+        self.pool.settings["max_hours"] = 2
+        rc, _ = self._eval("--any", "--timeout", "3h")
+        self.assertIn("max_hours 2", str(rc))
+        self.assertEqual(self._leases(), [])
+        self.assertEqual(self._stages(), [])
+
+    def test_max_hours_stops_a_detached_run_with_no_session_watching(self) -> None:
+        self.pool.settings["max_hours"] = 3 / 3600
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("running with --timeout", out)
+        [stage] = self._stages()
+        self.assertIn("limit $$ 3 3s", (stage / "run.sh").read_text())
+        log, pid = stage / "log", 0
+        for _ in range(150):
+            text = log.read_text() if log.exists() else ""
+            pid = pid or (self._pid(text) if "PID " in text else 0)
+            if pid and not _alive(pid):
+                break
+            time.sleep(0.2)
+        self.assertTrue(pid, "the run started")
+        self.assertFalse(_alive(pid), "the runner stopped the run at its limit")
+        self.assertIn("reached its time limit (3s)", log.read_text())
 
     def test_exactly_one_card_selector(self) -> None:
         rc, _ = self._eval("--any", "--on", "box:1")
