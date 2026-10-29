@@ -104,6 +104,8 @@ for d in "$SYNC_DIR"/resources/*/; do
     EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:rw"
 done
 [ -d "$SYNC_DIR/resources/IsaacLab/source" ] && EXT_BINDS="$EXT_BINDS -B $SYNC_DIR/resources/IsaacLab/source:/workspace/isaaclab_source:rw"
+# isaaclab reads its kit file at <source>/../apps, which is /workspace/apps once the source is bound there
+[ -d "$SYNC_DIR/resources/IsaacLab/apps" ] && EXT_BINDS="$EXT_BINDS -B $SYNC_DIR/resources/IsaacLab/apps:/workspace/apps:ro"
 
 echo "(run_singularity.py) apptainer: $(command -v apptainer || echo 'not found') $(apptainer --version 2>/dev/null)," \
     "flags: '${CLUSTER_APPTAINER_FLAGS:-}', modules: '${CLUSTER_MODULE_LOAD:-}'"
