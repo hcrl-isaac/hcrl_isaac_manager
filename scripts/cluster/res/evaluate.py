@@ -494,6 +494,31 @@ def dirty_worktrees(workspace: str, wt: str) -> list[str]:
     return dirty
 
 
+def _local_data_in_place(data: dict[str, str], workspace: str) -> dict[str, str]:
+    """A local run reads data repos from ``<workspace>/resources/`` in place, so its worktrees must match them.
+
+    Args:
+        data: Data repo name -> worktree path.
+        workspace: The local workspace.
+
+    Returns:
+        Nothing left to ship; exits when a worktree differs from the workspace's copy (commit or uncommitted edits).
+    """
+    differ = []
+    for repo, src in data.items():
+        wt, main = git_ref(src), git_ref(os.path.join(workspace, "resources", repo))
+        if not wt or not main or wt["dirty"] or wt["commit"] != main["commit"]:
+            have = f"{wt['commit'][:7]}{' dirty' if wt['dirty'] else ''}" if wt else "?"
+            differ.append(f"{repo} (worktree {have}, resources/ at {main['commit'][:7] if main else '?'})")
+    if differ:
+        sys.exit(
+            f"[res] a local run reads data repos from resources/ in place, but the --wt set's differ: {'; '.join(differ)}."
+            " Commit and bring resources/ to that commit, or run on an ssh box, which ships the worktree"
+        )
+    print(f"[res] --wt data repos {', '.join(data)} match resources/: read in place", file=sys.stderr)
+    return {}
+
+
 def _describe(src: str) -> str:
     """A checkout's commit and dirty count, or a note when it is not a git checkout."""
     try:
@@ -1097,13 +1122,13 @@ class Stage:
         """
         at = _worktree_env().import_root
         data = data or {}
+        if data and self.t.kind == "local":
+            data = _local_data_in_place(data, self.t.workspace)
         if data and self.t.kind != "ssh":
-            where = (
-                "a local run reads resources/ in place"
-                if self.t.kind == "local"
-                else ("on a cluster, stage them with `pls stage --on <cluster> <name> <repo>=<path>`")
+            sys.exit(
+                f"[res] --wt data repos ({', '.join(data)}) ship to ssh targets only; on a cluster, stage them with"
+                " `pls stage --on <cluster> <name> <repo>=<path>`"
             )
-            sys.exit(f"[res] --wt data repos ({', '.join(data)}) ship to ssh targets only; {where}")
         for repo, src in data.items():
             pointers = lfs_pointers(src)
             if pointers:
@@ -1902,6 +1927,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
     except KeyboardInterrupt as exc:
         rc = 130
         print(f"[res] interrupted ({exc or 'SIGINT'})", file=sys.stderr)
+    except SystemExit as exc:  # a refusal before the run started: its reason is the exit, never a log to read
+        rc = exc.code if exc.code is not None else 0
     finally:
         if staging is not None:
             staging.stop()
@@ -1915,7 +1942,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             print(f"[res] stopped the run ({'gone' if gone else 'STILL RUNNING, check the card'})", file=sys.stderr)
         if stage is not None:
             stage.remove(keep_log=rc != 0)
-            if rc != 0:
+            if isinstance(rc, str):
+                print("[res] the run never started, so it has no log; the reason:", file=sys.stderr)
+            elif rc != 0:
                 where = stage.t.ssh if stage.t.kind == "slurm" else stage.t.host
                 print(f"[res] FAILED with status {rc}; log at {where}:{stage.dir}/log", file=sys.stderr)
         mine = [x.id for x in (taken, *extra) if x is not None]
