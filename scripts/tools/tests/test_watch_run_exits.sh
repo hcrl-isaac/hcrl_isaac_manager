@@ -117,6 +117,18 @@ check "a hanging probe ends as BLIND" '[ "$rc" = 1 ] && case $out in *BLIND*) tr
 out="$(PATH="$T/bin:$PATH" timeout 4 bash "$T/watch_blind.sh" probe "x@host:/log" 4000 20 0 2>&1)"; rc=$?
 check "a few failed probes inside stall_min are retried" '[ "$rc" = 124 ] && [ -z "$out" ]'
 
+# a login notice the remote shell prints on stdout (TACC's filesystem banner) is not the run's log
+mkdir -p "$T/bannerbin"
+printf '#!/usr/bin/env bash\necho "/work2 is mounted not \\"FULL\\" nor \\"IDLE\\"!"\nexec bash -s\n' > "$T/bannerbin/ssh"
+chmod +x "$T/bannerbin/ssh"
+printf 'Learning iteration 3486/4000\n' > "$T/banner_ok.log"
+out="$(PATH="$T/bannerbin:$PATH" timeout 4 bash "$T/watch_fast.sh" probe "x@host:$T/banner_ok.log" 4000 20 0 2>&1)"; rc=$?
+check "a login banner on a healthy run is not FAILED" '[ "$rc" = 124 ] && case $out in *FAILED*) false ;; *"training (iter 3486)"*) true ;; *) false ;; esac'
+printf 'Learning iteration 10/4000\nTraceback (most recent call last):\nRuntimeError: boom\n' > "$T/banner_bad.log"
+out="$(PATH="$T/bannerbin:$PATH" timeout 4 bash "$T/watch_fast.sh" probe "x@host:$T/banner_bad.log" 4000 20 0 2>&1)"; rc=$?
+check "a real failure behind a banner is FAILED, reported from the log" \
+    '[ "$rc" = 1 ] && case $out in *boom*) true ;; *) false ;; esac && case $out in *mounted*) false ;; *) true ;; esac'
+
 # ray:<job>: the log comes through `pls jobs --on ray logs`, the job's state through `pls jobs --on ray list --status_of`
 cat > "$T/pls" <<EOF
 #!/usr/bin/env bash

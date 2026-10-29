@@ -68,8 +68,12 @@ mkdir -p "$(dirname "${CM/\%C/x}")" 2>/dev/null || true
 PROBE_S=90  # wall-clock limit per probe: a lost ControlMaster must fail, never wait on a 2FA prompt
 run_remote() {  # stdin: the probe script
     if [ -n "$HOST" ]; then
-        timeout "$PROBE_S" ssh -o BatchMode=yes -o ControlMaster=auto -o ControlPath="$CM" -o ConnectTimeout=25 \
-            -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$HOST" bash -s 2>/dev/null
+        # only what the script prints counts: a login notice (e.g. TACC's filesystem banner) comes before the marker,
+        # and a read that never reaches it is a failed probe, retried until stall_min
+        { echo 'echo __WATCH_RUN_BEGIN__'; cat; } |
+            timeout "$PROBE_S" ssh -o BatchMode=yes -o ControlMaster=auto -o ControlPath="$CM" -o ConnectTimeout=25 \
+                -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$HOST" bash -s 2>/dev/null |
+            awk 'seen; $0 == "__WATCH_RUN_BEGIN__" { seen = 1 }'
     else
         timeout "$PROBE_S" bash -s 2>/dev/null
     fi
