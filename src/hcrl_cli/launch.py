@@ -55,10 +55,16 @@ On a card, {DEVICE} in the script's arguments becomes the leased card's torch de
 pin cards differently, so a hand-written cuda:N that is not the card is refused.
 
 card options (--holder is required): --holder, --note, --pool, --min-free-gb, --checkpoint, --env, --timeout,
---stall, --detach, --gpus N (N cards of one held SLURM node, one torchrun rank each; needs --on <node>), --venv,
---root (an Isaac Lab install root's venv, e.g. an ssh box's 3.x root), --with, --jobs/--out
+--stall, --detach, --gpus N (N cards of one held SLURM node, one torchrun rank each; needs --on <node>), --cpus N,
+--venv, --root (an Isaac Lab install root's venv, e.g. an ssh box's 3.x root), --with, --jobs/--out
 (a job list over lease:A,B,...); `pls run --on any --help`
-describes them."""
+describes them.
+
+CPU-only runs (--cpus N, --on <ssh host>): no card is leased; the run sees no GPU (CUDA_VISIBLE_DEVICES=""), is
+pinned to N of the box's cores at nice 10 with OMP/MKL/OPENBLAS/NUMEXPR threads N, and its lease (<host>:cpu) lasts
+as long as the run. Your CPU runs on a box hold at most half its cores (or the pool's cpu_budget). {DEVICE} is
+refused; SLURM and Ray allocate CPUs themselves and refuse it. E.g.
+  pls run --on <host> --cpus 24 --root <root> --detach --cmd -- python -m holosoma_retargeting ..."""
 
 
 def parser() -> argparse.ArgumentParser:
@@ -73,7 +79,11 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--on", default="", metavar="TARGET", help="where to run (default: this machine)")
     p.add_argument(
-        "--wt", default="", metavar="NAME", help="run this machine's worktree set resources/<repo>/worktrees/<NAME>"
+        "--wt",
+        default="",
+        metavar="NAME",
+        help="run this machine's worktree set resources/<repo>/worktrees/<NAME>; a holosoma worktree in the set"
+        " ships too, imported from its src/holosoma_retargeting",
     )
     p.add_argument("--cmd", action="store_true", help="the words after -- are a command, not a script")
     p.add_argument("--batch", action="store_true", help="submit a batch job on SLURM cluster TARGET (train only)")
@@ -161,6 +171,8 @@ def _here(argv: list[str], wt: str, command: bool) -> None:
     env = {
         "PYTHONPATH": ":".join(p for p in (pythonpath, os.environ.get("PYTHONPATH", "")) if p),
         "OMNI_KIT_ACCEPT_EULA": "YES",
+        # Kit forks at startup; with scipy loaded first, OpenBLAS's atfork shutdown of its worker threads crashes it
+        "OPENBLAS_NUM_THREADS": os.environ.get("OPENBLAS_NUM_THREADS", "1"),
     }
     if command:
         env["PATH"] = f"{ROOT / VENV}/bin{os.pathsep}{os.environ.get('PATH', '')}"
@@ -195,14 +207,22 @@ def _repo_script(script: str, where: str) -> str:
     return f"{named[0]}/{named[1]}"
 
 
-def _card_flags(on: str) -> list[str]:
+def _card_flags(on: str, cpus: bool = False) -> list[str]:
+    """The card backend's selector for ``--on``; a ``--cpus`` run names a box, never a pool of cards."""
     if on == "any":
         return ["--any"]
     if on.startswith("lease:"):
         return ["--lease", on.removeprefix("lease:")]
-    if ":" in on:
+    if ":" in on or cpus:
         return ["--on", on]
     return ["--any", "--pool", on]
+
+
+def _has_cpus(extra: list[str]) -> bool:
+    return any(a == "--cpus" or a.startswith("--cpus=") for a in extra)
+
+
+NO_CPUS = "[pls] run {where}: --cpus runs on an ssh box's cores; {why}"
 
 
 def _batch(on: str, wt: str, tree: str, run: list[str]) -> None:
@@ -239,6 +259,9 @@ def main(argv: list[str]) -> None:
     opts, run = _split(argv)
     ns, extra = parser().parse_known_args(opts)
     os.environ.pop("WT", None)  # --wt is the only worktree selector
+    if _has_cpus(extra) and (ns.batch or ns.on == "ray"):
+        why = "Ray schedules a job's CPUs itself" if ns.on == "ray" else "a SLURM job's CPUs come from its allocation"
+        sys.exit(NO_CPUS.format(where="--batch" if ns.batch else "--on ray", why=why))
     if ns.batch:
         if extra or ns.cmd:
             sys.exit(f"[pls] run --batch: {' '.join([*extra, *(['--cmd'] if ns.cmd else [])])} only apply on a card")
@@ -275,4 +298,4 @@ def main(argv: list[str]) -> None:
         if ns.on.startswith("local:"):
             _disk_guard()
         target = ["--cmd", script] if ns.cmd else [_card_script(script)]
-        handoff([*CARD_CMD, *extra, *_card_flags(ns.on), *wt, *target, "--", *args])
+        handoff([*CARD_CMD, *extra, *_card_flags(ns.on, _has_cpus(extra)), *wt, *target, "--", *args])

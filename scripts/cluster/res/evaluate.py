@@ -27,11 +27,12 @@ import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 import checkpoints as ck
 import leases as ls
-from inventory import MANAGER_DIR, RES_DIR, Pool, profile_value
-from probe import MASTER_OPTS, SSH_OPTS
+from inventory import MANAGER_DIR, RES_DIR, Pool, profile_value, ssh_pool_of
+from probe import MASTER_OPTS, SSH_OPTS, box_cpu_state
 
 CLUSTER_DEV = MANAGER_DIR / "scripts" / "cluster" / "cluster_dev" / "cluster_dev.sh"
 SUPPORTED = ("local", "ssh", "slurm")
@@ -62,6 +63,7 @@ class Target:
         job: The SLURM job (a held dev sentinel) whose node the card is on.
         uuid: The card's GPU UUID, which pins it inside a SLURM step whose device numbering may differ.
         extra_uuids: The other cards of a multi-GPU run (``--gpus``), on the same node.
+        cores: A CPU-only run's cores of an ssh box (``--cpus``, a taskset list); it then has no card (gpu -1).
     """
 
     pool: str
@@ -75,6 +77,14 @@ class Target:
     job: str = ""
     uuid: str = ""
     extra_uuids: tuple[str, ...] = ()
+    cores: str = ""
+
+    @property
+    def where(self) -> str:
+        """The card (``host:gpuN``), or a CPU run's cores, for messages."""
+        if self.cores:
+            return f"{self.host} ({len(ls.parse_cores(self.cores))} cores {self.cores}, no GPU)"
+        return f"{self.host}:gpu{self.gpu}"
 
     @property
     def uuids(self) -> tuple[str, ...]:
@@ -187,6 +197,9 @@ def fill_device(script_args: list[str], t: Target) -> list[str]:
     Boxes pin a card differently (CUDA_VISIBLE_DEVICES or not), so a hand-written ``cuda:N`` is wrong on some of them:
     an invalid ordinal, or silently another user's card.
     """
+    if t.cores:
+        refuse_device(script_args)
+        return list(script_args)
     device = run_device(t)
     filled = [arg.replace("{DEVICE}", device) for arg in script_args]
     if wrong := sorted({f"cuda:{n}" for arg in filled for n in _CUDA.findall(arg)} - {device}):
@@ -196,6 +209,15 @@ def fill_device(script_args: list[str], t: Target) -> list[str]:
             " write {DEVICE} instead (e.g. --device {DEVICE}) and pls run fills it in"
         )
     return filled
+
+
+def refuse_device(script_args: list[str]) -> None:
+    """Exit when a ``--cpus`` run's arguments name ``{DEVICE}``: it leases no card, so there is none to fill in."""
+    if any("{DEVICE}" in arg for arg in script_args):
+        sys.exit(
+            "[res] --cpus runs on no card (CUDA_VISIBLE_DEVICES is empty), so {DEVICE} has nothing to name: pass the"
+            " script's CPU device instead (e.g. --device cpu)"
+        )
 
 
 def parse_checkpoints(specs: list[str]) -> list[ck.CheckpointRef]:
@@ -339,8 +361,8 @@ def sibling_args(specs: list[str]) -> dict[str, str]:
 
 
 def local_code(workspace: str, wt: str) -> dict[str, str]:
-    """The package repos a run imports (core, RL package, ``*_tasks``, ``TOOL_REPOS``), as worktree-set or main
-    checkout paths.
+    """The package repos a run imports (core, RL package, ``*_tasks``, ``TOOL_REPOS``, and a ``WT_ONLY_REPOS`` repo
+    the set has a worktree of), as worktree-set or main checkout paths.
 
     Args:
         workspace: Manager checkout whose resources/ holds the repos.
@@ -349,8 +371,8 @@ def local_code(workspace: str, wt: str) -> dict[str, str]:
     Returns:
         Repo name -> path; asset repos (``*_robots``) are left to the target's own copies.
     """
-    sys.path.insert(0, str(MANAGER_DIR / "scripts"))
-    from worktree_env import workspace_repos
+    wenv = _worktree_env()
+    workspace_repos, WT_ONLY_REPOS = wenv.workspace_repos, wenv.WT_ONLY_REPOS
 
     resources = os.path.join(workspace, "resources")
     code, overridden = {}, False
@@ -361,9 +383,22 @@ def local_code(workspace: str, wt: str) -> dict[str, str]:
         wdir = os.path.join(main, "worktrees", wt) if wt else ""
         overridden |= bool(wdir) and os.path.isdir(wdir)
         code[repo] = wdir if wdir and os.path.isdir(wdir) else main
+    for repo in WT_ONLY_REPOS:  # without its worktree in the set, the target's own install is imported
+        wdir = os.path.join(resources, repo, "worktrees", wt) if wt else ""
+        if wdir and os.path.isdir(wdir):
+            code[repo], overridden = wdir, True
     if wt and not overridden and not local_data(workspace, wt):
         sys.exit(f"[res] --wt {wt}: no repo under {resources} has worktrees/{wt}")
     return code
+
+
+def _worktree_env() -> ModuleType:
+    """``scripts/worktree_env.py`` of this checkout (the repo layouts a run's PYTHONPATH follows)."""
+    if str(MANAGER_DIR / "scripts") not in sys.path:
+        sys.path.insert(0, str(MANAGER_DIR / "scripts"))
+    import worktree_env
+
+    return worktree_env
 
 
 def _git(src: str, *args: str) -> bytes:
@@ -536,13 +571,24 @@ def runner_script(
         The run.sh text.
     """
     q = shlex.quote
-    launch = 'export PATH="${py%/*}:$PATH"; "$@"' if command else f'"$py" {q(script)} "$@"'
+    # a CPU run: on its cores only, below the GPU jobs' feeder threads
+    nice = f"taskset -c {q(t.cores)} nice -n 10 " if t.cores else ""
+    launch = f'export PATH="${{py%/*}}:$PATH"; {nice}"$@"' if command else f'{nice}"$py" {q(script)} "$@"'
     cache = f"{t.scratch}/res-eval/cache/{t.host}-gpu{t.gpu}"  # one lease per card, so per-card caches never race
     pin = (
         f"export CUDA_VISIBLE_DEVICES={t.gpu} RES_EVAL_DEVICE=cuda:0"
         if t.pin == "cvd"
         else f"unset CUDA_VISIBLE_DEVICES; export RES_EVAL_DEVICE=cuda:{t.gpu}"
     )
+    if t.cores:  # several CPU runs may share a box: each gets its own caches, in its stage
+        cache, n = f"{stage}/cache", len(ls.parse_cores(t.cores))
+        threads = " ".join(f'{v}="${{{v}:-{n}}}"' for v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                                                              "NUMEXPR_NUM_THREADS"))  # fmt: skip
+        pin = (
+            f'command -v taskset > /dev/null || {{ echo "[res] --cpus needs taskset on {t.host}"; exit 97; }}\n'
+            f'unset RES_EVAL_DEVICE; export CUDA_VISIBLE_DEVICES="" {threads}'
+        )
+    where = t.where if t.cores else f"{t.where} ({t.pin})"
     return f"""#!/usr/bin/env bash
 set -u
 exec > >(tee -a {q(stage + "/log")}) 2>&1
@@ -555,11 +601,13 @@ export HCRL_ARTIFACT_ROOT={q(t.scratch + "/res-eval/artifacts")}
 export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y PYTHONUNBUFFERED=1 PYTHONPYCACHEPREFIX="$TMPDIR/pycache"
 # cards are shared: JAX takes memory as it needs it, not 75% of the card up front (--env may still set it)
 export XLA_PYTHON_CLIENT_PREALLOCATE="${{XLA_PYTHON_CLIENT_PREALLOCATE:-false}}"
+# Kit forks at startup; with scipy loaded first, OpenBLAS's atfork shutdown of its worker threads crashes it
+export OPENBLAS_NUM_THREADS="${{OPENBLAS_NUM_THREADS:-1}}"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR" "$HCRL_ARTIFACT_ROOT"
 {_venv_lines(t, venv) if venv else _root_lines(root) if root else _ilab_lines()}
 export PYTHONPATH={q(":".join(pythonpath))}"${{PYTHONPATH:+:$PYTHONPATH}}"
 cat {q(stage + "/MANIFEST")}
-echo "[res] {t.host}:gpu{t.gpu} ({t.pin}) python=$py env: {" ".join(env_names) or "-"}"
+echo "[res] {where} python=$py env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
 {f"cp {q(refs)} config-defaults.yaml" if refs else ""}
 {launch}
@@ -818,6 +866,8 @@ touch {s["heartbeat"]}
 {visible}
 export CUDA_VISIBLE_DEVICES={q(cards)} RES_EVAL_DEVICE=cuda:0 PYTHONUNBUFFERED=1
 export TMPDIR={tmp} XDG_CACHE_HOME={cache}/xdg OMNI_CACHE_DIR={cache}/omni
+# Kit forks at startup; with scipy loaded first, OpenBLAS's atfork shutdown of its worker threads crashes it
+export OPENBLAS_NUM_THREADS="${{OPENBLAS_NUM_THREADS:-1}}"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR"
 trap 'rm -rf "$TMPDIR"' EXIT
 {gomp}cat {s["MANIFEST"]}
@@ -1042,8 +1092,10 @@ class Stage:
             data: Data repo name -> worktree path.
 
         Returns:
-            The PYTHONPATH entries and the MANIFEST lines.
+            The PYTHONPATH entries (each ``code`` repo's, in order, at its ``SRC_LAYOUT`` package root, then any
+            importable asset repos) and the MANIFEST lines.
         """
+        at = _worktree_env().import_root
         data = data or {}
         if data and self.t.kind != "ssh":
             where = (
@@ -1063,7 +1115,8 @@ class Stage:
             self.refs = {repo: ref for repo, src in code.items() if (ref := git_ref(src))}
             ws = self.t.workspace
             importable = [data.get(r, os.path.join(ws, "resources", r)) for r in importable_assets(ws)]
-            return [*code.values(), *importable], [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
+            lines = [f"{repo} {src} {_describe(src)}" for repo, src in code.items()]
+            return [*(at(src, repo) for repo, src in code.items()), *importable], lines
         main = os.path.join(local_workspace(), "resources")
         worktree = {
             repo: src
@@ -1090,7 +1143,7 @@ class Stage:
                     lines.append(f"{repo} {src} {heads[repo][:12]} (main checkout HEAD) -> tree {self.tree}")
                 else:
                     lines.append(f"{repo} {kept}/{repo} (not a git checkout here: the cluster's copy)")
-            return [f"/workspace/ext/{repo}" for repo in code], lines
+            return [at(f"/workspace/ext/{repo}", repo) for repo in code], lines
         q = shlex.quote
         res = f"{self.dir}/resources"
         snaps, lines = {}, []
@@ -1114,7 +1167,7 @@ class Stage:
             sys.exit(f"[res] could not link the stage's resources on {self.t.host}")
         # an importable asset repo is imported from the stage's link to it (the box's copy, or the --wt snapshot)
         importable = [f"{res}/{r}" for r in importable_assets(local_workspace()) if r not in code]
-        return [*(f"{res}/{repo}" for repo in code), *importable], lines
+        return [*(at(f"{res}/{repo}", repo) for repo in code), *importable], lines
 
     def start(self, argv: list[str]) -> subprocess.Popen:
         """Start the runner in its own process group (pid in ``<stage>/pid``), stdout and stderr merged.
@@ -1389,6 +1442,11 @@ def _lease_card(lease_id: str, holder: str, pools: list[Pool]) -> tuple[Pool, st
     if lease.holder != holder:
         sys.exit(f"[res] lease {lease_id} is held by {lease.holder}, not {holder}")
     host, _, gpu = lease.card.split(" ")[0].partition(":")
+    if ls.is_cpu(lease):  # no card: gpu -1
+        pool = next((p for p in pools if p.name == lease.report.split("/")[0] and p.kind == "ssh"), None)
+        if pool is None:
+            sys.exit(f"[res] CPU lease {lease_id} is on {lease.report}, which is no configured ssh pool")
+        return pool, host, -1, "", ""
     if lease.job:
         return slurm_profile(lease.report.split(" job ")[0], lease.job, pools), host, int(gpu), lease.job, lease.key
     name = lease.report.split("/")[0]
@@ -1501,7 +1559,7 @@ def _print_detached(stage: Stage, lease_id: str, holder: str) -> None:
         if stage.t.kind != "local"
         else (lambda c: c)
     )
-    where = f"{stage.t.host}:gpu{stage.t.gpu}" + (f" of job {stage.t.job}" if stage.t.job else "")
+    where = stage.t.where + (f" of job {stage.t.job}" if stage.t.job else "")
     print(f"[res] started detached on {where} (stage {stage.dir})", file=sys.stderr)
     print(f"[res] follow: {on('tail -f ' + q(stage.dir + '/log'))}", file=sys.stderr)
     if lease_id:
@@ -1519,9 +1577,8 @@ def _print_detached(stage: Stage, lease_id: str, holder: str) -> None:
             file=sys.stderr,
         )
     if lease_id:
-        print(
-            f"[res] lease {lease_id} stays held while the run lives; it releases once the card idles", file=sys.stderr
-        )
+        ends = "`pls res status` finds the run gone" if stage.t.cores else "the card idles"
+        print(f"[res] lease {lease_id} stays held while the run lives; it releases once {ends}", file=sys.stderr)
 
 
 def cmd_stop(lease_id: str, holder: str, pools: list[Pool]) -> int:
@@ -1570,6 +1627,83 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool]) -> int:
     return 0
 
 
+SLURM_CPUS = "on SLURM a job gets its CPUs from its own allocation (the profile's #SBATCH options), not from --cpus"
+
+
+def claim_cpus(args: argparse.Namespace, pools: list[Pool]) -> tuple[Pool, str, ls.Lease]:
+    """Lease ``args.cpus`` cores of the ssh box ``args.on`` names, within this user's CPU budget there; no card.
+
+    The box is read first (its core count, and which of this user's CPU runs there are gone, whose leases are
+    released). The budget is the pool's ``cpu_budget``, else half the box's cores; the cores are the highest-numbered
+    ones no other CPU lease of this user pins there.
+
+    Args:
+        args: The parsed `pls run` arguments (``on``, ``cpus``, ``holder``, ``note``).
+        pools: Configured pools.
+
+    Returns:
+        The box's pool, the host, and the new lease; exits when refused.
+    """
+    host, _, rest = args.on.partition(":")
+    if rest and rest != "cpu":
+        sys.exit(f"[res] --cpus claims no card: name the box (--on {host}), not a card ({args.on})")
+    pool = ssh_pool_of(host, pools)
+    if pool is None:
+        named = next((p for p in pools if p.name == host), None)
+        if (named.kind == "slurm") if named is not None else any(p.kind == "slurm" for p in pools):
+            sys.exit(f"[res] --cpus runs on an ssh box's cores; {host} is no ssh-pool host, and {SLURM_CPUS}")
+        if named is not None and named.kind == "ray":
+            sys.exit("[res] --cpus runs on an ssh box's cores; Ray schedules a job's CPUs itself")
+        boxes = sorted({h for p in pools if p.kind == "ssh" for h in p.settings.get("hosts", [])})
+        sys.exit(f"[res] --cpus runs on a host of an ssh pool ({', '.join(boxes) or 'none configured'}), not {host}")
+    domain = pool.settings.get("domain")
+    host = next(h for h in pool.settings.get("hosts", []) if host in (h, f"{h}.{domain}"))  # as the probe names it
+    t = make_target(pool, host, -1)
+    label, owner = f"{pool.name}/{host}", t.ssh.split("@")[0]
+    try:
+        with ls.locked_store() as leases:
+            stages = [x.stage for x in leases if ls.is_cpu(x) and x.report == label and x.stage]
+    except ls.LeaseStoreError as exc:
+        sys.exit(f"[res] nothing claimed: {exc}")
+    state = box_cpu_state(t.ssh, stages, ls.CPU_START_S // 60)
+    if state is None:
+        sys.exit(f"[res] could not read {host}'s cores over ssh ({t.ssh}); nothing claimed")
+    nproc, ended = state
+    try:
+        budget = ls.cpu_budget(pool.settings.get("cpu_budget"), nproc)
+    except ValueError as exc:
+        sys.exit(f"[res] pool {pool.name}: {exc}")
+    if args.cpus > nproc:
+        sys.exit(f"[res] --cpus {args.cpus}: {host} has {nproc} cores; nothing claimed")
+    refused = ""
+    try:
+        with ls.locked_store() as leases:  # the reaped leases are written back even when the claim is refused
+            for lease, why in ls.reap_cpu(leases, label, ended):
+                print(f"[res] released {lease.id} ({lease.card}, {lease.holder}): {why}", file=sys.stderr)
+            mine = [x for x in leases if ls.is_cpu(x) and x.report == label and x.owner == owner]
+            used = sum(x.cpus for x in mine)
+            if used + args.cpus > budget:
+                source = (
+                    f"cpu_budget of pool {pool.name}" if "cpu_budget" in pool.settings else f"half its {nproc} cores"
+                )
+                held = ", ".join(f"{x.id} ({x.holder}, {x.cpus})" for x in mine) or "none"
+                refused = (
+                    f"[res] --cpus {args.cpus} on {host} would put {used + args.cpus} cores under your CPU runs there,"
+                    f" over its budget of {budget} ({source}; set cpu_budget under [compute.{pool.name}] in"
+                    f" compute.local.toml to change it); your CPU leases there: {held}; nothing claimed"
+                )
+            else:
+                cores = ls.pick_cores(nproc, args.cpus, set().union(*(ls.parse_cores(x.cores) for x in mine)))
+                note = args.note or f"pls run --cpus {args.cpus}"
+                lease = ls.new_cpu_lease(label, host, owner, args.holder, note, args.cpus, cores)
+                leases.append(lease)
+    except ls.LeaseStoreError as exc:
+        sys.exit(f"[res] nothing claimed: {exc}")
+    if refused:
+        sys.exit(refused)
+    return pool, host, lease
+
+
 def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> None:
     """Run a script on one leased card, then kill what is left of it, clean up and release the lease it took.
 
@@ -1606,9 +1740,25 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         sys.exit(f"[res] --gpus takes a card count of 1 or more, not {args.gpus}")
     if args.gpus > 1 and (args.lease or args.any or not args.on):
         sys.exit("[res] --gpus N takes --on <node>: a SLURM node as host or host:job (pls res status shows them)")
+    if args.cpus < 0:
+        sys.exit(f"[res] --cpus takes a core count of 1 or more, not {args.cpus}")
+    if args.cpus:
+        if not args.on or args.pool or args.gpus > 1 or args.tree or args.wait is not None or args.min_free_gb:
+            sys.exit(
+                "[res] --cpus N runs on N cores of the ssh box --on names (--on <host>), with no card: not with --any,"
+                " --pool, lease:<id>, --gpus, --tree, --wait or --min-free-gb"
+            )
+        refuse_device(run_args)  # before anything is claimed
     taken, job, uuid, extra = None, "", "", []
-    if args.lease:
+    if args.cpus:
+        pool, host, taken = claim_cpus(args, pools)
+        gpu = -1
+        print(f"[res] leased {taken.id}: {taken.cpus} cores ({taken.cores}) of {host}, no GPU, for {args.holder}",
+              file=sys.stderr)  # fmt: skip
+    elif args.lease:
         pool, host, gpu, job, uuid = _lease_card(args.lease, args.holder, pools)
+        if gpu < 0:
+            sys.exit(f"[res] lease {args.lease} holds cores, not a card: start a CPU run with --on <host> --cpus N")
     else:
         named = [p for p in pools if any(p.name.startswith(s) for s in args.pool or [])]
         if args.pool and named and not any(p.kind in SUPPORTED for p in named):
@@ -1649,10 +1799,13 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             pool = slurm_profile(rep.pool, job, pools)
         t = make_target(pool, host, gpu, job, uuid)
         t.extra_uuids = tuple(c.uuid for _, c, _ in claimed[1:]) if extra else ()
+        t.cores = taken.cores if args.cpus else ""
         run_args = fill_device(run_args, t)  # before staging, so a wrong cuda:N costs nothing
         staging = _LeaseHeartbeat(taken.id if taken is not None else args.lease or "", *(x.id for x in extra)).start()
         stage = Stage(t)
         stage.make()
+        if args.cpus:  # its run's end on the box is what releases a CPU lease, detached or not
+            _record_stage(taken.id, stage.dir)
         paths = {ref.name: container_path(t, stage.link_checkpoint(fetch_checkpoint(ref), ref.name)) for ref in refs}
         source = t.workspace if t.kind == "local" else local_workspace()
         if args.tree:  # an already-staged tree, every repo as it was staged
@@ -1686,10 +1839,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if args.cmd:  # from the box workspace (its manager root), or the run's work dir in a SLURM container
             target_script, cwd = "", work if t.kind == "slurm" else ""
         elif repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
-            # the shipped repos lead pythonpath; importable asset repos (ssti_robots) follow them
-            root = (
-                f"/workspace/ext/{repo}" if args.tree else dict(zip(code, pythonpath[: len(code)], strict=True))[repo]
-            )
+            # the shipped repos lead pythonpath, each at its package root; importable asset repos (ssti_robots) follow
+            entries = dict(zip(code, pythonpath[: len(code)], strict=True)) if not args.tree else {}
+            root = f"/workspace/ext/{repo}" if args.tree else _worktree_env().repo_root(entries[repo], repo)
             target_script, cwd = f"{root}/{rel}", work
         else:
             put = stage.put(script, os.path.basename(script), mode=0o644)
@@ -1744,9 +1896,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             _print_detached(stage, held, args.holder)
             rc = 0
         else:
-            print(
-                f"[res] running {os.path.basename(script)} on {t.host}:gpu{t.gpu} (stage {stage.dir})", file=sys.stderr
-            )
+            print(f"[res] running {os.path.basename(script)} on {t.where} (stage {stage.dir})", file=sys.stderr)
             held = taken.id if taken is not None else args.lease or ""
             rc = run(stage, fill_checkpoints(run_args, paths), args.timeout, args.stall, (held, args.holder))
     except KeyboardInterrupt as exc:
@@ -1852,6 +2002,15 @@ def parser() -> argparse.ArgumentParser:
         metavar="N",
         help="lease N free cards of the one SLURM node --on names (host or host:job), expose all of them, and run the"
         " script under torch.distributed.run with N ranks (pass the script's own --distributed)",
+    )
+    ev.add_argument(
+        "--cpus",
+        type=int,
+        default=0,
+        metavar="N",
+        help="ssh box only: run on N of the box's cores (--on <host>) and no GPU: no card is leased, the run sees no"
+        " CUDA device, is pinned to N cores (taskset) at nice 10, with OMP/MKL/OPENBLAS/NUMEXPR threads N; your CPU"
+        " runs on a box hold at most its pool's cpu_budget cores (default half the box's)",
     )
     ev.add_argument(
         "--jobs",

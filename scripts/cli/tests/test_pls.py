@@ -141,6 +141,8 @@ class ClusterVerbTest(unittest.TestCase):
         self.assertEqual(h.cmd, ["bash", infra.DEV_BACKEND, "trees"])
         h, _ = self._call(infra.stage, ["--on", "horizon", "rm", "t-1"])
         self.assertEqual(h.cmd, ["bash", infra.DEV_BACKEND, "trees", "rm", "t-1"])
+        h, _ = self._call(infra.stage, ["--on", "horizon", "data"])
+        self.assertEqual(h.cmd, ["bash", infra.DEV_BACKEND, "data"])
 
     def test_jobs_lists_follows_stops_and_kills(self) -> None:
         h, _ = self._call(infra.jobs, ["--on", "horizon"])

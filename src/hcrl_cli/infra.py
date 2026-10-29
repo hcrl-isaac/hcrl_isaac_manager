@@ -102,6 +102,7 @@ def shell(args: list[str]) -> None:
 STAGE_HELP = """Code reaches a cluster only as staged code trees; `pls run` stages what it runs by itself.
   pls stage --on <cluster>                          the workspace as it is on disk, as tree `default`
   pls stage --on <cluster> <name> <repo>=<ref|path>  a named tree with these repos pinned (the rest from the workspace)
+  pls stage --on <cluster> data                     add new motion_datasets files to the cluster's shared copy
   pls stage --on <cluster> list                     the staged trees and what each holds
   pls stage --on <cluster> rm <tree> [--force]      remove a tree (rm --partials: abandoned uploads)
 Run a staged tree with `pls run --on <cluster> --tree <name> -- <script>`."""
@@ -109,13 +110,15 @@ Run a staged tree with `pls run --on <cluster> --tree <name> -- <script>`."""
 
 def stage(args: list[str]) -> None:
     if set(args) & {"-h", "--help"}:
-        _usage("stage", "--on <cluster> [list | rm <tree> | <name> <repo>=<ref|path>...]", STAGE_HELP)
+        _usage("stage", "--on <cluster> [data | list | rm <tree> | <name> <repo>=<ref|path>...]", STAGE_HELP)
     cluster, rest = _on("stage", args, ray=False)
     _connected(cluster, "stage")
     if rest[:1] == ["list"]:
         handoff(["bash", DEV_BACKEND, "trees", *rest[1:]], env=_env(cluster))
     if rest[:1] == ["rm"]:
         handoff(["bash", DEV_BACKEND, "trees", *rest], env=_env(cluster))
+    if rest[:1] == ["data"]:
+        handoff(["bash", DEV_BACKEND, "data", *rest[1:]], env=_env(cluster))
     handoff(["bash", DEV_BACKEND, "stage", *rest], env=_env(cluster))
 
 
