@@ -681,6 +681,24 @@ class SshStageTest(Isolated):
             bare.sync_code({"robot_rl": str(self.src)})
         self.assertFalse(os.path.exists(f"{bare.dir}/resources/motion_datasets"), "no --root, no fallback")
 
+    def test_an_asset_repo_ships_at_the_main_checkouts_head_over_the_boxs_stale_copy(self) -> None:
+        """A set without an ssti_robots worktree runs the launching checkout's HEAD, not the box's older copy."""
+        local = self.local_ws / "resources" / "ssti_robots"
+        _git_repo(local)
+        (local / "mod.py").write_text("x = 'uncommitted'\n")
+        (self.ws / "resources" / "ssti_robots").mkdir(parents=True)
+        (self.ws / "resources" / "ssti_robots" / "mod.py").write_text("x = 'stale'\n")
+        stage = self._stage()
+        shipped = Path(stage.dir) / "resources" / "ssti_robots"
+        self.assertEqual((shipped / "mod.py").read_text(), "x = 1\n", "HEAD, without the checkout's own edits")
+        self.assertIn("ssti_robots", stage.refs)
+        self.assertTrue(any("ssti_robots" in m and "main checkout HEAD" in m for m in stage.manifest))
+        again = self._stage()
+        self.assertEqual(
+            os.path.realpath(Path(again.dir) / "resources/ssti_robots"), os.path.realpath(shipped), "snapshot reused"
+        )
+        self.assertEqual(os.path.realpath(f"{stage.dir}/resources/hcrl_robots"), str(self.ws / "resources/hcrl_robots"))
+
     def test_a_holosoma_worktree_ships_and_imports_from_its_src_package(self) -> None:
         """holosoma's package is <repo>/src/holosoma_retargeting: that, not the repo root, goes on PYTHONPATH."""
         holo = self.tmp / "local" / "holosoma_wt"
