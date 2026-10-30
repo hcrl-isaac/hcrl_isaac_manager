@@ -1209,13 +1209,38 @@ class Stage:
             sys.exit(f"[res] could not finish the {repo} snapshot on {self.t.host}")
         return snap, line
 
+    def snapshot_head(self, repo: str, src: str) -> tuple[str, str]:
+        """``snapshot`` of a data repo's HEAD commit, reusing one already on the target without checking it out.
+
+        Args:
+            repo: Repo name.
+            src: Local main checkout.
+
+        Returns:
+            The snapshot path and the repo's line for the stage MANIFEST.
+        """
+        # code_fingerprint of a clean checkout: its HEAD tree and an empty status
+        fp = hashlib.sha256(_git(src, "rev-parse", "HEAD^{tree}").strip() + b"\0").hexdigest()[:12]
+        snap = f"{self.t.scratch}/res-eval/code/{repo}-{fp}"
+        if self._ssh(f"[ -f {shlex.quote(snap)}/.complete ]").returncode == 0:
+            return snap, f"{repo} {src} {_head(src)[:12]} dirty=0 -> {snap}"
+        with clean_head(src) as head:
+            pointers = lfs_pointers(head)
+            if pointers:
+                sys.exit(
+                    f"[res] {repo} at {src} HEAD has {len(pointers)} git-lfs pointer(s), not content"
+                    f" ({', '.join(pointers[:3])}): run `git lfs pull` there"
+                )
+            return self.snapshot(repo, head, outputs=False)
+
     def sync_code(
         self, code: dict[str, str], data: dict[str, str] | None = None, root: str = ""
     ) -> tuple[list[str], list[str]]:
         """PYTHONPATH entries that import ``code`` on the target, and the MANIFEST lines describing them.
 
         ``data`` repos (a worktree set's ``motion_datasets`` / ``*_robots``) ship to an ssh target as snapshots too,
-        linked into ``<stage>/resources/`` in place of the box's copies but on no PYTHONPATH.
+        linked into ``<stage>/resources/`` in place of the box's copies but on no PYTHONPATH; any other ``*_robots``
+        repo ships at the main checkout's HEAD.
 
         A local target imports the checkouts in place. A remote one gets every package repo shipped: a worktree-set
         repo as it is on disk, any other at the main checkout's HEAD commit (its uncommitted edits stay here, and a
@@ -1297,6 +1322,12 @@ class Stage:
         for repo, src in data.items():
             snaps[repo], line = self.snapshot(repo, src, outputs=False)
             lines.append(f"{line} (data)")
+        # an asset repo the set has no worktree of ships at the main checkout's HEAD: the box's copy may predate the code
+        for repo in sorted(os.listdir(main)) if os.path.isdir(main) else []:
+            if repo.endswith("_robots") and repo not in data and git_ref(os.path.join(main, repo)):
+                snaps[repo], line = self.snapshot_head(repo, os.path.join(main, repo))
+                self.refs[repo] = {"commit": _head(os.path.join(main, repo)), "dirty": 0}
+                lines.append(f"{line} (data, main checkout HEAD)")
         links = " ".join(f"ln -s {q(s)} {q(res)}/{repo};" for repo, s in snaps.items())
         # the box workspace's repos, then any only the --root install has (e.g. its motion_datasets)
         homes = [self.t.workspace, *([root] if root else [])]
