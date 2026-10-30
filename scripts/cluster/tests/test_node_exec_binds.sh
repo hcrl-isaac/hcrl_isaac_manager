@@ -36,6 +36,7 @@ check "without an installed clamp layer nothing changes" "xdg none"
 mkdir -p "$T/sif/vkclamp" && touch "$T/sif/vkclamp/libvkclamp.so"
 NODE_EXEC_RESOURCES="$TREE/resources" run > "$T/out" 2>&1
 check "an installed clamp layer is bound read-only" "$T/sif/vkclamp:/opt/vkclamp:ro"
+check "a staged tree run binds the NVIDIA Vulkan ICD" "$T/tmp/cluster_dev_7/nvidia_icd.json:/etc/vulkan/icd.d/nvidia_icd.json:ro"
 check "and its conf dir leads XDG_CONFIG_DIRS" "xdg /opt/vkclamp/conf:/etc/xdg"
 rm -rf "$T/sif/vkclamp"
 NODE_EXEC_RESOURCES="$TREE/resources" run > "$T/out" 2>&1
@@ -65,7 +66,18 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@"\n' > "$T/bin/apptainer"
 
 run > "$T/out" 2>&1
 check "shared mode binds the shared repo read-write" "$T/shared/resources/hcrl_isaaclab:/workspace/ext/hcrl_isaaclab:rw"
-if grep -q ":ro$" "$T/out"; then echo "FAIL shared mode has no read-only binds"; fails=$((fails + 1)); else echo "PASS shared mode has no read-only binds"; fi
+if grep -q "/workspace/[^ ]*:ro$" "$T/out"; then
+    echo "FAIL shared mode has no read-only workspace binds"; fails=$((fails + 1))
+else
+    echo "PASS shared mode has no read-only workspace binds"
+fi
+ICD_BIND="$T/tmp/cluster_dev_7/nvidia_icd.json:/etc/vulkan/icd.d/nvidia_icd.json:ro"
+check "the NVIDIA Vulkan ICD is bound read-only" "$ICD_BIND"
+if grep -q '"library_path": "libGLX_nvidia.so.0"' "$T/tmp/cluster_dev_7/nvidia_icd.json"; then
+    echo "PASS the ICD names the driver library by its bare name"
+else
+    echo "FAIL the ICD names the driver library by its bare name"; fails=$((fails + 1))
+fi
 
 echo "CLUSTER_LOGS_DIR=$T/work_logs" >> "$T/env"
 run > "$T/out" 2>&1
@@ -101,6 +113,7 @@ check "the package repos and package asset repos are on PYTHONPATH, pure asset a
     "pythonpath /workspace/ext/hcrl_isaaclab:/workspace/ext/robot_rl:/workspace/ext/ssti_robots"
 check "XALT's preload is dropped" "preload none"
 check "staged repos are mounted as in the image" "$TREE/resources/hcrl_isaaclab:/workspace/ext/hcrl_isaaclab:rw"
+check "the root's image gets the NVIDIA Vulkan ICD too" "$ICD_BIND"
 if grep -q "hcrl-entrypoint\|hcrl-isaac.sif" "$T/out"; then
     echo "FAIL the hcrl-isaac image and entrypoint are not used"; fails=$((fails + 1))
 else
