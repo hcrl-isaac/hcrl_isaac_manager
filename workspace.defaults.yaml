@@ -20,3 +20,6 @@ available_projects:
   - name: hhlm
     description: Hierarchical humanoid loco-manipulation tasks
     default: true
+  - name: mbrl
+    description: Model-based RL tasks (SuperMimic world-model tracking, world-model BFM)
+    default: false
