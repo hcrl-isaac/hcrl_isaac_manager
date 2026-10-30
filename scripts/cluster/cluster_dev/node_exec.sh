@@ -163,6 +163,17 @@ if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ] && [ "$(uname -m)" = x86_64 ]; then  # 
     VK_BINDS="-B ${VKCLAMP_DIR}:/opt/vkclamp:ro"
     export APPTAINERENV_XDG_CONFIG_DIRS="/opt/vkclamp/conf:/etc/xdg"
 fi
+# --nv binds the driver's Vulkan library but not its ICD file, which the Isaac Lab 3 image (plain Ubuntu) lacks
+ICD_JSON="${STAGE}/nvidia_icd.json"
+host_icd=""
+for f in /etc/vulkan/icd.d/nvidia_icd.json /usr/share/vulkan/icd.d/nvidia_icd.json; do
+    [ -f "$f" ] && host_icd="$f" && break
+done
+if [ -n "$host_icd" ]; then cp "$host_icd" "$ICD_JSON.$$"; else
+    echo '{"file_format_version": "1.0.0", "ICD": {"library_path": "libGLX_nvidia.so.0", "api_version": "1.3"}}' >"$ICD_JSON.$$"
+fi
+mv -f "$ICD_JSON.$$" "$ICD_JSON"  # steps sharing the stage never read a half-written file
+VK_BINDS="$VK_BINDS -B ${ICD_JSON}:/etc/vulkan/icd.d/nvidia_icd.json:ro"
 # NODE_EXEC_OWN_TMP=1 (develop exec --own-tmp): this step's /tmp is its own, not the job's shared one, so steps on
 # one node never meet in Isaac Lab's hard-coded /tmp/IsaacLab (its URDF->USD conversions race); /tmp/cache stays the
 # job's, so caches kept there persist across steps

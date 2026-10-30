@@ -120,6 +120,16 @@ if [ -f "${VKCLAMP_DIR}/libvkclamp.so" ] && [ "$(uname -m)" = x86_64 ]; then  # 
     VK_BINDS="-B ${VKCLAMP_DIR}:/opt/vkclamp:ro"
     export APPTAINERENV_XDG_CONFIG_DIRS="/opt/vkclamp/conf:/etc/xdg"
 fi
+# --nv binds the driver's Vulkan library but not its ICD file, which the Isaac Lab 3 image (plain Ubuntu) lacks
+ICD_JSON="$JOB_TMPDIR/nvidia_icd.json"
+host_icd=""
+for f in /etc/vulkan/icd.d/nvidia_icd.json /usr/share/vulkan/icd.d/nvidia_icd.json; do
+    [ -f "$f" ] && host_icd="$f" && break
+done
+if [ -n "$host_icd" ]; then cp "$host_icd" "$ICD_JSON"; else
+    echo '{"file_format_version": "1.0.0", "ICD": {"library_path": "libGLX_nvidia.so.0", "api_version": "1.3"}}' >"$ICD_JSON"
+fi
+VK_BINDS="$VK_BINDS -B ${ICD_JSON}:/etc/vulkan/icd.d/nvidia_icd.json:ro"
 apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B $JOB_TMPDIR/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B $HOME_DIR:${DOCKER_USER_HOME}:rw \
