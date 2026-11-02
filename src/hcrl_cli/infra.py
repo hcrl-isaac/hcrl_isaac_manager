@@ -39,9 +39,8 @@ def _usage(verb: str, usage: str, text: str) -> None:
     sys.exit(0)
 
 
-def _on(verb: str, args: list[str], ray: bool = True) -> tuple[str, list[str]]:
-    """Take ``--on <cluster>`` out of ``args`` (a picker when it is missing): the cluster and the other arguments."""
-    names = [*profiles(), *(["ray"] if ray else [])]
+def _split_on(args: list[str]) -> tuple[str, list[str]]:
+    """``--on <value>`` taken out of ``args`` ("" when absent), and the other arguments."""
     on, rest, i = "", [], 0
     while i < len(args):
         if args[i] == "--on" and i + 1 < len(args):
@@ -51,6 +50,13 @@ def _on(verb: str, args: list[str], ray: bool = True) -> tuple[str, list[str]]:
         else:
             rest.append(args[i])
             i += 1
+    return on, rest
+
+
+def _on(verb: str, args: list[str], ray: bool = True) -> tuple[str, list[str]]:
+    """Take ``--on <cluster>`` out of ``args`` (a picker when it is missing): the cluster and the other arguments."""
+    names = [*profiles(), *(["ray"] if ray else [])]
+    on, rest = _split_on(args)
     on = on or ask_select(f"pls {verb} --on:", names)
     if on not in names:
         kinds = "a SLURM cluster profile" + (" or ray" if ray else "")
@@ -103,7 +109,8 @@ STAGE_HELP = """Code reaches a cluster only as staged code trees; `pls run` stag
   pls stage --on <cluster>                          the workspace as it is on disk, as tree `default`
   pls stage --on <cluster> <name> <repo>=<ref|path>  a named tree with these repos pinned (the rest from the workspace)
   pls stage --on <cluster> data                     add new motion_datasets files to the cluster's shared copy
-  pls stage --on <cluster> list                     the staged trees and what each holds
+  pls stage --on <ssh host|pool> data [--root DIR]  the same on an ssh box (into the copy its --root runs read)
+  pls stage --on <cluster> list                    the staged trees and what each holds
   pls stage --on <cluster> rm <tree> [--force]      remove a tree (rm --partials: abandoned uploads)
 Run a staged tree with `pls run --on <cluster> --tree <name> -- <script>`."""
 
@@ -111,6 +118,9 @@ Run a staged tree with `pls run --on <cluster> --tree <name> -- <script>`."""
 def stage(args: list[str]) -> None:
     if set(args) & {"-h", "--help"}:
         _usage("stage", "--on <cluster> [data | list | rm <tree> | <name> <repo>=<ref|path>...]", STAGE_HELP)
+    on, rest = _split_on(args)
+    if rest[:1] == ["data"] and on and on not in profiles():  # an ssh box has no trees, only its data copy
+        handoff(["python3", "scripts/cluster/res/push_data.py", "--on", on, *rest[1:]])
     cluster, rest = _on("stage", args, ray=False)
     _connected(cluster, "stage")
     if rest[:1] == ["list"]:
