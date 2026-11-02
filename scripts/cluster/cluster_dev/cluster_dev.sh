@@ -420,7 +420,13 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tm
         esac
     done
     require_running
-    if [ "$cards" -gt 1 ] && [ -n "$DEV_CPUS" ]; then SRUN_CPUS_OPT="--cpus-per-task=$((DEV_CPUS * cards))"; _srun_opts; fi
+    if [ "$cards" -gt 1 ] && [ -n "$DEV_CPUS" ]; then
+        local step_cpus=$((DEV_CPUS * cards)) job_cpus
+        # a whole-node sentinel (--exclusive, GPUs not a gres) already holds every card's CPUs in its one task
+        job_cpus="$(on_login "squeue -j ${DD_JOBID} -h -o %C 2>/dev/null" | tr -d ' ' | grep -E '^[0-9]+$' | tail -n1 || true)"
+        [ -n "$job_cpus" ] && [ "$job_cpus" -lt "$step_cpus" ] && step_cpus="$job_cpus"
+        SRUN_CPUS_OPT="--cpus-per-task=${step_cpus}"; _srun_opts
+    fi
     [ -n "$space_check" ] && check_space "${CLUSTER_LOGS_DIR:-${REMOTE_ISAACLAB_DIR}/resources/hcrl_isaaclab/logs}" "run logs"
     # exec always runs with the current local config, pushed before every run
     push_env_cluster || { err "could not push ${ENV_FILE} to ${REMOTE_ENV_FILE}"; exit 1; }
