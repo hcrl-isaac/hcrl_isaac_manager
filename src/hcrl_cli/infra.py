@@ -110,7 +110,7 @@ STAGE_HELP = """Code reaches a cluster only as staged code trees; `pls run` stag
   pls stage --on <cluster> <name> <repo>=<ref|path>  a named tree with these repos pinned (the rest from the workspace)
   pls stage --on <cluster> data                     add new motion_datasets files to the cluster's shared copy
   pls stage --on <ssh host|pool> data [--root DIR]  the same on an ssh box (into the copy its --root runs read)
-  pls stage --on <cluster> list                    the staged trees and what each holds
+  pls stage --on <cluster> list                     the staged trees and what each holds
   pls stage --on <cluster> rm <tree> [--force]      remove a tree (rm --partials: abandoned uploads)
 Run a staged tree with `pls run --on <cluster> --tree <name> -- <script>`."""
 
