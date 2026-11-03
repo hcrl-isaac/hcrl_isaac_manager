@@ -123,6 +123,7 @@ def install() -> bool:
     _section("Workspace packages")
     retired = run([VENV_PY, "scripts/resolve_workspace.py", "--retire-renamed"], capture=True, check=False)
     retired = set(retired.stdout.split())
+    # a package that is not checked out (hcrl_sim2real or holosoma without a project needing it) is passed over
     packages = [
         "resources/hcrl_isaaclab",
         "resources/robot_rl",

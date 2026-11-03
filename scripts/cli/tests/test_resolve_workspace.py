@@ -1,8 +1,9 @@
-"""resolve_workspace.py: an optional (data) dependency this user can't read is skipped with a warning, never fatal."""
+"""resolve_workspace.py: optional deps a user can't read are skipped, own-repo projects resolve from their own URL."""
 
 import contextlib
 import io
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -73,6 +74,56 @@ class OptionalDepsTest(unittest.TestCase):
 
         with mock.patch.object(rw.subprocess, "run", run):
             self.assertFalse(rw.reachable("https://example.org/data", "main"))
+
+
+CATALOG = {"org": "hcrl-isaac", "always": ["hcrl_isaaclab", "robot_rl"], "available_projects": [{"name": "hhlm"}]}
+OWN = {"name": "foo", "git": "https://github.com/someone/foo_tasks.git", "ref": "dev"}
+OWN_DEPS = {"foo_tasks": [{"name": "hcrl_isaaclab", "ref": "main"}, {"name": "hcrl_robots", "ref": "main"}]}
+
+
+class OwnProjectTest(unittest.TestCase):
+    def _manifest(self, user: dict) -> dict:
+        """``load_manifest`` over ``CATALOG`` and the per-user selection ``user`` (YAML parsing stubbed)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            defaults, selection = Path(tmp, "defaults.yaml"), Path(tmp, "workspace.yaml")
+            defaults.write_text("defaults")
+            selection.write_text("user")
+            parsed = {"defaults": CATALOG, "user": user}
+            with (
+                mock.patch.object(rw, "DEFAULTS", defaults),
+                mock.patch.object(rw.yaml, "safe_load", lambda text: parsed[text], create=True),
+            ):
+                return rw.load_manifest(selection)
+
+    def test_an_own_project_skips_the_catalog_check_and_resolves_from_its_url(self) -> None:
+        manifest = self._manifest({"projects": ["hhlm", OWN]})
+        self.assertEqual(manifest["projects"], ["hhlm", "foo"])
+        with mock.patch.object(rw, "_read_deps", lambda d: OWN_DEPS.get(d.name, [])):
+            resolved = rw.resolve(manifest)
+        self.assertEqual(resolved["foo_tasks"]["git"], OWN["git"])
+        self.assertEqual(resolved["foo_tasks"]["ref"], "dev")
+        self.assertEqual(resolved["hhlm_tasks"]["git"], "git@github.com:hcrl-isaac/hhlm_tasks.git")
+        self.assertEqual(
+            resolved["hcrl_robots"]["git"], "git@github.com:hcrl-isaac/hcrl_robots.git", "its deps resolve"
+        )
+
+    def test_a_refs_pin_still_wins_over_an_own_projects_ref(self) -> None:
+        manifest = self._manifest({"projects": [OWN], "refs": {"foo_tasks": "feat/x"}})
+        with mock.patch.object(rw, "_read_deps", lambda d: []):
+            self.assertEqual(rw.resolve(manifest)["foo_tasks"]["ref"], "feat/x")
+
+    def test_a_catalog_name_without_a_url_is_still_checked(self) -> None:
+        with self.assertRaises(SystemExit) as ctx, contextlib.redirect_stdout(io.StringIO()):
+            self._manifest({"projects": [{"name": "nope"}]})
+        self.assertIn("unknown project 'nope'", str(ctx.exception))
+
+    def test_the_committed_core_leaves_hcrl_sim2real_to_the_projects_that_need_it(self) -> None:
+        defaults = (Path(__file__).resolve().parents[3] / "workspace.defaults.yaml").read_text()
+        always = next(line for line in defaults.splitlines() if line.startswith("always:"))
+        repos = [r.strip() for r in always.split("#")[0].split("[", 1)[1].split("]")[0].split(",")]
+        self.assertEqual(repos, ["hcrl_isaaclab", "robot_rl", "hcrl_robots"])
+        with mock.patch.object(rw, "_read_deps", lambda d: []):
+            self.assertNotIn("hcrl_sim2real", rw.resolve({"always": repos, "projects": [], "refs": {}}))
 
 
 if __name__ == "__main__":

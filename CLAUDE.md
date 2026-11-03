@@ -17,6 +17,7 @@ Project skills live in `.claude/skills/`. Use them rather than re-deriving the s
 | `add-compute` | adding an SSH box, SLURM cluster or Ray cluster, or checking which kinds you have |
 | `launch-run` | any training run past a smoke test |
 | `new-task` | adding a task (env + runner cfg + registration) |
+| `own-project` | your own task repo (outside the org or the catalog), or porting this infra to another codebase |
 | `convention-review` | reviewing a branch against the conventions below |
 
 ## Layout
@@ -32,7 +33,9 @@ Project skills live in `.claude/skills/`. Use them rather than re-deriving the s
 - **`resources/IsaacLab/`**: the Isaac Lab 3 source clone, at the ref in `workspace.defaults.yaml`.
 - Which repos are present: `workspace.defaults.yaml` (`always`, `available_projects`, `refs`) merged with the
   gitignored per-user `workspace.yaml`; `pls resolve` turns that into a flat `gitman.yaml` and fetches every repo.
-  A repo without a `refs:` entry tracks `main`.
+  A repo without a `refs:` entry tracks `main`. A task repo outside the catalog is a `workspace.yaml` `projects:`
+  entry with its own URL (`{name, git, ref}`); repos only one project needs (e.g. `hcrl_sim2real` for hhlm) come
+  through that project's `dependencies.yaml`, not `always`.
 
 ## Python environment
 

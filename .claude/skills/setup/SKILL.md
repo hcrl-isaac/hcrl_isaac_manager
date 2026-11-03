@@ -30,9 +30,15 @@ pls setup               # later: reinstall or reconfigure (from the ilab venv)
 shell it keeps the existing `workspace.yaml`; to write one by hand:
 
 ```yaml
-projects: [hhlm]          # names from available_projects in workspace.defaults.yaml
+projects:
+  - hhlm                  # a name from available_projects in workspace.defaults.yaml
+  - {name: foo, git: https://github.com/<you>/foo_tasks.git, ref: main}   # a repo outside the catalog
 isaaclab: {mode: source}
 ```
+
+The core (`hcrl_isaaclab`, `robot_rl`, `hcrl_robots`) is always fetched. The catalog projects are private: a fresh
+`workspace.yaml` leaves out the defaults the user cannot read, with a warning. For the user's own task repo, use the
+`own-project` skill.
 
 It then fetches every repo under `resources/` (`pls resolve`), builds `ilab` on Python 3.12, `uv sync`s the
 locked Isaac Lab clone (which owns torch) and installs every workspace package editable. W&B credentials go in

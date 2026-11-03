@@ -88,7 +88,8 @@ def _files(name: str, org: str) -> dict[str, str]:
             "- `example/` -- replace with this project's task domains.\n\n"
             "## Install\n\n"
             f"Normally installed as part of the workspace via the manager: add `{name}` to "
-            "`workspace.defaults.yaml`'s `available_projects`, then select it in the `pls setup` picker. "
+            "`workspace.defaults.yaml`'s `available_projects` (or, for a repo outside the manager's org, to your "
+            f"`workspace.yaml` as `projects: [{{name: {name}, git: <clone URL>}}]`), then run `pls setup`. "
             "Standalone, with core already in the env: `pip install -e .`.\n\n"
             "## Run\n\n"
             "```bash\n"
@@ -242,10 +243,12 @@ def main() -> None:
         p.write_text(content)
     print(f"[new] scaffolded {dest} ({name}/ namespace).")
     print(
-        f"[new] next: git init it, push to {args.org}/{name}_tasks, add '{name}' to "
-        "workspace.defaults.yaml available_projects, then pick it in `pls setup`. Until it is registered there,\n"
-        "      `pls run --wt <set>` and remote runs skip it (they stage only registered repos); run it locally with\n"
-        f"      `pls test {name}_tasks` and `pls run` after `pls setup` installs it."
+        f"[new] next: git init it, push it, and register it. A repo in {args.org}: add '{name}' to\n"
+        "      workspace.defaults.yaml available_projects, then pick it in `pls setup`. A repo elsewhere: add it to\n"
+        "      your gitignored workspace.yaml as\n"
+        f"      `projects: [{{name: {name}, git: <its clone URL>, ref: main}}]`, then `pls setup`. Until it is registered\n"
+        "      one of these ways, `pls run --wt <set>` and remote runs skip it (they stage only resolved repos); then\n"
+        f"      `pls test {name}_tasks` is its CPU smoke."
     )
 
 
