@@ -125,6 +125,10 @@ ICD_JSON="$JOB_TMPDIR/nvidia_icd.json"
 # a bare library name: --nv binds the driver libs on the container's search path, never at a host path
 echo '{"file_format_version": "1.0.0", "ICD": {"library_path": "libGLX_nvidia.so.0", "api_version": "1.3"}}' >"$ICD_JSON"
 VK_BINDS="$VK_BINDS -B ${ICD_JSON}:/etc/vulkan/icd.d/nvidia_icd.json:ro"
+# --nv leaves out the driver's NGX library too, and without it RTX's DLSS denoiser is off: every frame is speckled
+for f in /usr/lib64/libnvidia-ngx.so.1 "/usr/lib/$(uname -m)-linux-gnu/libnvidia-ngx.so.1"; do
+    [ -e "$f" ] && VK_BINDS="$VK_BINDS -B $(readlink -f "$f"):/usr/lib/$(uname -m)-linux-gnu/libnvidia-ngx.so.1:ro" && break
+done
 apptainer exec ${CLUSTER_APPTAINER_FLAGS:-} \
     -B $JOB_TMPDIR/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B $HOME_DIR:${DOCKER_USER_HOME}:rw \
