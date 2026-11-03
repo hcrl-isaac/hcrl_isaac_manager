@@ -12,7 +12,8 @@ R=$ROOT/resources
 uv sync -q --project $R/IsaacLab --frozen --extra rsl-rl --extra ovphysx --extra importers $(for e in ${EXTRA_EXTRAS:-}; do printf -- "--extra %s " "$e"; done)
 # the lock resolves torch cu130 on aarch64 (GB200, DGX Spark); a cu128 backend here would swap it
 BACKEND=cu128; [ "$(uname -m)" = aarch64 ] && BACKEND=cu130
-PKGS=(-e $R/robot_rl -e $R/hcrl_isaaclab); [ -d $R/hhlm_tasks ] && PKGS+=(-e $R/hhlm_tasks)
+PKGS=(-e $R/robot_rl -e $R/hcrl_isaaclab)
+for t in $R/*_tasks; do [ -d "$t" ] && PKGS+=(-e "$t"); done  # the task repos deploy.sh shipped
 # the locked versions that break (scripts/docker/lock_overrides.txt, shipped by deploy.sh)
 PKGS+=(-r $R/lock_overrides.txt)
 # the repos' GPU suites run inside the root (`pls run --root` -> pytest)

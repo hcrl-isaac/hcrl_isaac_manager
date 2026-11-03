@@ -2,7 +2,8 @@
 """Collect the runtime dependencies of the mounted workspace packages into a requirements file.
 
 Repos come from the committed catalogue (``workspace.defaults.yaml``: the ``always`` list plus every
-project's task repo and their ``dependencies.yaml`` closure). Dependencies are read from
+project's task repo and their ``dependencies.yaml`` closure), plus the own-repo projects (``{name, git}`` entries) of
+the per-user ``workspace.yaml``. Dependencies are read from
 ``[project].dependencies`` in pyproject.toml and ``INSTALL_REQUIRES`` in setup.py (AST, never executed).
 
 Writes ``requirements.workspace.txt`` next to this script; ``--check`` verifies it instead.
@@ -77,12 +78,13 @@ def declared_name(directory: Path) -> str | None:
     return None
 
 
-def catalogue_repos(defaults: Path, resources: Path) -> list[str]:
-    """List every repo the committed catalogue can select, in resolution order.
+def catalogue_repos(defaults: Path, resources: Path, selection: Path | None = None) -> list[str]:
+    """List every repo the committed catalogue can select, and the user's own-repo projects, in resolution order.
 
     Args:
         defaults: The ``workspace.defaults.yaml`` to read ``always`` and ``available_projects`` from.
         resources: The workspace ``resources/`` directory, for each cloned repo's ``dependencies.yaml``.
+        selection: The per-user ``workspace.yaml`` whose ``{name, git}`` projects are added; may be absent.
 
     Returns:
         Repo names: the ``always`` list, every project's task repo, and their declared dependencies
@@ -91,6 +93,8 @@ def catalogue_repos(defaults: Path, resources: Path) -> list[str]:
     manifest = yaml.safe_load(defaults.read_text()) or {}
     queue = list(manifest.get("always", []))
     queue += [f"{p['name']}_tasks" for p in manifest.get("available_projects", [])]
+    user = (yaml.safe_load(selection.read_text()) or {}) if selection and selection.is_file() else {}
+    queue += [f"{p['name']}_tasks" for p in user.get("projects") or [] if isinstance(p, dict) and p.get("git")]
     repos: list[str] = []
     while queue:
         name = queue.pop(0)
@@ -145,6 +149,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resources", type=Path, default=MANAGER_DIR / "resources")
     parser.add_argument("--defaults", type=Path, default=MANAGER_DIR / "workspace.defaults.yaml")
+    parser.add_argument("--selection", type=Path, default=MANAGER_DIR / "workspace.yaml")
     parser.add_argument("--out", type=Path, default=Path(__file__).resolve().parent / "requirements.workspace.txt")
     parser.add_argument("--check", action="store_true", help="Exit non-zero if --out is out of date.")
     args = parser.parse_args()
@@ -153,7 +158,7 @@ def main() -> int:
         print(f"[deps] no resources dir at {args.resources}", file=sys.stderr)
         return 1
 
-    found, workspace_names = collect(args.resources, catalogue_repos(args.defaults, args.resources))
+    found, workspace_names = collect(args.resources, catalogue_repos(args.defaults, args.resources, args.selection))
     excluded = workspace_names | BASE_PROVIDED
 
     lines, conflicts = [], []
