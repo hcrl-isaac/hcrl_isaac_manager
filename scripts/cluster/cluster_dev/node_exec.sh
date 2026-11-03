@@ -169,6 +169,10 @@ ICD_JSON="${STAGE}/nvidia_icd.json"
 echo '{"file_format_version": "1.0.0", "ICD": {"library_path": "libGLX_nvidia.so.0", "api_version": "1.3"}}' >"$ICD_JSON.$$"
 mv -f "$ICD_JSON.$$" "$ICD_JSON"  # steps sharing the stage never read a half-written file
 VK_BINDS="$VK_BINDS -B ${ICD_JSON}:/etc/vulkan/icd.d/nvidia_icd.json:ro"
+# --nv leaves out the driver's NGX library too, and without it RTX's DLSS denoiser is off: every frame is speckled
+for f in /usr/lib64/libnvidia-ngx.so.1 "/usr/lib/$(uname -m)-linux-gnu/libnvidia-ngx.so.1"; do
+    [ -e "$f" ] && VK_BINDS="$VK_BINDS -B $(readlink -f "$f"):/usr/lib/$(uname -m)-linux-gnu/libnvidia-ngx.so.1:ro" && break
+done
 # NODE_EXEC_OWN_TMP=1 (develop exec --own-tmp): this step's /tmp is its own, not the job's shared one, so steps on
 # one node never meet in Isaac Lab's hard-coded /tmp/IsaacLab (its URDF->USD conversions race); /tmp/cache stays the
 # job's, so caches kept there persist across steps
