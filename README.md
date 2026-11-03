@@ -6,7 +6,8 @@ quickstart; per-cluster READMEs ([Ray](scripts/ray/README.md), [Cluster](scripts
 [ssh boxes](scripts/larg/README.md)) cover what each piece does and the full options.
 
 Working with Claude Code: [CLAUDE.md](CLAUDE.md) describes the workspace for a Claude session, and
-`.claude/skills/` holds its procedures (`setup`, `add-compute`, `launch-run`, `new-task`, `convention-review`).
+`.claude/skills/` holds its procedures (`setup`, `add-compute`, `launch-run`, `new-task`, `own-project`,
+`convention-review`).
 
 ## Prerequisites
 
@@ -34,6 +35,17 @@ Your selection is written to a gitignored `workspace.yaml` (just the projects + 
 shared catalog of selectable projects and the defaults (org, refs, IsaacLab version) live in the
 committed [`workspace.defaults.yaml`](workspace.defaults.yaml). To add a new selectable project, add it
 to `available_projects` there. This replaces the old per-project git branches — selection is now local.
+
+The core (`hcrl_isaaclab`, `robot_rl`, `hcrl_robots`) is always fetched; the catalog projects are private, and a
+default project you cannot read is left out with a warning when `workspace.yaml` is first written. Your own task
+repo, outside the catalog (any org), goes in `workspace.yaml` with its URL and then works like any project, remote
+runs included (the `own-project` skill has the whole path):
+
+```yaml
+projects:
+  - {name: foo, git: https://github.com/<you>/foo_tasks.git, ref: main}   # cloned as resources/foo_tasks
+isaaclab: {mode: source}
+```
 
 To pull in or update the workspace repos at any time, run **`pls resolve`** (see [`resolve`](#resolve)) —
 after a repo adds a dependency in its `dependencies.yaml`, or to fetch each repo up to its pinned ref.

@@ -2,10 +2,12 @@
 """Interactively select which projects + IsaacLab mode this workspace composes.
 
 Reads the committed catalog (``workspace.defaults.yaml``) and writes the per-user selection to a gitignored
-``workspace.yaml`` (``projects`` + ``isaaclab.mode``: source/none), which ``resolve_workspace.py`` merges.
+``workspace.yaml`` (``projects`` + ``isaaclab.mode``: source/none), which ``resolve_workspace.py`` merges. The picker
+keeps the file's other keys and its own-repo ``projects`` entries (``{name, git, ref?}``).
 
 Modes:
-    (default)      Write the catalog defaults if ``workspace.yaml`` is absent, else leave it. Never prompts.
+    (default)      Write the catalog defaults this user can read if ``workspace.yaml`` is absent, else leave it.
+                   Never prompts.
     --interactive  On a TTY, open the picker pre-filled with the current selection. With no TTY, keep the
                    existing selection, or write catalog defaults if none exists.
 """
@@ -17,7 +19,7 @@ import sys
 from pathlib import Path
 
 import yaml
-from resolve_workspace import RENAMED_PROJECTS
+from resolve_workspace import RENAMED_PROJECTS, _git_url, project_name, reachable
 
 MANAGER_DIR = Path(__file__).resolve().parent.parent
 DEFAULTS = MANAGER_DIR / "workspace.defaults.yaml"
@@ -47,10 +49,24 @@ def _current_mode(current: dict, defaults: dict) -> str:
     return _default_mode(defaults)
 
 
+def _readable_defaults(defaults: dict) -> list[str]:
+    """The catalog's ``default: true`` projects whose task repo this user can read, warning about each other one."""
+    org = defaults.get("org", "hcrl-isaac")
+    readable = []
+    for p in defaults.get("available_projects", []):
+        if not p.get("default"):
+            continue
+        url = _git_url(f"{p['name']}_tasks", org, None)
+        if reachable(url, "main"):
+            readable.append(p["name"])
+        else:
+            print(f"[configure] WARNING: leaving out default project {p['name']!r}: no read access to {url}")
+    return readable
+
+
 def _default_selection(defaults: dict) -> dict:
-    """The selection used with no user input: catalog ``default: true`` projects + default IsaacLab mode."""
-    projects = [p["name"] for p in defaults.get("available_projects", []) if p.get("default")]
-    return {"projects": projects, "isaaclab": {"mode": _default_mode(defaults)}}
+    """The selection used with no user input: readable catalog ``default: true`` projects + default IsaacLab mode."""
+    return {"projects": _readable_defaults(defaults), "isaaclab": {"mode": _default_mode(defaults)}}
 
 
 _HEADER = (
@@ -61,7 +77,7 @@ _HEADER = (
 
 def _write(selection: dict) -> None:
     OUT.write_text(_HEADER + yaml.safe_dump(selection, sort_keys=False))
-    proj = ", ".join(selection["projects"]) or "(none)"
+    proj = ", ".join(project_name(p) for p in selection["projects"]) or "(none)"
     print(f"[configure] wrote {OUT.name}: projects=[{proj}], isaaclab={selection['isaaclab']['mode']}")
 
 
@@ -72,11 +88,12 @@ def _migrate_renamed(current: dict) -> dict:
     projects = current.get("projects") or []
     projects = [projects] if isinstance(projects, str) else projects
     refs = current.get("refs") or {}
-    notes = [f"project {p!r} -> {RENAMED_PROJECTS[p]!r}" for p in projects if p in RENAMED_PROJECTS]
+    renamed = [p for p in projects if isinstance(p, str) and p in RENAMED_PROJECTS]  # own-repo entries keep theirs
+    notes = [f"project {p!r} -> {RENAMED_PROJECTS[p]!r}" for p in renamed]
     notes += [f"refs pin {o}_tasks -> {n}_tasks" for o, n in RENAMED_PROJECTS.items() if f"{o}_tasks" in refs]
     if not notes:
         return current
-    current["projects"] = [RENAMED_PROJECTS.get(p, p) for p in projects]
+    current["projects"] = [RENAMED_PROJECTS[p] if p in renamed else p for p in projects]
     if refs:
         current["refs"] = {_renamed_repo(k): v for k, v in refs.items()}
     OUT.write_text(_HEADER + yaml.safe_dump(current, sort_keys=False))
@@ -91,11 +108,15 @@ def _renamed_repo(name: str) -> str:
 
 
 def _prompt(defaults: dict, current: dict) -> dict:
-    """Arrow-key/space selector for projects + IsaacLab mode, pre-filling ``current``."""
+    """Arrow-key/space selector for projects + IsaacLab mode, pre-filling ``current`` and keeping its other keys."""
     import questionary
 
     catalog = defaults.get("available_projects", [])
-    cur_projects = set(current.get("projects", [p["name"] for p in catalog if p.get("default")]))
+    saved = current.get("projects", [p["name"] for p in catalog if p.get("default")])
+    saved = [saved] if isinstance(saved, str) else saved
+    cur_projects = {project_name(p) for p in saved}
+    # own-repo entries are offered (checked) with their URL, in place of a catalog project of the same name
+    own = {p["name"]: p for p in saved if isinstance(p, dict) and p.get("git")}
     choices = [
         questionary.Choice(
             title=f"{p['name']:<8} {p.get('description', '')}".rstrip(),
@@ -103,7 +124,9 @@ def _prompt(defaults: dict, current: dict) -> dict:
             checked=p["name"] in cur_projects,
         )
         for p in catalog
+        if p["name"] not in own
     ]
+    choices += [questionary.Choice(title=f"{n:<8} {p['git']}", value=n, checked=True) for n, p in own.items()]
     projects = questionary.checkbox(
         "Select projects to install (space to toggle, enter to confirm):", choices=choices
     ).ask()
@@ -121,7 +144,8 @@ def _prompt(defaults: dict, current: dict) -> dict:
     if mode is None:
         sys.exit("[configure] cancelled")
 
-    return {"projects": projects, "isaaclab": {"mode": mode}}
+    isaaclab = {k: v for k, v in current.get("isaaclab", {}).items() if k != "source"}  # `source:` is retired
+    return {**current, "projects": [own.get(n, n) for n in projects], "isaaclab": {**isaaclab, "mode": mode}}
 
 
 def main() -> None:

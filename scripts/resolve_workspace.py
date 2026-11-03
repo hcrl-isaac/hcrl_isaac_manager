@@ -8,7 +8,8 @@ resolved by name into one flat ``gitman.yaml`` (all repos siblings under ``resou
 The manifest is the committed ``workspace.defaults.yaml`` (``org``, ``always``, ``refs``, ``isaaclab``,
 ``available_projects``) overlaid with the per-user, gitignored ``workspace.yaml`` (``projects`` +
 ``isaaclab.mode``, written by ``configure_workspace.py``). With no per-user file, the catalog's
-``default: true`` projects are used.
+``default: true`` projects are used. A ``projects`` entry is a catalog name, or ``{name, git, ref?}`` for a task repo
+outside the catalog (cloned from ``git`` as ``<name>_tasks``).
 """
 
 from __future__ import annotations
@@ -68,6 +69,29 @@ def _check_projects(projects: list[str], refs: dict, known: set[str], overrides_
         sys.exit("[resolve] " + "\n[resolve] ".join(errors) + f"\n[resolve] Update {overrides_path}, or {fix}.")
 
 
+def project_name(entry: str | dict) -> str:
+    """The name of a ``projects`` entry: a catalog name, or the ``name`` of a ``{name, git, ref?}`` entry."""
+    return entry["name"] if isinstance(entry, dict) else entry
+
+
+def own_projects(entries: list) -> dict[str, dict]:
+    """The ``{name, git, ref?}`` entries of a ``projects`` list, as name -> ``{git, ref}``.
+
+    Args:
+        entries: The per-user ``projects`` list (names and dicts).
+
+    Returns:
+        The entries that carry their own git URL; these are not checked against the catalog.
+    """
+    own = {}
+    for e in entries:
+        if isinstance(e, dict) and not e.get("name"):
+            sys.exit(f"[resolve] a projects entry needs a name: {e!r}")
+        if isinstance(e, dict) and e.get("git"):
+            own[e["name"]] = {"git": e["git"], "ref": e.get("ref", "main")}
+    return own
+
+
 def retired_checkouts(projects: list[str]) -> list[Path]:
     """Checkouts of renamed projects left under ``resources/`` whose new name is selected."""
     return [
@@ -100,7 +124,8 @@ def load_manifest(overrides_path: Path) -> dict:
 
     Returns:
         A manifest with ``org``, ``always``, ``refs``, ``isaaclab`` (normalized to carry ``mode``:
-        pip/source/none) and a flat ``projects`` name list -- the shape ``resolve()``/``to_gitman()`` consume.
+        pip/source/none), a flat ``projects`` name list and ``own_projects`` (name -> ``{git, ref}`` of the entries
+        outside the catalog) -- the shape ``resolve()``/``to_gitman()`` consume.
     """
     defaults = yaml.safe_load(DEFAULTS.read_text()) if DEFAULTS.is_file() else {}
     defaults = defaults or {}
@@ -112,7 +137,10 @@ def load_manifest(overrides_path: Path) -> dict:
         projects = [p["name"] for p in catalog if p.get("default")]
     elif isinstance(projects, str):
         projects = [projects]
-    _check_projects(projects, overrides.get("refs") or {}, {p["name"] for p in catalog}, overrides_path)
+    own = own_projects(projects)
+    projects = [project_name(p) for p in projects]
+    in_catalog = [p for p in projects if p not in own]
+    _check_projects(in_catalog, overrides.get("refs") or {}, {p["name"] for p in catalog}, overrides_path)
 
     isaaclab = {**defaults.get("isaaclab", {}), **overrides.get("isaaclab", {})}
     # Mode precedence: an explicit per-user choice (mode, or the legacy source bool) wins over the default.
@@ -124,6 +152,7 @@ def load_manifest(overrides_path: Path) -> dict:
         "refs": {**defaults.get("refs", {}), **overrides.get("refs", {})},
         "isaaclab": isaaclab,
         "projects": projects,
+        "own_projects": own,
     }
 
 
@@ -159,11 +188,12 @@ def resolve(manifest: dict) -> dict[str, dict]:
     refs = manifest.get("refs", {}) or {}
     resolved: dict[str, dict] = {}
 
-    # seed roots: the always-present repos + each selected project's task repo
-    roots = list(manifest.get("always", ["hcrl_isaaclab", "robot_rl"]))
-    roots += [f"{p}_tasks" for p in manifest.get("projects", [])]
-
-    queue = [{"name": n, "git": None, "ref": refs.get(n, "main")} for n in roots]
+    # seed roots: the always-present repos + each selected project's task repo (an own project from its own URL)
+    own = manifest.get("own_projects", {}) or {}
+    queue = [{"name": n, "git": None, "ref": "main"} for n in manifest.get("always", ["hcrl_isaaclab", "robot_rl"])]
+    queue += [
+        {"name": f"{p}_tasks", "git": None, "ref": "main", **own.get(p, {})} for p in manifest.get("projects", [])
+    ]
     while queue:
         dep = queue.pop(0)
         name = dep["name"]
