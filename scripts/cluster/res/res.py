@@ -509,8 +509,14 @@ def _slurm_label(target: str) -> str:
     return f"{parts[0]}:{parts[2]} (job {parts[1]})" if len(parts) == 3 else target
 
 
+def _lease_targets(targets: list[str]) -> list[str]:
+    """Lease ids or cards, with `lease:<id>` (the `pls run --on` form) taken as the bare id."""
+    return [t.removeprefix("lease:") for t in targets]
+
+
 def cmd_release(args: argparse.Namespace, _pools: list[Pool]) -> None:
     """Drop leases by id or card; only the holder may, unless --force."""
+    args.targets = _lease_targets(args.targets)
     try:
         with ls.locked_state() as (leases, reservations):
             targets = set(args.targets) | {_slurm_label(t) for t in args.targets}
@@ -534,6 +540,7 @@ def cmd_release(args: argparse.Namespace, _pools: list[Pool]) -> None:
 
 def cmd_transfer(args: argparse.Namespace, _pools: list[Pool]) -> None:
     """Hand leases (by id or card) to another holder; only the holder may, unless --force."""
+    args.targets = _lease_targets(args.targets)
     try:
         with ls.locked_store() as leases:
             targets = set(args.targets) | {_slurm_label(t) for t in args.targets}

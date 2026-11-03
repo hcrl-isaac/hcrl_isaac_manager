@@ -431,6 +431,20 @@ class CommandTest(CommandBase):
         res.cmd_release(argparse.Namespace(targets=["gpub1:7:0"], holder="s", force=False), self.pools)
         self.assertEqual(self.stored(), [])
 
+    def test_release_and_transfer_accept_the_lease_prefix(self) -> None:
+        """`lease:<id>`, the form a refused `pls run --on` suggests, names the lease like its bare id."""
+        self.cards = [card(host="gpub1", index=0, job="7"), card(host="gpub1", index=1, job="7")]
+        self.claim("gpub1:7:0")
+        self.claim("gpub1:7:1")
+        with ls.locked_store() as leases:
+            first, second = sorted(leases, key=lambda x: x.card)
+        moved = argparse.Namespace(targets=[f"lease:{first.id}"], holder="s", to="t", force=False, note="", run="")
+        res.cmd_transfer(moved, self.pools)
+        with ls.locked_store() as leases:
+            self.assertEqual({x.id: x.holder for x in leases}[first.id], "t")
+        res.cmd_release(argparse.Namespace(targets=[f"lease:{second.id}"], holder="s", force=False), self.pools)
+        self.assertEqual(self.stored(), [first.card])
+
     def test_bad_lease_windows_are_rejected(self) -> None:
         saved = res.load_config
         try:
