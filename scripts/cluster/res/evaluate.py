@@ -1692,6 +1692,14 @@ def _interrupt(signum: int, _frame: object) -> None:
     raise KeyboardInterrupt(signal.Signals(signum).name)
 
 
+def _defines_flag(path: str, flag: str) -> bool:
+    """Whether the script registers ``flag`` as an argument of its own."""
+    try:
+        return f'"{flag}"' in Path(path).read_text(errors="replace")
+    except OSError:
+        return False
+
+
 def _takes_launcher_args(path: str) -> bool:
     """Whether the script registers Isaac Lab's launcher arguments (``--device`` among them)."""
     try:
@@ -1923,6 +1931,15 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         sys.exit(f"[res] --gpus takes a card count of 1 or more, not {args.gpus}")
     if args.gpus > 1 and (args.lease or args.any or not args.on):
         sys.exit("[res] --gpus N takes --on <node>: a SLURM node as host or host:job (pls res status shows them)")
+    if (
+        args.gpus > 1
+        and not args.cmd
+        and "--distributed" not in run_args
+        and _defines_flag(local_file, "--distributed")
+    ):
+        # without it every rank builds on cuda:0 and the runner refuses the second rank's device
+        run_args = [*run_args, "--distributed"]
+        print(f"[res] --gpus {args.gpus}: adding --distributed for {os.path.basename(local_file)}", file=sys.stderr)
     if args.cpus < 0:
         sys.exit(f"[res] --cpus takes a core count of 1 or more, not {args.cpus}")
     if args.cpus:

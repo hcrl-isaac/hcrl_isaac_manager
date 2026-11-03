@@ -393,6 +393,31 @@ class SlurmTest(unittest.TestCase):
                     ev.cmd_eval(args, [], mock.Mock())
                 self.assertIn("--gpus N takes --on <node>", str(ctx.exception.code))
 
+    def test_gpus_adds_distributed_for_a_script_that_defines_it(self) -> None:
+        """`--gpus N` without `--distributed` would build every rank on cuda:0; a script that takes it gets it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            takes, plain = Path(tmp) / "train.py", Path(tmp) / "eval.py"
+            takes.write_text('parser.add_argument(\n    "--distributed",\n    action="store_true",\n)\n')
+            plain.write_text("print('one process')\n")
+            for script, gpus, extra, added in ((takes, "4", [], True), (takes, "1", [], False),
+                                               (takes, "4", ["--distributed"], False), (plain, "4", [], False)):  # fmt: skip
+                with self.subTest(script=script.name, gpus=gpus, extra=extra):
+                    args = ev.parse_args([
+                        str(script),
+                        "--holder",
+                        "h",
+                        "--on",
+                        "c125-013",
+                        "--gpus",
+                        gpus,
+                        "--",
+                        *extra,
+                    ])
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+                        ev.cmd_eval(args, [], mock.Mock())  # no pools: it stops at the claim
+                    self.assertEqual("adding --distributed" in err.getvalue(), added, err.getvalue())
+
     def test_gpus_takes_a_positive_count(self) -> None:
         for n in ("0", "-2"):
             with self.subTest(n=n):
