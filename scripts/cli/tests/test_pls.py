@@ -522,7 +522,8 @@ class WorkspaceTest(unittest.TestCase):
 
     def test_a_failed_install_does_not_stop_the_rest_and_is_reported(self) -> None:
         installs, vscode, err = self._setup("source", failing=("uv sync",))
-        self.assertIn("resources/robot_rl", installs[-1])
+        self.assertTrue(any("resources/robot_rl" in cmd for cmd in installs))
+        self.assertIn("scripts/docker/lock_overrides.txt", installs[-1], "the lock overrides install last")
         vscode.assert_called_once()
         self.assertIn("IsaacLab", err)
 

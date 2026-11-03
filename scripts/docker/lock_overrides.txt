@@ -1,0 +1,7 @@
+# Versions that replace Isaac Lab's locked ones after its `uv sync --frozen`, applied by `pls setup`, the cluster image
+# (Dockerfile) and the isaac3 install roots (remote_setup.sh). Drop a line once the lock moves past its bug.
+
+# the lock's 2.14.0a1 rejects wandb's artifact-file responses
+pydantic==2.11.10
+# tqdm 4.70's thread_map takes min() over length hints, and huggingface_hub's snapshot_download passes a generator
+tqdm==4.67.1

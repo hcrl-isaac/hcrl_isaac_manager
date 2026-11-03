@@ -20,6 +20,6 @@ ssh ${SSH_OPTS:-} $HOST "mkdir -p $ROOT/resources/hcrl_robots"
 EX=(--exclude=.venv --exclude=.git --exclude=__pycache__ --exclude=logs --exclude=runs --exclude=outputs --exclude='*.egg-info'
     --exclude='/*/worktrees' --exclude='/*/.claude')
 rsync -az ${RSYNC_RSH:+-e "$RSYNC_RSH"} "${EX[@]}" $R/IsaacLab $R/robot_rl $R/hcrl_isaaclab "${TASKS[@]}" \
-  $R/../scripts/isaac3 $HOST:$ROOT/resources/
+  $R/../scripts/isaac3 $R/../scripts/docker/lock_overrides.txt $HOST:$ROOT/resources/
 rsync -azL ${RSYNC_RSH:+-e "$RSYNC_RSH"} "${EX[@]}" $R/hcrl_robots/t1 $HOST:$ROOT/resources/hcrl_robots/
 echo "deployed to $HOST:$ROOT"
