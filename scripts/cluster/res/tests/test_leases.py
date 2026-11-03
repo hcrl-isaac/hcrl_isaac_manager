@@ -121,6 +121,18 @@ class ReconcileTest(unittest.TestCase):
         for minute in (1, 100):
             self.assertEqual(self.run_at(None, reports, minute), [])
 
+    def test_a_lease_of_an_ended_job_goes_when_a_new_job_holds_the_same_card(self) -> None:
+        old, new = card(job="3657685"), card(state="busy", job="3670182")
+        old.uuid = new.uuid = "GPU-same-physical-card"  # the UUID survives the job
+        self.leases = [lease_on(old, last_active=T0)]
+        released = self.run_at(None, [report(new, label="stampede3 (amd-rtx)")], 1)
+        self.assertEqual([why for _, why in released], ["job 3657685 ended (the card is job 3670182's now)"])
+
+    def test_a_lease_of_the_running_job_is_kept(self) -> None:
+        c = card(state="busy", job="3670182")
+        self.leases = [lease_on(c, last_active=T0)]
+        self.assertEqual(self.run_at(None, [report(c, label="stampede3 (amd-rtx)")], 1), [])
+
     def test_unattributed_process_does_not_hide_a_squatter(self) -> None:
         c = card(state="busy", user="squatter")
         c.procs.append(Proc(9, 100, "?"))

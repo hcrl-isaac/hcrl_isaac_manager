@@ -394,6 +394,10 @@ def reconcile(
                 elif now - lease.missing_since >= idle_min * 60:
                     released.append((lease, "card no longer exists"))
             continue
+        if lease.job and card.job and lease.job != card.job:
+            # a card keeps its UUID across jobs: another job holding it means the lease's job, and its run, ended
+            released.append((lease, f"job {lease.job} ended (the card is job {card.job}'s now)"))
+            continue
         lease.missing_since = 0.0
         lease.report = seen_in[lease.key]  # a label from before reports were split by partition follows its card
         active = _activity(lease, card)
