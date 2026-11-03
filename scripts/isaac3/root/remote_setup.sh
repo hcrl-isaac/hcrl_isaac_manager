@@ -13,8 +13,8 @@ uv sync -q --project $R/IsaacLab --frozen --extra rsl-rl --extra ovphysx --extra
 # the lock resolves torch cu130 on aarch64 (GB200, DGX Spark); a cu128 backend here would swap it
 BACKEND=cu128; [ "$(uname -m)" = aarch64 ] && BACKEND=cu130
 PKGS=(-e $R/robot_rl -e $R/hcrl_isaaclab); [ -d $R/hhlm_tasks ] && PKGS+=(-e $R/hhlm_tasks)
-# Isaac Lab EA's lock pins pydantic 2.14.0a1, whose models reject wandb's artifact-file responses
-PKGS+=("pydantic==2.11.10")
+# the locked versions that break (scripts/docker/lock_overrides.txt, shipped by deploy.sh)
+PKGS+=(-r $R/lock_overrides.txt)
 # the repos' GPU suites run inside the root (`pls run --root` -> pytest)
 PKGS+=(pytest pytest-timeout)
 uv pip install -q --python $ROOT/venv/bin/python --torch-backend $BACKEND "${PKGS[@]}"

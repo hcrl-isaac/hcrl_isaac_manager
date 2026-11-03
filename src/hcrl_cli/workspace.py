@@ -138,6 +138,8 @@ def install() -> bool:
             ok[d] = _pip("--torch-backend", CU, "-e", d)
         elif Path(d).is_dir():
             print(f"[install] skipping non-package data repo: {d}")
+    _section("Lock overrides")  # last, so no later install lifts a pinned package back to the lock's version
+    ok["lock overrides"] = _pip("-r", "scripts/docker/lock_overrides.txt")
     if failed := [name for name, good in ok.items() if not good]:
         print(f"[install][WARN] these installs failed (see above): {', '.join(failed)}", file=sys.stderr)
     return True
