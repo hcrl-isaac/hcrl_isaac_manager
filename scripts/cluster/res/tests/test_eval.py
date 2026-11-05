@@ -225,6 +225,7 @@ class TargetTest(unittest.TestCase):
         )
         for runner in (box, slurm):
             self.assertIn('export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"', runner)
+            self.assertRegex(runner, r"export [^\n]*\bPYTHONFAULTHANDLER=1\b")  # a segfault prints the Python stack
             self.assertEqual(subprocess.run(["bash", "-n"], input=runner, text=True).returncode, 0)
 
     def test_an_install_root_runs_its_venv_python_on_a_clean_path(self) -> None:
