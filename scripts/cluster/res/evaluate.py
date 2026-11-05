@@ -682,7 +682,8 @@ def runner_script(
     nice = f"taskset -c {q(t.cores)} nice -n 10 " if t.cores else ""
     launch = f'export PATH="${{py%/*}}:$PATH"; {nice}"$@"' if command else f'{nice}"$py" {q(script)} "$@"'
     cache = f"{t.scratch}/res-eval/cache/{t.host}-gpu{t.gpu}"  # one lease per card, so per-card caches never race
-    pin = (
+    # CUDA numbers cards fastest first by default; nvidia-smi, and so the probe's index, in PCI order
+    pin = "export CUDA_DEVICE_ORDER=PCI_BUS_ID\n" + (
         f"export CUDA_VISIBLE_DEVICES={t.uuid or t.gpu} RES_EVAL_DEVICE=cuda:0"
         if t.pin == "cvd"
         else f"unset CUDA_VISIBLE_DEVICES; export RES_EVAL_DEVICE=cuda:{t.gpu}"

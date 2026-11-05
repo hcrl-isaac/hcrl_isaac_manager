@@ -177,6 +177,8 @@ class TargetTest(unittest.TestCase):
         cvd = ev.runner_script(ev.make_target(Pool("a", "ssh", {"user": "u"}), "h", 2), "/s", "x.py", [], [])
         self.assertIn("export CUDA_VISIBLE_DEVICES=2 RES_EVAL_DEVICE=cuda:0", cvd)
         self.assertNotIn("CUDA numbers", runner)  # no UUID to check against
+        self.assertIn("export CUDA_DEVICE_ORDER=PCI_BUS_ID\n", runner)
+        self.assertIn("export CUDA_DEVICE_ORDER=PCI_BUS_ID\n", cvd)
         cvd = ev.runner_script(
             ev.make_target(Pool("a", "ssh", {"user": "u"}), "h", 2, uuid="GPU-ab"), "/s", "x.py", [], []
         )
