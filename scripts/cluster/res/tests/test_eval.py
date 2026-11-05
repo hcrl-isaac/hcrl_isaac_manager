@@ -176,6 +176,25 @@ class TargetTest(unittest.TestCase):
         self.assertIn("unset CUDA_VISIBLE_DEVICES; export RES_EVAL_DEVICE=cuda:2", runner)
         cvd = ev.runner_script(ev.make_target(Pool("a", "ssh", {"user": "u"}), "h", 2), "/s", "x.py", [], [])
         self.assertIn("export CUDA_VISIBLE_DEVICES=2 RES_EVAL_DEVICE=cuda:0", cvd)
+        self.assertNotIn("CUDA numbers", runner)  # no UUID to check against
+        cvd = ev.runner_script(
+            ev.make_target(Pool("a", "ssh", {"user": "u"}), "h", 2, uuid="GPU-ab"), "/s", "x.py", [], []
+        )
+        self.assertIn("export CUDA_VISIBLE_DEVICES=GPU-ab RES_EVAL_DEVICE=cuda:0", cvd)
+
+    def test_device_pinning_starts_only_once_cuda_numbers_the_card_as_nvidia_smi_does(self) -> None:
+        t = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pogba", 3, uuid="GPU-ab")
+        tmp = Path(tempfile.mkdtemp())
+        for listed, rc, said in (("3", 0, ""), ("2", 97, "not starting on another card"), ("", 0, "assuming")):
+            fake = tmp / "py"
+            fake.write_text(f"#!/bin/sh\n{'echo ' + listed if listed else 'exit 1'}\n")
+            fake.chmod(0o755)
+            with mock.patch.object(ev, "ORDINAL_POLL_S", 0), mock.patch.object(ev, "ORDINAL_WAIT_S", 0):
+                lines = ev._ordinal_lines(t)
+            res = subprocess.run(["bash", "-c", f"py={fake}\n{lines}"], capture_output=True, text=True)
+            self.assertEqual(res.returncode, rc, res.stdout + res.stderr)
+            self.assertIn(said, res.stdout)
+        self.assertIn(ev._ordinal_lines(t), ev.runner_script(t, "/s", "x.py", [], []))
 
     def test_a_tool_venv_is_keyed_by_its_extras_requirements(self) -> None:
         repo = Path(tempfile.mkdtemp())
@@ -1237,7 +1256,7 @@ class EvalRunTest(Isolated):
         self.assertIn("ARGV ['--n', 'a b', '*']", out)
         self.assertIn("CKPT_A_CONTENT weights", out)
         self.assertIn("MODE ok", out)
-        self.assertIn("CUDA_VISIBLE_DEVICES 1", out)
+        self.assertIn("CUDA_VISIBLE_DEVICES GPU-1", out)
         self.assertIn("RES_EVAL_DEVICE cuda:0", out)
         self.assertIn("robot_rl " + str(self.tmp / "ws" / "resources" / "robot_rl"), out, "MANIFEST is printed")
         self.assertEqual(self._leases(), [])
