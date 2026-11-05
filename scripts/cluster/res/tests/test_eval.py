@@ -1520,6 +1520,24 @@ class EvalRunTest(Isolated):
         self.assertFalse(any(_alive(p) for p in pids), "both runs are gone, not just the newest")
         self.assertEqual(self._leases(), [])
 
+    def test_stop_keeps_a_card_lease_reused_for_a_later_run(self) -> None:
+        """A --gpus run's other-card lease reused for a new run keeps its card; a pruned stage dir is no error."""
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        [lease] = self._leases()
+        pruned = str(self.tmp / "pruned-stage")  # a restage deleted it
+        with ls.locked_store() as leases:
+            leases[0].stages.insert(0, pruned)
+            leases.append(dataclasses.replace(lease, id="rank1", key=lease.key + "-1", stages=[lease.stage]))
+            leases.append(
+                dataclasses.replace(
+                    lease, id="reused", key=lease.key + "-2", stage="/later/run", stages=[lease.stage, "/later/run"]
+                )
+            )
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 0, "a pruned stage counts as ended")
+        self.assertEqual([x.id for x in self._leases()], ["reused"], "a lease with a live later run keeps its card")
+
     def test_stop_releases_every_card_of_a_multi_gpu_run(self) -> None:
         rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
         self.assertEqual(rc, 0, out)

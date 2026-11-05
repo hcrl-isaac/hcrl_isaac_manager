@@ -1815,8 +1815,10 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool]) -> int:
         print(f"[res] KEPT lease {lease_id}: a run may still hold the card", file=sys.stderr)
         return 1
     with ls.locked_store() as leases:  # a --gpus run's other cards hold leases naming the same stage
+        # another card's lease goes only when every run it records was stopped here: one reused since keeps its card
         ours = set(stage_dirs)
-        ids = [lease_id, *(x.id for x in leases if x.id != lease_id and ours & {x.stage, *x.stages} - {""})]
+        runs = {x.id: set(x.stages) or ({x.stage} - {""}) for x in leases}
+        ids = [lease_id, *(x.id for x in leases if x.id != lease_id and runs[x.id] and runs[x.id] <= ours)]
         leases[:] = [x for x in leases if x.id not in ids]
     print(f"[res] released {', '.join(ids)}", file=sys.stderr)
     return 0
