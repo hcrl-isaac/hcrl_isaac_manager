@@ -1496,6 +1496,30 @@ class EvalRunTest(Isolated):
         self.assertEqual(self._leases(), [], "the lease is released once the run is gone")
         self.assertTrue((stage / "log").exists(), "a stopped run keeps its log")
 
+    def test_stop_ends_every_detached_run_on_a_lease(self) -> None:
+        """Several --detach runs on one lease (a trainer and its recorders) all stop before the lease is released."""
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        [lease] = self._leases()
+        rc, out = self._eval("--lease", lease.id, "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        stages = self._stages()
+        self.assertEqual(len(stages), 2)
+        [lease] = self._leases()
+        self.assertEqual(lease.stages, [str(s) for s in sorted(stages, key=lambda s: lease.stages.index(str(s)))])
+        pids = []
+        for stage in stages:
+            for _ in range(50):
+                if (stage / "log").exists() and "PID " in (stage / "log").read_text():
+                    break
+                time.sleep(0.2)
+            pids.append(self._pid((stage / "log").read_text()))
+        self.assertTrue(all(_alive(p) for p in pids))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 0)
+        self.assertFalse(any(_alive(p) for p in pids), "both runs are gone, not just the newest")
+        self.assertEqual(self._leases(), [])
+
     def test_stop_releases_every_card_of_a_multi_gpu_run(self) -> None:
         rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
         self.assertEqual(rc, 0, out)
@@ -1503,7 +1527,14 @@ class EvalRunTest(Isolated):
         with ls.locked_store() as leases:  # the other cards of a --gpus run, and an unrelated run's card
             leases.append(dataclasses.replace(lease, id="rank1", key=lease.key + "-1", card=lease.card + "-1"))
             leases.append(
-                dataclasses.replace(lease, id="other", key=lease.key + "-2", card=lease.card + "-2", stage="/elsewhere")
+                dataclasses.replace(
+                    lease,
+                    id="other",
+                    key=lease.key + "-2",
+                    card=lease.card + "-2",
+                    stage="/elsewhere",
+                    stages=["/elsewhere"],
+                )
             )
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 0)

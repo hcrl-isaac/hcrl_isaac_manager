@@ -1730,13 +1730,15 @@ def _repo_script(spec: str, wt: str) -> tuple[str, str]:
 
 
 def _record_stage(lease_id: str, stage_dir: str) -> None:
-    """Note the detached run's stage on its lease, so `pls run --stop <lease>` finds it."""
+    """Note the detached run's stage on its lease, beside any earlier ones, so `pls run --stop <lease>` finds them all."""
     if not lease_id:
         return
     with ls.locked_store() as leases:
         for lease in leases:
             if lease.id == lease_id:
                 lease.stage = stage_dir
+                if stage_dir not in lease.stages:
+                    lease.stages.append(stage_dir)
 
 
 def _print_detached(stage: Stage, lease_id: str, holder: str) -> None:
@@ -1785,32 +1787,36 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool]) -> int:
     lease_id = lease_id.removeprefix("lease:")
     pool, host, gpu, job, uuid_ = _lease_card(lease_id, holder, pools)
     with ls.locked_store() as leases:
-        stage_dir = next(x.stage for x in leases if x.id == lease_id)
+        mine = next(x for x in leases if x.id == lease_id)
+        # every detached run started on the lease, the newest last; a lease from before `stages` names only one
+        stage_dirs = list(mine.stages) or ([mine.stage] if mine.stage else [])
     t = make_target(pool, host, gpu, job, uuid_)
-    if stage_dir:
+    gone = True
+    for stage_dir in stage_dirs:
         stage = Stage(t)
         stage.dir = stage_dir
-        gone = stage.kill()
+        ended = stage.kill()
         print(
-            f"[res] stopped the run in {stage_dir} ({'gone' if gone else 'STILL RUNNING, check the card'})",
+            f"[res] stopped the run in {stage_dir} ({'gone' if ended else 'STILL RUNNING, check the card'})",
             file=sys.stderr,
         )
-        if gone:
+        if ended:
             stage.remove(keep_log=True)
             where = t.ssh if t.kind == "slurm" else t.host
             print(f"[res] log kept at {where}:{stage_dir}/log", file=sys.stderr)
-    else:
-        gone = True
+        gone = gone and ended
+    if not stage_dirs:
         print(
             f"[res] lease {lease_id} records no detached run (started before --stop existed, or attached);"
             " releasing it only",
             file=sys.stderr,
         )
     if not gone:
-        print(f"[res] KEPT lease {lease_id}: the run may still hold the card", file=sys.stderr)
+        print(f"[res] KEPT lease {lease_id}: a run may still hold the card", file=sys.stderr)
         return 1
     with ls.locked_store() as leases:  # a --gpus run's other cards hold leases naming the same stage
-        ids = [lease_id, *(x.id for x in leases if stage_dir and x.stage == stage_dir and x.id != lease_id)]
+        ours = set(stage_dirs)
+        ids = [lease_id, *(x.id for x in leases if x.id != lease_id and ours & {x.stage, *x.stages} - {""})]
         leases[:] = [x for x in leases if x.id not in ids]
     print(f"[res] released {', '.join(ids)}", file=sys.stderr)
     return 0
