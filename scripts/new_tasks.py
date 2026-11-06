@@ -105,7 +105,9 @@ def _files(name: str, org: str) -> dict[str, str]:
             "## Checklist\n\n"
             f"- [ ] Changes fit within this repo's scope -- {name} tasks under the `{name}/` namespace. "
             "Shared infra/robots belong upstream (`hcrl_isaaclab` / `hcrl_robots`).\n"
-            "- [ ] Ran the GPU test suite locally (`pytest -m gpu`). CI runs only the CPU build tests + lint.\n"
+            f"- [ ] Ran the smoke tests locally: `pls test {pkg}` (registration, cfg build, config legibility). "
+            "CI runs lint only.\n"
+            "- [ ] Ran the GPU test suite locally (`pytest -m gpu`).\n"
             "- [ ] Added tests for any new functionality not already covered by the registration/build "
             "smoke (usually unnecessary -- the smoke tests cover every registered task automatically).\n"
         ),
@@ -211,17 +213,7 @@ def _files(name: str, org: str) -> dict[str, str]:
             "      - uses: actions/setup-python@v5\n"
             '        with:\n          python-version: "3.11"\n'
             "      - run: python -m pip install pre-commit\n"
-            "      - run: pre-commit run --all-files --show-diff-on-failure\n\n"
-            "  build:\n"
-            "    # CPU tier; importing needs the Isaac Sim env, so run on the self-hosted `isaac` runner.\n"
-            "    name: build smoke (CPU)\n"
-            "    runs-on: [self-hosted, isaac]\n"
-            "    steps:\n"
-            "      - uses: actions/checkout@v4\n"
-            "      - name: Install + run CPU smoke\n"
-            "        run: |\n"
-            "          ${ILAB_PYTHON:-python} -m pip install -e .\n"
-            '          ${ILAB_PYTHON:-python} -m pytest -m "not gpu" -q\n'
+            "      - run: pre-commit run --all-files --show-diff-on-failure\n"
         ),
         ".gitignore": "__pycache__/\n*.pyc\n*.egg-info/\nlogs/\noutputs/\n.artifacts/\n",
     }
