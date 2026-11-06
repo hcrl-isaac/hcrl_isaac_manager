@@ -112,7 +112,8 @@ Project skills live in `.claude/skills/`. Use them rather than re-deriving the s
 
 - **Push gate:** `VIRTUAL_ENV="" uvx pre-commit run --all-files` must pass (ruff check + format, codespell, yaml);
   CI runs it verbatim. ruff: line length 120, py311 syntax. The task repos' only build check is the CPU smoke:
-  `pytest tests/test_smoke.py -m "not gpu"` (`pls test <repo>`).
+  `pytest tests/test_smoke.py -m "not gpu"` (`pls test <repo>`, or `pls test <repo> --wt <set>` for a worktree set),
+  run locally: task-repo CI is lint only.
 - **Comments: one line ideal, two the hard max**, stating only the non-obvious why. Never reference milestones,
   dates, people, run ids or plan names, and never narrate the bug a change fixed (that goes in the commit).
 - **Docstrings:** a one-line summary plus `Args:`/`Returns:` (entries of at most two lines), scoped to what the unit
