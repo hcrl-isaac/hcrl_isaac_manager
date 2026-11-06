@@ -476,9 +476,19 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tm
     if [ "$DD_MODE" = "srun" ] && on_login "[ -e ${spool}/.ready ]"; then
         printf '%s\n' "$inner" | on_login "cat > ${spool}/${id}.tmp && printf %s $(printf %q "$logfile") > ${spool}/${id}.log \
             && mv ${spool}/${id}.tmp ${spool}/${id}.req" || { err "could not spool the step on job ${DD_JOBID}"; exit 1; }
-        log "Spooled as step ${id}: job ${DD_JOBID}'s sentinel starts it on ${DD_NODE:-the node} within 5 s"
+        # the sentinel takes a request within 5 s; one it never takes is withdrawn, so it cannot start later unseen
+        if ! on_login "for _ in \$(seq 20); do [ -e ${spool}/${id}.started ] && exit 0; sleep 1; done; \
+                rm ${spool}/${id}.req 2>/dev/null && exit 1; exit 0"; then
+            err "job ${DD_JOBID}'s sentinel did not take step ${id} within 20 s (withdrawn); check the job is RUNNING"
+            exit 1
+        fi
+        log "Started as step ${id} by job ${DD_JOBID}'s sentinel on ${DD_NODE:-its node}"
     else
-        log "WARN: job ${DD_JOBID}'s sentinel predates the spool: this step lives only as long as the login-side wrapper"
+        if [ "$DD_MODE" = "ssh" ]; then
+            log "WARN: ssh mode: this step lives only as long as the login-side ssh wrapper"
+        else
+            log "WARN: job ${DD_JOBID}'s sentinel predates the spool: this step lives only as long as the login-side wrapper"
+        fi
         ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
             "nohup setsid bash -c $(printf %q "$inner") > ${logfile} 2>&1 < /dev/null & disown; sleep 0.3; echo \"[cluster_dev] login-side wrapper pid=\$(pgrep -nf 'nohup setsid bash' || echo ?)\""
     fi
