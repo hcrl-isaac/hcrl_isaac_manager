@@ -47,7 +47,9 @@ for i in range(n.value):
     h = raw.raw.hex()
     print(f"GPU-{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}")
 """
-GPU_QUERY += f'echo "@@CUDA"\ntimeout 20 python3 -c {shlex.quote(CUDA_UUIDS)} 2>/dev/null\necho "@@END"\n'
+# unmasked: a mask in the probing shell would hide cards nvidia-smi lists, which are not hidden from runs
+GPU_QUERY += f'echo "@@CUDA"\nenv -u CUDA_VISIBLE_DEVICES timeout 20 python3 -c {shlex.quote(CUDA_UUIDS)} 2>/dev/null\n'
+GPU_QUERY += 'echo "@@END"\n'
 REMOTE_QUERY = f"bash -c {shlex.quote(GPU_QUERY)}"
 
 
