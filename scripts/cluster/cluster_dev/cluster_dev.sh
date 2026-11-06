@@ -469,8 +469,19 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tm
     fi
     log "[${DD_MODE} detached] container exec on job ${DD_JOBID}: ${args}"
     log "Log on login node: ${logfile}   (follow with: $(basename "${BASH_SOURCE[0]}") tail)"
-    ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
-        "nohup setsid bash -c $(printf %q "$inner") > ${logfile} 2>&1 < /dev/null & disown; sleep 0.3; echo \"[cluster_dev] login-side wrapper pid=\$(pgrep -nf 'nohup setsid bash' || echo ?)\""
+    # a sentinel with a spool starts the step itself, inside the job: nothing on the login node has to outlive this
+    # session (TACC login nodes end such processes); an older sentinel falls back to a login-side wrapper
+    local spool="\$HOME/.cluster_dev/spool/${DD_JOBID}" id
+    id="$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}"
+    if [ "$DD_MODE" = "srun" ] && on_login "[ -e ${spool}/.ready ]"; then
+        printf '%s\n' "$inner" | on_login "cat > ${spool}/${id}.tmp && printf %s $(printf %q "$logfile") > ${spool}/${id}.log \
+            && mv ${spool}/${id}.tmp ${spool}/${id}.req" || { err "could not spool the step on job ${DD_JOBID}"; exit 1; }
+        log "Spooled as step ${id}: job ${DD_JOBID}'s sentinel starts it on ${DD_NODE:-the node} within 5 s"
+    else
+        log "WARN: job ${DD_JOBID}'s sentinel predates the spool: this step lives only as long as the login-side wrapper"
+        ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
+            "nohup setsid bash -c $(printf %q "$inner") > ${logfile} 2>&1 < /dev/null & disown; sleep 0.3; echo \"[cluster_dev] login-side wrapper pid=\$(pgrep -nf 'nohup setsid bash' || echo ?)\""
+    fi
     # DEV_JOBID means an ad-hoc target, typically ANOTHER session's job -- recording the log path would
     # overwrite the tracked session's LAST_RUN_LOG, so print it instead and leave shared state alone.
     if [ -n "${DEV_JOBID:-}" ]; then
