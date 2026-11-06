@@ -185,7 +185,7 @@ def _files(name: str, org: str) -> dict[str, str]:
             "- Push gate: `pre-commit run --all-files` (ruff + codespell), as CI runs it.\n"
         ),
         "tests/test_smoke.py": (
-            f'"""Smoke tests for {pkg} (CPU: register + build; GPU: create + reset)."""\n\n'
+            f'"""Smoke tests for {pkg} (CPU: register, build, config legibility; GPU: create + reset)."""\n\n'
             "import pytest\n\n"
             "from hcrl_isaaclab import testing\n\n"
             f'PACKAGE = "{pkg}"\n'
@@ -194,6 +194,8 @@ def _files(name: str, org: str) -> dict[str, str]:
             "    testing.run_registration_smoke(PACKAGE, SOURCE, min_expected=1)\n\n\n"
             "def test_tasks_build(sim_app):\n"
             "    testing.run_build_smoke(PACKAGE, SOURCE)\n\n\n"
+            "def test_configs_are_legible(sim_app):\n"
+            "    testing.run_config_legibility_check(PACKAGE, SOURCE)\n\n\n"
             "@pytest.mark.gpu\n"
             "def test_tasks_run(sim_app):\n"
             "    testing.run_gpu_smoke(PACKAGE, SOURCE)\n"
