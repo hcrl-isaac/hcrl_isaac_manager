@@ -63,6 +63,8 @@ class Lease:
         yield_to: Id of the reservation this lease gives way to ("" = none).
         stage: Stage dir of the detached `pls run` holding the card, which `pls run --stop` stops ("" = none); a
             CPU lease records it for attached runs too, since its run's end on the box is what releases it.
+        stages: Stage dirs of every detached `pls run` started on the lease, oldest first (``stage`` is the newest);
+            `pls run --stop` stops them all.
         cpus: Cores a CPU-only run holds (``pls run --cpus``; 0 for a card lease).
         cores: The box's cores that run is pinned to, as a taskset list (e.g. ``40-63``).
     """
@@ -87,6 +89,7 @@ class Lease:
     stage: str = ""
     cpus: int = 0
     cores: str = ""
+    stages: list[str] = field(default_factory=list)
 
 
 def is_cpu(lease: Lease) -> bool:
@@ -231,7 +234,7 @@ def card_label(card: Card) -> str:
     return f"{card.host}:{card.index}" + (f" (job {card.job})" if card.job else "")
 
 
-_TYPES = {"str": str, "float": (int, float), "bool": bool, "int": int}
+_TYPES = {"str": str, "float": (int, float), "bool": bool, "int": int, "list[str]": list}
 
 
 def _lease(d: dict, cls: type = Lease) -> Lease:
@@ -243,6 +246,8 @@ def _lease(d: dict, cls: type = Lease) -> Lease:
         val, want = d[f.name], _TYPES[f.type]
         if not isinstance(val, want) or (f.type == "float" and isinstance(val, bool)):
             raise TypeError(f"{f.name} has type {type(val).__name__}")
+        if f.type == "list[str]" and not all(isinstance(x, str) for x in val):
+            raise TypeError(f"{f.name} holds a non-string")
         values[f.name] = val
     return cls(**values)
 
