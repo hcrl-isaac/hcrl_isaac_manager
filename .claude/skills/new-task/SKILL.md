@@ -39,9 +39,26 @@ register_task(
 
 ## 4. Config classes
 
+A reader should open the task folder and read every config of the task top to bottom.
+
 - Isaac Lab patterns: `@configclass`, `MISSING` for required fields, a `<X>Term` class paired with its `<X>TermCfg`.
 - A generic name carries only generic content: shared knobs in a base cfg, feature-specific fields in a subclass.
 - One reward table per task: a finalized table replaces the base, rather than a subclass that nulls terms.
+- **The task folder holds all of the task's configs:** env cfgs, runner cfgs, interface variants (camera, keypoint,
+  depth) and the `EvalCfg`, which lives in the env cfg file. No task-less folders of variants.
+- **Every config is a written-out `class`**, observation groups and other field cfgs included: never
+  `configclass(type(...))`, `make_dataclass`, or a class bound under another name. Register one id per
+  `register_task` call with the id written out, never through a loop or a format string.
+- **Shallow chains:** `ManagerBasedRLEnvCfg <- domain base <- task base <- robot task` holds the finalized cfg, and an
+  interface variant adds one layer. More than about 6 classes is a signal to review, not a limit: a real
+  sub-hierarchy (keypoint-interface variants under the keypoint interface) is fine. A finished experiment is folded
+  into the canonical class, and an axis still worth sweeping is a cfg value, not another subclass.
+- **No cross-task inheritance:** tasks share through the domain base or `utils/`, never through a sibling task's cfg.
+- **Sharing:** prefer a real cfg class (e.g. an `ObsTerm` cfg subclass carrying its modified noise) over a function
+  that edits cfgs; write a public `use_*` helper in `utils/` only when one change spans several managers. Nothing a
+  config imports starts with `_`.
+- **Names say what the policy is**, by task, interface, algorithm and architecture (`T1KickCameraRNNSACRunnerCfg`).
+  No `Teacher` in the name of a policy trained with ordinary RL.
 - Isaac Lab 3: quaternions are xyzw, asset data reads go through `.torch`, and backend-specific values (PhysX vs
   Newton) are physics presets, never `if` branches on the backend.
 
@@ -58,9 +75,12 @@ register_task(
 ## 6. Prove it builds and runs
 
 ```bash
-pls test <project>_tasks       # CPU smoke: every registered id registers and its cfgs build
+pls test <project>_tasks       # CPU smoke: every registered id registers, its cfgs build and follow §4
 pls run train --task <id> --num_envs 64 --max_iterations 2 --logger tensorboard --video off
 ```
 
-The smoke tests pick up every registered task automatically; add a test only for logic they don't exercise. Then
+The smoke tests pick up every registered task automatically; add a test only for logic they don't exercise. The
+legibility check (`testing.run_config_legibility_check`) fails on a generated or renamed class, a format-string id,
+a cross-task parent or a private-helper import, and warns on deep chains; a repo's `known` list of unfixed
+violations only shrinks. Then
 compare the trained policy against a do-nothing policy on the task's own success metric before calling it working.
