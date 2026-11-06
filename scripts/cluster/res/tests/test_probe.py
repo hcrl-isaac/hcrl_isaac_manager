@@ -35,10 +35,16 @@ PS = """\
 
 
 def output(
-    cards: str = CARDS, apps: str = APPS, ps: str = PS, rc_cards: int = 0, rc_apps: int = 0, end: bool = True
+    cards: str = CARDS,
+    apps: str = APPS,
+    ps: str = PS,
+    rc_cards: int = 0,
+    rc_apps: int = 0,
+    end: bool = True,
+    cuda: str = "",
 ) -> str:
     text = f"@@CARDS\n{cards}@@APPS rc={rc_cards}\n{apps}@@PS rc={rc_apps}\n{ps}"
-    return text + ("@@END\n" if end else "")
+    return text + (f"@@CUDA\n{cuda}@@END\n" if end else "")
 
 
 class ParseGpuQueryTest(unittest.TestCase):
@@ -53,6 +59,23 @@ class ParseGpuQueryTest(unittest.TestCase):
         self.assertEqual(
             (proc.pid, proc.user, proc.elapsed, proc.cmd), (351842, "testusr", "01:02:03", "train.py T1-Kick-v0")
         )
+
+    def test_a_card_cuda_hides_is_held_and_on_an_unmasked_pool_so_is_the_rest_of_the_host(self) -> None:
+        all_listed = "GPU-a\nGPU-b\nGPU-c\nGPU-d\nGPU-e\n"
+        for cuda in ("", all_listed):  # no list (no python3 or libcuda), or every card listed: nothing changes
+            cards = parse_gpu_query(output(cuda=cuda), "larg", "pogba", unmasked=True)
+            self.assertEqual([c.state for c in cards], ["busy", "free", "held", "busy", "held"])
+        hides_b = "GPU-a\nGPU-c\nGPU-d\nGPU-e\n"
+        cards = parse_gpu_query(output(cuda=hides_b), "larg", "pogba")
+        self.assertEqual([c.state for c in cards], ["busy", "held", "held", "busy", "held"])
+        self.assertIn("CUDA lists 4 of 5 cards (hides gpu1)", cards[1].note)
+        self.assertEqual(cards[0].note, "", "a masked pool's other cards are unaffected")
+        cards = parse_gpu_query(output(cuda=hides_b), "larg", "pogba", unmasked=True)
+        self.assertEqual([c.state for c in cards], ["busy", "held", "held", "busy", "held"])
+        self.assertIn("an unmasked run here fails at CUDA init", cards[0].note)
+        cards = parse_gpu_query(output(cards="0, GPU-a, A40, 0, 46068, 0\n1, GPU-b, A40, 0, 46068, 0\n", apps="",
+                                       ps="", cuda="GPU-a\n"), "larg", "pogba", unmasked=True)  # fmt: skip
+        self.assertEqual([c.state for c in cards], ["held", "held"], "a free card beside a hidden one is not claimable")
 
     def test_memory_takes_process_total_when_card_reads_zero(self) -> None:
         self.assertEqual(self.cards[3].mem_used, 2048)
@@ -268,7 +291,7 @@ def no_profiles() -> Iterator[None]:
 class SlurmUnseenCardsTest(unittest.TestCase):
     def test_unseen_allocated_cards_are_unknown(self) -> None:
         squeue = "42|gpuA40x4|acct|RUNNING|gpub001|1|10:00|N/A|gres/gpu:4|box\n"
-        step = "@@CARDS\n0, GPU-a, A40, 0, 46068, 0\n@@APPS rc=0\n@@PS rc=0\n@@END\n"
+        step = "@@CARDS\n0, GPU-a, A40, 0, 46068, 0\n@@APPS rc=0\n@@PS rc=0\n@@CUDA\n@@END\n"
         outputs = iter([squeue, step])
         saved = probe._run, probe._master_alive
         probe._master_alive = lambda login: True
@@ -288,7 +311,7 @@ class SlurmAccountRetryTest(unittest.TestCase):
     def test_an_unknown_lowercase_project_is_retried_uppercased(self) -> None:
         """A job moved to an account no profile names: squeue gives abc12345, TACC only knows ABC12345."""
         squeue = "42|gpu-a100|abc12345|RUNNING|c571-003|1|10:00|N/A|gres/gpu:1|box\n"
-        good = "@@CARDS\n0, GPU-a, A100, 0, 40960, 0\n@@APPS rc=0\n@@PS rc=0\n@@END\n"
+        good = "@@CARDS\n0, GPU-a, A100, 0, 40960, 0\n@@APPS rc=0\n@@PS rc=0\n@@CUDA\n@@END\n"
         steps: list[str] = []
 
         def run(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
@@ -449,7 +472,7 @@ class SlurmByPartitionTest(unittest.TestCase):
             (cfg / name).mkdir()
             (cfg / name / "submit_job_slurm.sh").write_text(f"#!/bin/bash\n#SBATCH -p {part}\n#SBATCH -A X\n")
         squeue = "42|rtx-small|x|RUNNING|c1|1|10:00|N/A|gres/gpu:1|a\n43|amd-rtx|x|PENDING|(Priority)|1|1:00|N/A|gres/gpu:2|b\n"
-        step = "@@CARDS\n0, GPU-a, RTX, 0, 98304, 0\n@@APPS rc=0\n@@PS rc=0\n@@END\n"
+        step = "@@CARDS\n0, GPU-a, RTX, 0, 98304, 0\n@@APPS rc=0\n@@PS rc=0\n@@CUDA\n@@END\n"
         outputs = iter([squeue, step])
         saved = probe._run, probe._master_alive
         probe._master_alive = lambda login: True

@@ -35,8 +35,19 @@ apps=$(nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noh
 rc=$?; printf '%s\n' "$apps"; echo "@@PS rc=$rc"
 pids=$(printf '%s\n' "$apps" | awk -F', *' '$2 ~ /^[0-9]+$/ {print $2}' | paste -sd, -)
 [ -n "$pids" ] && ps -o pid=,user=,etime=,args= -p "$pids"
-echo "@@END"
 """
+# The UUIDs CUDA lists, through the driver (no context): CUDA leaves out a card nvidia-smi still shows (one a crashed
+# or nearly full process holds), and torch then fails at CUDA init in every process that sees all the cards.
+CUDA_UUIDS = r"""
+import ctypes
+cu, n, raw = ctypes.CDLL("libcuda.so.1"), ctypes.c_int(), ctypes.create_string_buffer(16)
+cu.cuInit(0), cu.cuDeviceGetCount(ctypes.byref(n))
+for i in range(n.value):
+    cu.cuDeviceGetUuid(raw, i)
+    h = raw.raw.hex()
+    print(f"GPU-{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}")
+"""
+GPU_QUERY += f'echo "@@CUDA"\ntimeout 20 python3 -c {shlex.quote(CUDA_UUIDS)} 2>/dev/null\necho "@@END"\n'
 REMOTE_QUERY = f"bash -c {shlex.quote(GPU_QUERY)}"
 
 
@@ -135,7 +146,7 @@ def short_cmd(args: str) -> str:
     return f"{script} {task}".strip()
 
 
-MARKERS = ["@@CARDS", "@@APPS", "@@PS", "@@END"]
+MARKERS = ["@@CARDS", "@@APPS", "@@PS", "@@CUDA", "@@END"]
 
 
 def _sections(out: str) -> dict[str, list[str]]:
@@ -144,8 +155,8 @@ def _sections(out: str) -> dict[str, list[str]]:
     A site's job wrapper (TACC's srun) prints its own checks on the step's stdout, before the query and after it, and
     can leave the first marker mid-line ("Checking available allocation (X)...@@CARDS").
     """
-    sections: dict[str, list[str]] = {"cards": [], "apps": [], "ps": []}
-    keys = {"@@CARDS": "cards", "@@APPS": "apps", "@@PS": "ps"}
+    sections: dict[str, list[str]] = {"cards": [], "apps": [], "ps": [], "cuda": []}
+    keys = {"@@CARDS": "cards", "@@APPS": "apps", "@@PS": "ps", "@@CUDA": "cuda"}
     rcs: dict[str, str] = {}
     seen: list[str] = []
     key = None
@@ -173,7 +184,9 @@ def _sections(out: str) -> dict[str, list[str]]:
     return sections
 
 
-def parse_gpu_query(out: str, pool: str, host: str, desktop: Desktop | None = None) -> list[Card]:
+def parse_gpu_query(
+    out: str, pool: str, host: str, desktop: Desktop | None = None, unmasked: bool = False
+) -> list[Card]:
     """Turn GPU_QUERY output into cards with their processes and a free/busy/held/unknown state.
 
     Args:
@@ -181,6 +194,8 @@ def parse_gpu_query(out: str, pool: str, host: str, desktop: Desktop | None = No
         pool: Pool name for the cards.
         host: Host name for the cards.
         desktop: On a desktop pool, whose small processes are desktop apps: noted on the card, never a run.
+        unmasked: The pool's runs see every card of the host (``pin = "device"``), so a card CUDA leaves out makes
+            every card of the host unusable, not only that one.
 
     Returns:
         The cards; raises ProbeError when the output is incomplete, failed or has no cards.
@@ -237,7 +252,23 @@ def parse_gpu_query(out: str, pool: str, host: str, desktop: Desktop | None = No
                 card.state = "held"
         elif card.mem_used >= HELD_MIB or card.util >= HELD_UTIL:
             card.state = "held"
+    _hold_cards_cuda_hides(cards, sections["cuda"], unmasked)
     return cards
+
+
+def _hold_cards_cuda_hides(cards: list[Card], cuda: list[str], unmasked: bool) -> None:
+    """Hold the cards CUDA does not list (and, where runs see every card, the host's others); no list, no change."""
+    listed = {line.strip() for line in cuda if line.strip().startswith("GPU-")}
+    hidden = [c for c in cards if c.uuid and listed and c.uuid not in listed]
+    if not hidden:
+        return
+    why = f"CUDA lists {len(listed)} of {len(cards)} cards (hides gpu{', gpu'.join(str(c.index) for c in hidden)})"
+    for card in cards:
+        if card in hidden or unmasked:
+            if card.state == "free":
+                card.state = "held"
+            extra = "" if card in hidden else ": an unmasked run here fails at CUDA init"
+            card.note = f"{why}{extra}" + (f"; {card.note}" if card.note else "")
 
 
 def _drop_stray_contexts(cards: list[Card]) -> None:
@@ -287,7 +318,8 @@ def probe_ssh_host(pool: Pool, host: str) -> Report:
         marks = (ssh_scratch(pool, user) + "/", "res-eval")
         desktop = Desktop(user, int(pool.settings.get("desktop_mib", DESKTOP_MIB)), marks)
     try:
-        cards = parse_gpu_query(res.stdout, pool.name, host, desktop)
+        unmasked = pool.settings.get("pin", "cvd") == "device"
+        cards = parse_gpu_query(res.stdout, pool.name, host, desktop, unmasked)
         return Report(label, pool.kind, cards, owner=user)
     except ProbeError as exc:
         tail = res.stderr.strip().splitlines()[-1] if res.stderr.strip() else ""
