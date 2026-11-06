@@ -88,7 +88,7 @@ VERBS: dict[str, tuple[str, str, str, Callable[[list[str]], None]]] = {
     "clean": ("workspace", "", "remove the ilab venv, generated workspace config and the shell alias (asks first)", _no_args(workspace.clean)),
     "sim2real": ("other", "<cmd> [args]", "hcrl_sim2real: MuJoCo sim/sysid, replay, fits, measure, fetch-model/policy", sim2real),
     "upload-artifacts": ("other", "[args]", "upload managed large-file resources to W&B as artifacts", infra.upload_artifacts),
-    "test": ("other", "[<repo>] [args]", "a workspace repo's CPU smoke tests (default hcrl_isaaclab; needs a GPU)", _first("repo", workspace.test, "hcrl_isaaclab")),
+    "test": ("other", "[<repo>] [--wt <set>] [args]", "a workspace repo's CPU smoke tests (default hcrl_isaaclab), or a worktree set's", _first("repo", workspace.test, "hcrl_isaaclab")),
     "test-scripts": ("other", "", "the manager's own script tests (stubs only; CI runs these)", _no_args(workspace.test_scripts)),
     "cluster": ("retired", "", "", infra.cluster),
 }  # fmt: skip
