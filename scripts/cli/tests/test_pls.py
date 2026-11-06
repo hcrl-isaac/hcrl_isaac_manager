@@ -65,11 +65,38 @@ class PassThroughTest(unittest.TestCase):
             self.assertNotEqual(ctx.exception.code, 0)
 
     def test_test_defaults_to_the_core_repo_and_clears_pythonpath(self) -> None:
-        h, _ = self._pls("test")
-        self.assertEqual(h.cmd[1:], ["-m", "pytest", "-m", "not gpu"])
-        self.assertEqual(h.env["PYTHONPATH"], "")
-        h, _ = self._pls("test", "ssti_tasks", "-k", "walk")
-        self.assertEqual(h.cmd[-2:], ["-k", "walk"])
+        with mock.patch.object(workspace.Path, "is_dir", return_value=True):
+            h, chdir = self._pls("test")
+            self.assertEqual(h.cmd[1:], ["-m", "pytest", "-m", "not gpu"])
+            self.assertEqual(h.env["PYTHONPATH"], "")
+            chdir.assert_called_with(cli.ROOT / "resources" / "hcrl_isaaclab")  # after the CLI's own chdir to ROOT
+            h, _ = self._pls("test", "ssti_tasks", "-k", "walk")
+            self.assertEqual(h.cmd[-2:], ["-k", "walk"])
+            h, chdir = self._pls("test", "-k", "walk")  # options alone go to the default repo
+            self.assertEqual(h.cmd[-2:], ["-k", "walk"])
+            chdir.assert_called_with(cli.ROOT / "resources" / "hcrl_isaaclab")  # after the CLI's own chdir to ROOT
+
+    def test_test_runs_a_worktree_set_from_the_repos_worktree(self) -> None:
+        fake = types.ModuleType("worktree_env")
+        fake.select = mock.Mock(return_value=("/w/mbrl:/w/core", "/w/core", ["mbrl_tasks", "hcrl_isaaclab"]))
+        fake.resolve = mock.Mock(return_value=({"mbrl_tasks": "/w/mbrl", "hcrl_isaaclab": "/w/core"}, []))
+        with (
+            mock.patch.dict(sys.modules, {"worktree_env": fake}),
+            mock.patch.object(workspace.Path, "is_dir", return_value=True),
+            mock.patch("sys.stderr"),
+        ):
+            h, chdir = self._pls("test", "mbrl_tasks", "--wt", "world-model-rl", "-k", "legible")
+        fake.select.assert_called_once_with("world-model-rl")
+        chdir.assert_called_with(Path("/w/mbrl"))
+        self.assertEqual((h.env["PYTHONPATH"], h.cmd[-2:]), ("/w/mbrl:/w/core", ["-k", "legible"]))
+
+    def test_test_help_prints_usage_and_an_unknown_repo_is_refused(self) -> None:
+        with mock.patch("builtins.print") as out:
+            cli.main(["test", "--help"])
+        self.assertIn("--wt <set>", out.call_args[0][0])
+        with mock.patch("os.chdir"), self.assertRaises(SystemExit) as ctx:
+            cli.main(["test", "no_such_tasks"])
+        self.assertIn("no repo no_such_tasks", str(ctx.exception.code))
 
     def test_vscode_no_kit_skips_the_isaac_boot(self) -> None:
         for flag in ("no-kit", "--no-kit"):
