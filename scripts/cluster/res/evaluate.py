@@ -62,7 +62,7 @@ class Target:
         pin: ``cvd`` masks CUDA_VISIBLE_DEVICES to the card; ``device`` leaves it unmasked and the script
             selects the card from RES_EVAL_DEVICE.
         job: The SLURM job (a held dev sentinel) whose node the card is on.
-        uuid: The card's GPU UUID, which pins it inside a SLURM step whose device numbering may differ.
+        uuid: The card's GPU UUID, which pins it where CUDA's device numbering may differ from the probe's.
         extra_uuids: The other cards of a multi-GPU run (``--gpus``), on the same node.
         cores: A CPU-only run's cores of an ssh box (``--cpus``, a taskset list); it then has no card (gpu -1).
     """
@@ -118,7 +118,7 @@ def make_target(pool: Pool, host: str, gpu: int, job: str = "", uuid: str = "") 
         host: Host name from the probe.
         gpu: Physical GPU index.
         job: The SLURM job holding the card.
-        uuid: The card's GPU UUID (SLURM cards).
+        uuid: The card's GPU UUID.
 
     Returns:
         The target, with workspace, scratch and pin from the pool settings or their defaults.
@@ -141,7 +141,7 @@ def make_target(pool: Pool, host: str, gpu: int, job: str = "", uuid: str = "") 
     if pool.kind == "local":
         ws = s.get("workspace") or local_workspace()
         scratch = s.get("scratch", f"{Path.home()}/tmp")
-        return Target(pool.name, "local", host, gpu, workspace=ws, scratch=scratch, pin=pin)
+        return Target(pool.name, "local", host, gpu, workspace=ws, scratch=scratch, pin=pin, uuid=uuid)
     user = s.get("user") or os.environ.get("LARG_USER", "")
     if not user:
         sys.exit(f"[res] no ssh user for pool {pool.name}: set user under [compute.{pool.name}] in compute.local.toml")
@@ -155,6 +155,7 @@ def make_target(pool: Pool, host: str, gpu: int, job: str = "", uuid: str = "") 
         workspace=s.get("workspace", f"/var/local/{user}/hcrl_isaac_manager"),
         scratch=ssh_scratch(pool, user),
         pin=pin,
+        uuid=uuid,
     )
 
 
@@ -681,8 +682,9 @@ def runner_script(
     nice = f"taskset -c {q(t.cores)} nice -n 10 " if t.cores else ""
     launch = f'export PATH="${{py%/*}}:$PATH"; {nice}"$@"' if command else f'{nice}"$py" {q(script)} "$@"'
     cache = f"{t.scratch}/res-eval/cache/{t.host}-gpu{t.gpu}"  # one lease per card, so per-card caches never race
-    pin = (
-        f"export CUDA_VISIBLE_DEVICES={t.gpu} RES_EVAL_DEVICE=cuda:0"
+    # CUDA numbers cards fastest first by default; nvidia-smi, and so the probe's index, in PCI order
+    pin = "export CUDA_DEVICE_ORDER=PCI_BUS_ID\n" + (
+        f"export CUDA_VISIBLE_DEVICES={t.uuid or t.gpu} RES_EVAL_DEVICE=cuda:0"
         if t.pin == "cvd"
         else f"unset CUDA_VISIBLE_DEVICES; export RES_EVAL_DEVICE=cuda:{t.gpu}"
     )
@@ -711,6 +713,7 @@ export XLA_PYTHON_CLIENT_PREALLOCATE="${{XLA_PYTHON_CLIENT_PREALLOCATE:-false}}"
 export OPENBLAS_NUM_THREADS="${{OPENBLAS_NUM_THREADS:-1}}"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$OMNI_CACHE_DIR" "$HCRL_ARTIFACT_ROOT"
 {_venv_lines(t, venv) if venv else _root_lines(root) if root else _ilab_lines()}
+{_ordinal_lines(t) if t.pin == "device" and t.uuid and not t.cores else ""}
 export PYTHONPATH={q(":".join(pythonpath))}"${{PYTHONPATH:+:$PYTHONPATH}}"
 cat {q(stage + "/MANIFEST")}
 echo "[res] {where} python=$py env: {" ".join(env_names) or "-"}"
@@ -739,6 +742,37 @@ while kill -0 "$p" 2>/dev/null; do
     sleep $((left < 30 ? left : 30))
 done
 """
+
+
+# Prints the CUDA ordinal of the card with UUID $1 (-1 if CUDA does not list it); creates no context.
+CUDA_ORDINAL = r"""
+import ctypes, sys
+cu, n, raw = ctypes.CDLL("libcuda.so.1"), ctypes.c_int(), ctypes.create_string_buffer(16)
+cu.cuInit(0), cu.cuDeviceGetCount(ctypes.byref(n))
+found = -1
+for i in range(n.value):
+    cu.cuDeviceGetUuid(raw, i)
+    h = raw.raw.hex()
+    found = i if f"GPU-{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}" == sys.argv[1] else found
+print(found)
+"""
+ORDINAL_WAIT_S = 300  # a card left out after another process crashed on it was listed again within ~3 min
+ORDINAL_POLL_S = 10
+
+
+def _ordinal_lines(t: Target) -> str:
+    """run.sh lines that wait until CUDA numbers the leased card cuda:<gpu>, as nvidia-smi does, or exit 97.
+
+    The driver leaves out a card whose crashed context is still being torn down, which shifts every later ordinal.
+    """
+    q = shlex.quote
+    return f"""for _ in $(seq {max(1, ORDINAL_WAIT_S // max(1, ORDINAL_POLL_S))}); do
+    o=$("$py" -c {q(CUDA_ORDINAL)} {q(t.uuid)} 2>/dev/null)
+    case "$o" in -1|[0-9]*) ;; *) echo "[res] could not list CUDA's cards; assuming {t.where} is cuda:{t.gpu}"; break;; esac
+    [ "$o" = {t.gpu} ] && break
+    echo "[res] CUDA numbers {t.where} ({t.uuid}) cuda:$o, not cuda:{t.gpu}: waiting for it"; sleep {ORDINAL_POLL_S}
+done
+case "$o" in -1|[0-9]*) [ "$o" = {t.gpu} ] || {{ echo "[res] {t.where} is not cuda:{t.gpu} after {ORDINAL_WAIT_S} s: not starting on another card"; exit 97; }};; esac"""  # fmt: skip
 
 
 def _limit_lines(stage: str, limit: float) -> str:
@@ -1626,7 +1660,7 @@ def _lease_card(lease_id: str, holder: str, pools: list[Pool]) -> tuple[Pool, st
     pool = next((p for p in pools if p.name == name), None)
     if pool is None:
         sys.exit(f"[res] lease {lease_id} is on {lease.report}, which eval cannot run on")
-    return pool, host, int(gpu), "", ""
+    return pool, host, int(gpu), "", lease.key if lease.key.startswith("GPU-") else ""
 
 
 def _touch_lease(lease_id: str) -> None:
@@ -1991,7 +2025,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if rep.kind == "slurm":
             pool, job, uuid = None, card.job, card.uuid
         else:
-            pool = next(p for p in pools if p.name == rep.pool.split("/")[0])
+            pool, uuid = next(p for p in pools if p.name == rep.pool.split("/")[0]), card.uuid
     rc, stage, detached, staging = 1, None, False, None
     handlers = {sig: signal.signal(sig, _interrupt) for sig in (signal.SIGTERM, signal.SIGHUP)}
     try:
