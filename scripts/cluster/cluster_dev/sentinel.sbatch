@@ -15,6 +15,21 @@ START_TS=$(date -u +%FT%TZ)
 EOF
 nvidia-smi -L >> "$HOME/.cluster_dev/current" 2>/dev/null || true
 
-# Hold the allocation until walltime (SLURM kills it then); trap so scancel exits cleanly.
-trap 'echo "sentinel caught signal, exiting"; exit 0' TERM INT
-sleep infinity & wait $!
+# Detached steps start from here, inside the job, so no login-node process has to outlive the session that
+# launched them: `exec --detach` drops <id>.req (the step's command) and its log path <id>.log into the spool.
+SPOOL="$HOME/.cluster_dev/spool/$SLURM_JOB_ID"
+mkdir -p "$SPOOL" && touch "$SPOOL/.ready"
+# the job's end takes its steps with it, so its spool goes too (step logs live at their own paths)
+trap 'echo "sentinel caught signal, exiting"; rm -rf "$SPOOL"; exit 0' TERM INT
+# Hold the allocation until walltime (SLURM kills it then), starting each spooled step as it arrives.
+while true; do
+    for req in "$SPOOL"/*.req; do
+        [ -e "$req" ] || continue
+        id="$(basename "$req" .req)"
+        mv "$req" "$SPOOL/$id.started" || continue
+        log="$(cat "$SPOOL/$id.log" 2>/dev/null)"
+        echo "$(date -u +%FT%TZ) starting step $id (log ${log:-none})"
+        setsid bash "$SPOOL/$id.started" > "${log:-/dev/null}" 2>&1 < /dev/null &
+    done
+    sleep 5 & wait $!
+done
