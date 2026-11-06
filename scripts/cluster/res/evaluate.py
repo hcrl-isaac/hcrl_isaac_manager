@@ -707,6 +707,8 @@ rm -f {q(stage + "/env")}  # credentials stay in this process's environment only
 export TMPDIR={q(stage + "/tmp")} XDG_CACHE_HOME={q(cache + "/xdg")} OMNI_CACHE_DIR={q(cache + "/omni")}
 export HCRL_ARTIFACT_ROOT={q(t.scratch + "/res-eval/artifacts")}
 export OMNI_KIT_ACCEPT_EULA=YES ACCEPT_EULA=Y PYTHONUNBUFFERED=1 PYTHONPYCACHEPREFIX="$TMPDIR/pycache"
+# a segfault (e.g. in USD or a physics backend) prints every thread's Python stack instead of only "Segmentation fault"
+export PYTHONFAULTHANDLER=1
 # cards are shared: JAX takes memory as it needs it, not 75% of the card up front (--env may still set it)
 export XLA_PYTHON_CLIENT_PREALLOCATE="${{XLA_PYTHON_CLIENT_PREALLOCATE:-false}}"
 # Kit forks at startup; with scipy loaded first, OpenBLAS's atfork shutdown of its worker threads crashes it
@@ -1032,7 +1034,7 @@ set -a; source {s["env"]}; set +a
 rm -f {s["env"]}  # credentials stay in this process's environment only
 touch {s["heartbeat"]}
 {visible}
-export CUDA_VISIBLE_DEVICES={q(cards)} RES_EVAL_DEVICE=cuda:0 PYTHONUNBUFFERED=1
+export CUDA_VISIBLE_DEVICES={q(cards)} RES_EVAL_DEVICE=cuda:0 PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
 export TMPDIR={tmp} XDG_CACHE_HOME={cache}/xdg OMNI_CACHE_DIR={cache}/omni
 # Kit forks at startup; with scipy loaded first, OpenBLAS's atfork shutdown of its worker threads crashes it
 export OPENBLAS_NUM_THREADS="${{OPENBLAS_NUM_THREADS:-1}}"
