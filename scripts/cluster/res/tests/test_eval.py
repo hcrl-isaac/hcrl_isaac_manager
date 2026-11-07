@@ -1559,11 +1559,14 @@ class EvalRunTest(Isolated):
             pids[stage] = self._pid((stage / "log").read_text())
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             ev.cmd_stop(lease.id, "me", [self.pool], "nosuchstage")
+        with ls.locked_store() as leases:  # the first run also spanned another card (--gpus): its lease names only it
+            leases.append(dataclasses.replace(lease, id="rank1", key=lease.key + "-1", stage=str(first),
+                                              stages=[str(first)]))  # fmt: skip
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool], first.name), 0)
         self.assertFalse(_alive(pids[first]))
         self.assertTrue(_alive(pids[second]), "the lease's other run keeps going")
-        [lease] = self._leases()
+        [lease] = self._leases()  # the other card's lease, left with no run, is released
         self.assertEqual((lease.stages, lease.stage), ([str(second)], str(second)))
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool], str(second)), 0)  # a full stage dir works too
