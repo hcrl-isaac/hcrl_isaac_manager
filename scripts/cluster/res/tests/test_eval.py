@@ -1542,6 +1542,34 @@ class EvalRunTest(Isolated):
         self.assertFalse(any(_alive(p) for p in pids), "both runs are gone, not just the newest")
         self.assertEqual(self._leases(), [])
 
+    def test_stop_one_stage_keeps_the_lease_for_its_other_run(self) -> None:
+        """--stage stops one of a lease's runs; the other keeps running and the lease, until it is stopped too."""
+        for argv in (("--any",), None):
+            [held] = self._leases() if argv is None else [None]
+            rc, out = self._eval(*(argv or ("--lease", held.id)), "--detach", "--env", "MODE=hang")
+            self.assertEqual(rc, 0, out)
+        [lease] = self._leases()
+        first, second = (Path(d) for d in lease.stages)
+        pids = {}
+        for stage in (first, second):
+            for _ in range(50):
+                if (stage / "log").exists() and "PID " in (stage / "log").read_text():
+                    break
+                time.sleep(0.2)
+            pids[stage] = self._pid((stage / "log").read_text())
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            ev.cmd_stop(lease.id, "me", [self.pool], "nosuchstage")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool], first.name), 0)
+        self.assertFalse(_alive(pids[first]))
+        self.assertTrue(_alive(pids[second]), "the lease's other run keeps going")
+        [lease] = self._leases()
+        self.assertEqual((lease.stages, lease.stage), ([str(second)], str(second)))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool], str(second)), 0)  # a full stage dir works too
+        self.assertFalse(_alive(pids[second]))
+        self.assertEqual(self._leases(), [], "the last run's stop releases the lease")
+
     def test_stop_keeps_a_card_lease_reused_for_a_later_run(self) -> None:
         """A --gpus run's other-card lease reused for a new run keeps its card; a pruned stage dir is no error."""
         rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
