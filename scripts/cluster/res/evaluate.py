@@ -1824,6 +1824,10 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool]) -> int:
     pool, host, gpu, job, uuid_ = _lease_card(lease_id, holder, pools)
     with ls.locked_store() as leases:
         mine = next(x for x in leases if x.id == lease_id)
+        if ls.batch_live(mine):
+            sys.exit(
+                f"[res] a `pls run --jobs` batch is working through {lease_id}: stop it with `kill {mine.batch_pid}`"
+            )
         # every detached run started on the lease, the newest last; a lease from before `stages` names only one
         stage_dirs = list(mine.stages) or ([mine.stage] if mine.stage else [])
     t = make_target(pool, host, gpu, job, uuid_)

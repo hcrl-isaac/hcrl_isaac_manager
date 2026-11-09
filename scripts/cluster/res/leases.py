@@ -67,6 +67,7 @@ class Lease:
             `pls run --stop` stops them all.
         cpus: Cores a CPU-only run holds (``pls run --cpus``; 0 for a card lease).
         cores: The box's cores that run is pinned to, as a taskset list (e.g. ``40-63``).
+        batch_pid: Local process of the `pls run --jobs` batch working through the lease (0 = none).
     """
 
     id: str
@@ -90,11 +91,23 @@ class Lease:
     cpus: int = 0
     cores: str = ""
     stages: list[str] = field(default_factory=list)
+    batch_pid: int = 0
 
 
 def is_cpu(lease: Lease) -> bool:
     """True for a CPU lease: cores of a box, no card."""
     return lease.key.startswith(CPU_KEY)
+
+
+def batch_live(lease: Lease) -> bool:
+    """True while the lease's `pls run --jobs` batch runs; a killed batch's pid, even reused, does not count."""
+    if not lease.batch_pid:
+        return False
+    try:
+        argv = Path(f"/proc/{lease.batch_pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return False
+    return any(a == b"--jobs" or a.startswith(b"--jobs=") for a in argv)
 
 
 @dataclass

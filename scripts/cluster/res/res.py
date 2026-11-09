@@ -369,9 +369,7 @@ def _choose(
                 chosen.append((card, rep))
             continue
         if key in taken and taken[key].holder == args.holder:  # never frees by waiting: say how to use it
-            sys.exit(
-                f"[res] {spec} is already yours (lease {taken[key].id}); run on it with `--on lease:{taken[key].id}`"
-            )
+            sys.exit(f"[res] {spec} is already yours; nothing claimed. Run on it with `--on lease:{taken[key].id}`")
         if key in taken:
             raise Busy(f"[res] {spec} is leased; move it with `pls res transfer {spec} --to <holder>`; nothing claimed")
         if card.state != "free" and not (adopt and card.state in ("busy", "held")):
@@ -525,6 +523,11 @@ def cmd_release(args: argparse.Namespace, _pools: list[Pool]) -> None:
             if foreign and not args.force:
                 names = ", ".join(f"{x.id} ({x.holder})" for x in foreign)
                 sys.exit(f"[res] held by someone else: {names}; pass --force to release anyway")
+            batches = [x for x in gone if ls.batch_live(x)]
+            if batches and not args.force:
+                names = ", ".join(f"{x.id} (pid {x.batch_pid})" for x in batches)
+                sys.exit(f"[res] a `pls run --jobs` batch is working through: {names}; its next jobs need the lease. "
+                         "Stop the batch with `kill <pid>`, or pass --force to fail them; nothing released")  # fmt: skip
             for lease in gone:
                 leases.remove(lease)
             _settle(leases, reservations)  # a used reservation whose cards are all released is done
@@ -708,7 +711,7 @@ def main() -> None:
     rl = sub.add_parser("release", help="release your leases by id or host:gpu")
     rl.add_argument("targets", nargs="+")
     rl.add_argument("--holder", required=True, help="your session name (must match the lease)")
-    rl.add_argument("--force", action="store_true", help="release someone else's lease")
+    rl.add_argument("--force", action="store_true", help="release someone else's lease, or one a batch runs on")
     tr = sub.add_parser("transfer", help="hand your leases (id or host:gpu) to another holder")
     tr.add_argument("targets", nargs="+")
     tr.add_argument("--holder", required=True, help="the current holder (must match the lease)")

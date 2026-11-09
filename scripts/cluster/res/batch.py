@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import queue
 import re
 import signal
@@ -18,6 +19,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import leases as ls
 
 EVALUATE = Path(__file__).resolve().parent / "evaluate.py"
 MAX_FAILS_IN_A_ROW = 3  # a card that fails this many jobs in a row is broken, not the jobs: its worker stops
@@ -101,6 +104,24 @@ def status(out: Path, job: Job) -> str:
         return ""
 
 
+def _mark_leases(leases: list[str], pid: int) -> None:
+    """Record ``pid`` as the batch on ``leases`` (0 clears this process's mark); exits if another batch runs on one."""
+    me = os.getpid()
+    try:
+        with ls.locked_store() as stored:
+            mine = [x for x in stored if x.id in leases]
+            taken = [x.id for x in mine if x.batch_pid != me and ls.batch_live(x)]
+            if pid and taken:
+                sys.exit(f"[res] another `pls run --jobs` batch is working through {', '.join(taken)}; nothing started")
+            for lease in mine:
+                if pid or lease.batch_pid == me:
+                    lease.batch_pid = pid
+    except ls.LeaseStoreError as exc:
+        if pid:
+            sys.exit(f"[res] nothing started: {exc}")
+        print(f"[res] batch: could not clear its mark on the leases: {exc}", file=sys.stderr)
+
+
 def run_batch(argv: list[str], leases: list[str], jobs_file: str, out_dir: str, script: str, common: list[str]) -> int:
     """Run every job not yet ``ok`` in ``out_dir``, one worker per lease taking the next job when it is free.
 
@@ -118,6 +139,7 @@ def run_batch(argv: list[str], leases: list[str], jobs_file: str, out_dir: str, 
     if len(set(leases)) != len(leases):
         sys.exit("[res] --jobs: a lease is named twice; one worker per card")
     jobs = load_jobs(jobs_file)
+    _mark_leases(leases, os.getpid())
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     todo = [j for j in jobs if status(out, j) != "ok"]
@@ -187,6 +209,7 @@ def run_batch(argv: list[str], leases: list[str], jobs_file: str, out_dir: str, 
     finally:
         for sig, handler in handlers.items():
             signal.signal(sig, handler)
+        _mark_leases(leases, 0)
     left = [j.id for j in jobs if status(out, j) != "ok"]
     print(f"[res] batch: {len(jobs) - len(left)} of {len(jobs)} ok" + (f"; not ok: {', '.join(left)}" if left else ""),
           file=sys.stderr)  # fmt: skip
