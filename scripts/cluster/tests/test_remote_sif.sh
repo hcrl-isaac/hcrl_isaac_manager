@@ -57,7 +57,7 @@ check() {
 ci setup > "$T/out1" 2>&1; rc=$?
 check "an arm64 setup builds the .sif in a batch job" "[ $rc = 0 ] && [ \"\$(cat '$sif')\" = new ]"
 check "with the docker build's Isaac Lab ref and extras" \
-    "grep -q -- \"--build-arg ISAACLAB_REF=v3.0.0-EA --build-arg ISAACLAB_EXTRAS=isaacsim rsl-rl\" '$T/remote/sif/build-hcrl-isaac/hcrl-isaac.sif.partial.4242.args'"
+    "grep -q -- \"--build-arg ISAACLAB_REF=v3.0.0 --build-arg ISAACLAB_EXTRAS=isaacsim rsl-rl\" '$T/remote/sif/build-hcrl-isaac/hcrl-isaac.sif.partial.4242.args'"
 check "with the profile's partition, account and qos" \
     "grep -q -- '-p debug' '$T/sbatch_args' && grep -q -- '-A PROJ' '$T/sbatch_args' && grep -q -- '-q normal' '$T/sbatch_args'"
 check "submitted --parsable --wait" "grep -q -- '--parsable --wait' '$T/sbatch_args'"
