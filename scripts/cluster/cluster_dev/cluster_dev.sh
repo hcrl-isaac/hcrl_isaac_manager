@@ -469,8 +469,29 @@ cmd_exec() {  # cluster_dev.sh exec [--detach] [--log FILE] [--tree N] [--own-tm
     fi
     log "[${DD_MODE} detached] container exec on job ${DD_JOBID}: ${args}"
     log "Log on login node: ${logfile}   (follow with: $(basename "${BASH_SOURCE[0]}") tail)"
-    ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
-        "nohup setsid bash -c $(printf %q "$inner") > ${logfile} 2>&1 < /dev/null & disown; sleep 0.3; echo \"[cluster_dev] login-side wrapper pid=\$(pgrep -nf 'nohup setsid bash' || echo ?)\""
+    # a sentinel with a spool starts the step itself, inside the job: nothing on the login node has to outlive this
+    # session (TACC login nodes end such processes); an older sentinel falls back to a login-side wrapper
+    local spool="\$HOME/.cluster_dev/spool/${DD_JOBID}" id
+    id="$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}"
+    if [ "$DD_MODE" = "srun" ] && on_login "[ -e ${spool}/.ready ]"; then
+        printf '%s\n' "$inner" | on_login "cat > ${spool}/${id}.tmp && printf %s $(printf %q "$logfile") > ${spool}/${id}.log \
+            && mv ${spool}/${id}.tmp ${spool}/${id}.req" || { err "could not spool the step on job ${DD_JOBID}"; exit 1; }
+        # the sentinel takes a request within 5 s; one it never takes is withdrawn, so it cannot start later unseen
+        if ! on_login "for _ in \$(seq 20); do [ -e ${spool}/${id}.started ] && exit 0; sleep 1; done; \
+                rm ${spool}/${id}.req 2>/dev/null && exit 1; exit 0"; then
+            err "job ${DD_JOBID}'s sentinel did not take step ${id} within 20 s (withdrawn); check the job is RUNNING"
+            exit 1
+        fi
+        log "Started as step ${id} by job ${DD_JOBID}'s sentinel on ${DD_NODE:-its node}"
+    else
+        if [ "$DD_MODE" = "ssh" ]; then
+            log "WARN: ssh mode: this step lives only as long as the login-side ssh wrapper"
+        else
+            log "WARN: job ${DD_JOBID}'s sentinel predates the spool: this step lives only as long as the login-side wrapper"
+        fi
+        ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
+            "nohup setsid bash -c $(printf %q "$inner") > ${logfile} 2>&1 < /dev/null & disown; sleep 0.3; echo \"[cluster_dev] login-side wrapper pid=\$(pgrep -nf 'nohup setsid bash' || echo ?)\""
+    fi
     # DEV_JOBID means an ad-hoc target, typically ANOTHER session's job -- recording the log path would
     # overwrite the tracked session's LAST_RUN_LOG, so print it instead and leave shared state alone.
     if [ -n "${DEV_JOBID:-}" ]; then
