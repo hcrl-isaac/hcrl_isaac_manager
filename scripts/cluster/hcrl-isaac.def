@@ -6,7 +6,7 @@ From: base.sif
 
 %arguments
     ISAACLAB_REPO=https://github.com/isaac-sim/IsaacLab.git
-    ISAACLAB_REF=v3.0.0-EA
+    ISAACLAB_REF=v3.0.0
     ISAACLAB_EXTRAS=isaacsim rsl-rl ovphysx importers video
     UV_VERSION=0.11.7
 
