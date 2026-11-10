@@ -33,6 +33,7 @@ pls res claim gpub065:2 --holder "<session>" --for 2h                   # time-b
 pls res leases                                                          # list (no probe)
 pls res release <id|host:gpu|host:job:gpu> --holder "<session>"         # --force for someone else's
 pls res transfer <id|host:gpu> --holder "<you>" --to "<session>"        # hand a lease over (--force: not yours)
+pls res extend <id|host:gpu> --holder "<you>" --for 30h                # a new time box from now (none: no box)
 pls res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take over a busy card's running run
 ```
 

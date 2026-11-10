@@ -566,6 +566,31 @@ def cmd_transfer(args: argparse.Namespace, _pools: list[Pool]) -> None:
         print(f"transferred {lease.id}: {lease.card} {lease.previous} -> {lease.holder}")
 
 
+def cmd_extend(args: argparse.Namespace, _pools: list[Pool]) -> None:
+    """Give your leases (by id or card) a new time box from now, or none; the lease and its runs stay as they are."""
+    args.targets = _lease_targets(args.targets)
+    now = time.time()
+    try:
+        with ls.locked_store() as leases:
+            targets = set(args.targets) | {_slurm_label(t) for t in args.targets}
+            chosen = [x for x in leases if x.id in targets or x.card in targets or x.key in targets]
+            found = {x.id for x in chosen} | {x.card for x in chosen} | {x.key for x in chosen}
+            missing = {t for t in args.targets if t not in found and _slurm_label(t) not in found}
+            if missing:
+                sys.exit(f"[res] no lease for: {', '.join(sorted(missing))}; nothing extended")
+            foreign = [x for x in chosen if x.holder != args.holder]
+            if foreign:
+                names = ", ".join(f"{x.id} ({x.holder})" for x in foreign)
+                sys.exit(f"[res] held by someone else: {names}; nothing extended")
+            for lease in chosen:
+                lease.expires = now + args.for_ if args.for_ else 0.0
+    except ls.LeaseStoreError as exc:
+        sys.exit(f"[res] nothing extended: {exc}")
+    for lease in chosen:
+        box = f"time box ends in {args.for_ / 3600:g} h" if args.for_ else "no time box"
+        print(f"extended {lease.id}: {lease.card} ({lease.holder}), {box}")
+
+
 def cmd_reserve(args: argparse.Namespace, pools: list[Pool]) -> None:
     """Give the holder priority on named cards or N of a pool from an ETA; others' leases there yield to it."""
     if args.end is not None:
@@ -667,6 +692,11 @@ def _positive_int(text: str) -> int:
     return value
 
 
+def _box(text: str) -> float:
+    """A time box like ``90m`` or ``30h``; ``none`` or ``0`` is no box."""
+    return 0.0 if text.strip().lower() in ("none", "0") else _duration(text)
+
+
 def _duration(text: str) -> float:
     try:
         return ls.parse_duration(text)
@@ -719,6 +749,10 @@ def main() -> None:
     tr.add_argument("--note", default="", help="new note (default: keep)")
     tr.add_argument("--run", default="", help="the run the lease covers (default: keep)")
     tr.add_argument("--force", action="store_true", help="transfer someone else's lease")
+    ex = sub.add_parser("extend", help="give your leases (id or host:gpu) a new time box from now")
+    ex.add_argument("targets", nargs="+")
+    ex.add_argument("--holder", required=True, help="your session name (must match the lease)")
+    ex.add_argument("--for", dest="for_", type=_box, required=True, help="new box from now, e.g. 30h; none: no box")
     rv = sub.add_parser("reserve", help="priority on cards from an ETA: others may use them and yield to you")
     rv.add_argument("cards", nargs="*", help="cards as host:gpu (or host:job:gpu); or use --pool and --count")
     rv.add_argument("--pool", help="reserve cards of this pool (prefix match) instead of naming them")
@@ -748,6 +782,7 @@ def main() -> None:
         "claim": cmd_claim,
         "release": cmd_release,
         "transfer": cmd_transfer,
+        "extend": cmd_extend,
         "reserve": cmd_reserve,
         "leases": cmd_leases,
     }

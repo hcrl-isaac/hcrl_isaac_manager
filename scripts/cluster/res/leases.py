@@ -398,7 +398,14 @@ def reconcile(
     for lease in list(leases):
         card = cards.get(lease.key)
         if lease.expires and now >= lease.expires:
-            released.append((lease, "time box ended"))
+            why = "time box ended"
+            if card is not None and card.state in ("busy", "held"):
+                run = f" --run {lease.run}" if lease.run else ""
+                why += (
+                    f"; its run still holds the card: take it back with `pls res claim {lease.card.split(' ')[0]}"
+                    f' --adopt{run} --holder "{lease.holder}"`, or extend the box first (`pls res extend`)'
+                )
+            released.append((lease, why))
             continue
         if is_cpu(lease):
             continue

@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -431,6 +432,34 @@ class CommandTest(CommandBase):
         self.claim("gpub1:7:0")
         res.cmd_release(argparse.Namespace(targets=["gpub1:7:0"], holder="s", force=False), self.pools)
         self.assertEqual(self.stored(), [])
+
+    def test_extend_sets_a_new_box_from_now_and_keeps_the_lease(self) -> None:
+        self.claim("mckennie:0", for_=3600.0)
+        with ls.locked_store() as leases:
+            leases[0].stages = ["/stage/a"]
+            lease_id = leases[0].id
+        with contextlib.redirect_stdout(io.StringIO()):
+            res.cmd_extend(argparse.Namespace(targets=[f"lease:{lease_id}"], holder="s", for_=30 * 3600.0), self.pools)
+        with ls.locked_store() as leases:
+            self.assertEqual((leases[0].id, leases[0].stages), (lease_id, ["/stage/a"]))
+            self.assertAlmostEqual(leases[0].expires - time.time(), 30 * 3600.0, delta=60)
+        with contextlib.redirect_stdout(io.StringIO()):
+            res.cmd_extend(argparse.Namespace(targets=["mckennie:0"], holder="s", for_=0.0), self.pools)
+        with ls.locked_store() as leases:
+            self.assertEqual(leases[0].expires, 0.0, "--for none drops the box")
+
+    def test_a_box_ending_on_a_busy_card_says_how_to_take_it_back(self) -> None:
+        lease = ls.new_lease(card(index=2, state="busy"), report(), "s", "", 60.0, run="k4n3bist")
+        leases = [lease]
+        released = ls.reconcile(leases, [report(card(index=2, state="busy"))], now=lease.expires + 1)
+        (why,) = [w for _, w in released]
+        self.assertIn("--adopt --run k4n3bist", why)
+        self.assertIn("pls res extend", why)
+
+    def test_extend_refuses_someone_elses_lease(self) -> None:
+        self.claim("mckennie:0", for_=3600.0)
+        with self.assertRaises(SystemExit):
+            res.cmd_extend(argparse.Namespace(targets=["mckennie:0"], holder="other", for_=3600.0), self.pools)
 
     def test_release_and_transfer_accept_the_lease_prefix(self) -> None:
         """`lease:<id>`, the form a refused `pls run --on` suggests, names the lease like its bare id."""
