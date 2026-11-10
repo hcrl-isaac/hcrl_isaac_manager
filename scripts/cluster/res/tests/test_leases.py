@@ -448,6 +448,14 @@ class CommandTest(CommandBase):
         with ls.locked_store() as leases:
             self.assertEqual(leases[0].expires, 0.0, "--for none drops the box")
 
+    def test_a_box_ending_on_a_busy_card_says_how_to_take_it_back(self) -> None:
+        lease = ls.new_lease(card(index=2, state="busy"), report(), "s", "", 60.0, run="k4n3bist")
+        leases = [lease]
+        released = ls.reconcile(leases, [report(card(index=2, state="busy"))], now=lease.expires + 1)
+        (why,) = [w for _, w in released]
+        self.assertIn("--adopt --run k4n3bist", why)
+        self.assertIn("pls res extend", why)
+
     def test_extend_refuses_someone_elses_lease(self) -> None:
         self.claim("mckennie:0", for_=3600.0)
         with self.assertRaises(SystemExit):
