@@ -15,6 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import batch
+import leases as ls
 
 # stands in for evaluate.py: logs its argv, fails when an argument contains "bad"
 FAKE = """import json, sys
@@ -66,10 +67,40 @@ class RunBatchTest(unittest.TestCase):
         fake.write_text(FAKE)
         self.patch = mock.patch.object(batch, "EVALUATE", fake)
         self.patch.start()
+        self.store = mock.patch.object(ls, "STORE", self.dir / "state" / "leases.json")
+        self.store.start()
         self.out = self.dir / "out"
 
     def tearDown(self) -> None:
+        self.store.stop()
         self.patch.stop()
+
+    def seed(self, lease_id: str, **kw: object) -> None:
+        with ls.locked_store() as leases:
+            leases.append(
+                ls.Lease(id=lease_id, key=f"k{lease_id}", card=f"box:{lease_id}", report="p/box", holder="B", **kw)
+            )
+
+    def test_the_batch_marks_its_leases_while_it_runs(self) -> None:
+        self.seed("L1")
+        seen = self.dir / "seen"
+        (self.dir / "fake_evaluate.py").write_text(
+            f"import pathlib, shutil\nshutil.copy({str(ls.STORE)!r}, {str(seen)!r})\n"
+        )
+        self.assertEqual(self.run_jobs(["j1"], ["L1"]), 0)
+        self.assertEqual(json.loads(seen.read_text())[0]["batch_pid"], os.getpid())
+        with ls.locked_store() as leases:
+            self.assertEqual(leases[0].batch_pid, 0, "the mark ends with the batch")
+
+    def test_a_second_batch_on_a_lease_is_refused(self) -> None:
+        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "--jobs"])
+        self.addCleanup(other.wait)
+        self.addCleanup(other.kill)
+        self.seed("L1", batch_pid=other.pid)
+        with self.assertRaises(SystemExit) as ctx:
+            self.run_jobs(["j1"], ["L1"])
+        self.assertIn("L1", str(ctx.exception.code))
+        self.assertFalse(self.out.exists(), "nothing started")
 
     def run_jobs(self, ids: list[str], leases: list[str]) -> int:
         jobs = self.dir / "jobs.jsonl"

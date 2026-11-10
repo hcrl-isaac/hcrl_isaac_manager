@@ -41,6 +41,9 @@ pls res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take o
   whose run you take on when nobody leases it any more; it needs named cards and refuses leased or unknown ones. An
   adopted lease starts active, so its run renews it and the run's end releases it as usual. `--run` records the run
   a lease covers.
+- `release` refuses a lease a live `pls run --jobs` batch is working through, since its next jobs need it (`--force`
+  overrides), and a second batch on that lease is refused. A claim on a card that is already yours refuses and
+  names the lease only as `--on lease:<id>`, so it can never be read as a new claim: claims are not shared.
 
 - A claim probes first and succeeds only on cards it sees as free that nobody holds; all named cards or none.
   `--any` fills partly used hosts first and skips Ray unless `--pool ray` is given (Ray schedules onto its cards).

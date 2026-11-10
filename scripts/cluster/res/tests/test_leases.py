@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -530,6 +531,39 @@ class CommandTest(CommandBase):
         self.assertEqual(self.stored(), ["mckennie:0"])
         res.cmd_release(argparse.Namespace(targets=["mckennie:0"], holder="other", force=True), self.pools)
         self.assertEqual(self.stored(), [])
+
+    def test_release_refuses_a_lease_a_live_batch_runs_on(self) -> None:
+        self.claim("mckennie:0")
+        batch = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "--jobs"])
+        self.addCleanup(batch.wait)
+        self.addCleanup(batch.kill)
+        with ls.locked_store() as leases:
+            leases[0].batch_pid = batch.pid
+        release = argparse.Namespace(targets=["mckennie:0"], holder="s", force=False)
+        with self.assertRaises(SystemExit) as ctx:
+            res.cmd_release(release, self.pools)
+        self.assertIn(str(batch.pid), str(ctx.exception.code))
+        self.assertEqual(self.stored(), ["mckennie:0"])
+        res.cmd_release(argparse.Namespace(targets=["mckennie:0"], holder="s", force=True), self.pools)
+        self.assertEqual(self.stored(), [])
+
+    def test_a_dead_or_reused_batch_pid_does_not_hold_the_lease(self) -> None:
+        self.claim("mckennie:0")
+        with ls.locked_store() as leases:
+            leases[0].batch_pid = os.getpid()  # alive, but not a --jobs process
+        with contextlib.redirect_stdout(io.StringIO()):
+            res.cmd_release(argparse.Namespace(targets=["mckennie:0"], holder="s", force=False), self.pools)
+        self.assertEqual(self.stored(), [])
+
+    def test_a_claim_on_your_own_card_never_prints_a_claimable_id(self) -> None:
+        self.claim("mckennie:0")
+        with ls.locked_store() as leases:
+            lease_id = leases[0].id
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim("mckennie:0")
+        text = str(ctx.exception.code)
+        self.assertIn(f"--on lease:{lease_id}", text)
+        self.assertNotRegex(text, r"(claimed|lease|adopted) [0-9a-f]{6}")
 
 
 class ReservationTest(CommandBase):
