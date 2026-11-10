@@ -224,8 +224,38 @@ def test_scripts() -> None:
     handoff(["bash", "scripts/run_tests.sh"])
 
 
+TEST_USAGE = """usage: pls test [<repo>] [--wt <set>] [pytest args]
+
+A workspace repo's CPU smoke tests (pytest -m "not gpu"; default repo hcrl_isaaclab).
+  --wt <set>  test a worktree set, as `pls run --wt` runs one: the repo's worktree of that name when it has one,
+              with every worktree'd package of the set importable ahead of the main checkouts"""
+
+
 def test(repo: str, args: list[str]) -> None:
-    """A workspace repo's CPU smoke tests (skips `-m gpu`); launches Isaac Sim, so it needs the venv and a GPU."""
-    os.chdir(ROOT / "resources" / repo)
-    cmd = [str(ROOT / VENV_PY), "-m", "pytest", "-m", "not gpu", *args]
-    handoff(cmd, echo=True, env={"OMNI_KIT_ACCEPT_EULA": "YES", "PYTHONPATH": ""})
+    """A workspace repo's CPU smoke tests (skips `-m gpu`), on the main checkouts or a worktree set (``--wt``)."""
+    if repo in ("-h", "--help"):
+        print(TEST_USAGE)
+        return
+    if repo.startswith("-"):  # options with no repo: the default repo's
+        repo, args = "hcrl_isaaclab", [repo, *args]
+    wt, rest, it = "", [], iter(args)
+    for arg in it:
+        if arg == "--wt" or arg.startswith("--wt="):
+            wt = arg.partition("=")[2] or next(it, "")
+            if not wt:
+                sys.exit("[pls] test: --wt needs a worktree-set name")
+        else:
+            rest.append(arg)
+    where, pythonpath = ROOT / "resources" / repo, ""
+    if wt:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from worktree_env import resolve, select
+
+        pythonpath, _, overridden = select(wt)
+        where = Path(resolve(wt)[0].get(repo, where))
+        print(f"[worktree] {wt}: {', '.join(overridden)} (others from main checkouts)", file=sys.stderr)
+    if not where.is_dir():
+        sys.exit(f"[pls] test: no repo {repo} under resources/ (see `pls test --help`)")
+    os.chdir(where)
+    cmd = [str(ROOT / VENV_PY), "-m", "pytest", "-m", "not gpu", *rest]
+    handoff(cmd, echo=True, env={"OMNI_KIT_ACCEPT_EULA": "YES", "PYTHONPATH": pythonpath})
