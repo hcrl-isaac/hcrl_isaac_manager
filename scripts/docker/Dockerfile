@@ -8,7 +8,7 @@ FROM ${BASE_IMAGE} AS base
 
 # Isaac Lab ref and uv extras: docker_interface.sh passes workspace.defaults.yaml's, plus isaacsim (Kit).
 ARG ISAACLAB_REPO=https://github.com/isaac-sim/IsaacLab.git
-ARG ISAACLAB_REF=v3.0.0-EA
+ARG ISAACLAB_REF=v3.0.0
 ARG ISAACLAB_EXTRAS="isaacsim rsl-rl ovphysx importers video"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -56,8 +56,8 @@ RUN git init -q ${ISAACLAB_PATH} && \
     git -C ${ISAACLAB_PATH} checkout -q FETCH_HEAD && \
     git -C ${ISAACLAB_PATH} log -1 --format="[isaaclab] ${ISAACLAB_REF} = %H"
 
-# The venv from Isaac Lab's lock: --frozen installs exactly uv.lock (torch 2.11.0 cu128 on x86_64, cu130 on aarch64;
-# the isaacsim 6.1.0.0 Kit wheels), never a re-resolve; lock_overrides.txt then replaces the locked versions that break.
+# The venv from Isaac Lab's lock: --frozen installs exactly uv.lock (torch 2.11.0 cu130; the isaacsim 6.2.0.0
+# Kit wheels), never a re-resolve; lock_overrides.txt then replaces the locked versions that break.
 COPY lock_overrides.txt /tmp/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync -q --project ${ISAACLAB_PATH} --frozen $(for e in ${ISAACLAB_EXTRAS}; do printf -- "--extra %s " "$e"; done) && \
@@ -67,9 +67,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # collect_workspace_deps.py), under the cross-cutting pins and every version the lock installed.
 COPY requirements.workspace.txt constraints.workspace.txt /tmp/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    backend=cu128; [ "$(uname -m)" = aarch64 ] && backend=cu130; \
     uv pip freeze --python ${VIRTUAL_ENV}/bin/python --exclude-editable > /tmp/installed.txt && \
-    uv pip install -q --python ${VIRTUAL_ENV}/bin/python --torch-backend ${backend} \
+    uv pip install -q --python ${VIRTUAL_ENV}/bin/python --torch-backend cu130 \
         --index-strategy unsafe-best-match --prerelease allow -c /tmp/installed.txt -c /tmp/constraints.workspace.txt \
         "ray[default,tune]==2.50.1" optuna bayesian-optimization gitman -r /tmp/requirements.workspace.txt
 

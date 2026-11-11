@@ -6,7 +6,7 @@ From: base.sif
 
 %arguments
     ISAACLAB_REPO=https://github.com/isaac-sim/IsaacLab.git
-    ISAACLAB_REF=v3.0.0-EA
+    ISAACLAB_REF=v3.0.0
     ISAACLAB_EXTRAS=isaacsim rsl-rl ovphysx importers video
     UV_VERSION=0.11.7
 
@@ -68,9 +68,8 @@ From: base.sif
     uv sync -q --project ${ISAACLAB_PATH} --frozen $(for e in ${ISAACLAB_EXTRAS}; do printf -- "--extra %s " "$e"; done)
     uv pip install -q --python ${VIRTUAL_ENV}/bin/python -r /opt/hcrl-build/lock_overrides.txt
 
-    backend=cu128; [ "$(uname -m)" = aarch64 ] && backend=cu130
     uv pip freeze --python ${VIRTUAL_ENV}/bin/python --exclude-editable > /opt/hcrl-build/installed.txt
-    uv pip install -q --python ${VIRTUAL_ENV}/bin/python --torch-backend ${backend} \
+    uv pip install -q --python ${VIRTUAL_ENV}/bin/python --torch-backend cu130 \
         --index-strategy unsafe-best-match --prerelease allow -c /opt/hcrl-build/installed.txt -c /opt/hcrl-build/constraints.workspace.txt \
         "ray[default,tune]==2.50.1" optuna bayesian-optimization gitman -r /opt/hcrl-build/requirements.workspace.txt
 

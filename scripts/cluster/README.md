@@ -95,8 +95,8 @@ torch is the lock's 2.11.0 CUDA build with `sm_100`, torchvision runs against it
 (`pxr`) import. Each build logs to `build-hcrl-isaac/build-<job>.log`; if the connection drops while it
 runs, the job may still finish. `build` and `push` refuse for such a profile.
 
-Isaac Lab's lock resolves torch `+cu130` on aarch64 (`+cu128` on x86), and the entrypoint preloads the system's and
-torch's `libgomp` there, without which `import isaacsim` exits.
+Isaac Lab's lock resolves torch `+cu130`. On aarch64 the entrypoint preloads the system's and
+torch's `libgomp`, without which `import isaacsim` exits.
 
 The job's resources (`-p`, `-A`, `-n`, `--cpus-per-task`, `--time`, mail) are the `#SBATCH` lines of
 `submit_job_slurm.sh`; `develop` reuses them for its sentinel.

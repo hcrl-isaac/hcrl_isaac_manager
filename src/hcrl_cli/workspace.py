@@ -11,7 +11,7 @@ from pathlib import Path
 
 from hcrl_cli.proc import BASH_UTILS, RC_FILE, ROOT, VENV, VENV_PY, handoff, run
 
-CU = "cu128"
+CU = "cu130"
 ISAACLAB_PYTHON = "3.12"  # Isaac Lab 3's interpreter, so the ilab venv's
 WANDB_ENV = Path("scripts/.env.wandb")
 RC_LINE = f"VENV_NAME={VENV} source {BASH_UTILS}"
