@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Entrypoint for the shared Isaac image: PYTHONPATHs the bound workspace packages ahead of the baked Isaac Lab, and on
 # aarch64 preloads the libgomp copies Isaac Sim's import requires.
-# Binds: /workspace/ext/<name> (package repos), /workspace/isaaclab_source (source mode only).
+# Binds: /workspace/ext/<name> (package repos); a shipped Isaac Lab checkout at $HCRL_ISAACLAB_SRC/.. (source mode).
 set -e
 EXT_DIR="${HCRL_EXT_DIR:-/workspace/ext}"
 SRC_DIR="${HCRL_ISAACLAB_SRC:-/workspace/isaaclab_source}"

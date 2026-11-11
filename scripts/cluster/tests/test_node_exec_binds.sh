@@ -85,6 +85,22 @@ check "CLUSTER_LOGS_DIR is bound over the shared repo's logs" "$T/work_logs:/wor
 NODE_EXEC_RESOURCES="$TREE/resources" run > "$T/out" 2>&1
 check "and over a staged repo's logs" "$T/work_logs:/workspace/ext/hcrl_isaaclab/logs:rw"
 
+# a tree's own IsaacLab is bound whole, so Isaac Lab finds its root at <root>/source/isaaclab/isaaclab
+mkdir -p "$TREE/resources/IsaacLab/source/isaaclab" "$TREE/resources/IsaacLab/apps"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@"\necho "src ${APPTAINERENV_HCRL_ISAACLAB_SRC:-none}"\n' > "$T/bin/apptainer"
+NODE_EXEC_RESOURCES="$TREE/resources" run > "$T/out" 2>&1
+check "a tree's IsaacLab checkout is bound whole" "$TREE/resources/IsaacLab:/workspace/IsaacLab:rw"
+check "and the entrypoint takes its packages from its source/" "src /workspace/IsaacLab/source"
+check "its apps stay where shipped packages look for them" "$TREE/resources/IsaacLab/apps:/workspace/apps:ro"
+if grep -q ":/workspace/isaaclab_source" "$T/out"; then
+    echo "FAIL source/ alone is not bound (Isaac Lab cannot find its root from it)"; fails=$((fails + 1))
+else
+    echo "PASS source/ alone is not bound (Isaac Lab cannot find its root from it)"
+fi
+rm -rf "$TREE/resources/IsaacLab"
+run > "$T/out" 2>&1
+check "without one the image's Isaac Lab is used" "src none"
+
 # Kit boot crashes: an immediate segfault (exit 139) is retried once; other failures are not
 boots() { run > /dev/null 2>&1; echo "$?:$(wc -l < "$T/calls")"; }
 crash_with() { printf '#!/usr/bin/env bash\necho x >> "%s/calls"\n%s\n' "$T" "$1" > "$T/bin/apptainer"; : > "$T/calls"; }

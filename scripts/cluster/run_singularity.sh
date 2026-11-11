@@ -103,8 +103,12 @@ for d in "$SYNC_DIR"/resources/*/; do
     [ "$name" = "IsaacLab" ] && continue   # handled by the source overlay below, not /workspace/ext
     EXT_BINDS="$EXT_BINDS -B ${d%/}:/workspace/ext/${name}:rw"
 done
-[ -d "$SYNC_DIR/resources/IsaacLab/source" ] && EXT_BINDS="$EXT_BINDS -B $SYNC_DIR/resources/IsaacLab/source:/workspace/isaaclab_source:rw"
-# isaaclab reads its kit file at <source>/../apps, which is /workspace/apps once the source is bound there
+if [ -d "$SYNC_DIR/resources/IsaacLab/source" ]; then
+    # the whole checkout: Isaac Lab finds its root only as <root>/source/isaaclab/isaaclab (paths.py)
+    EXT_BINDS="$EXT_BINDS -B $SYNC_DIR/resources/IsaacLab:/workspace/IsaacLab:rw"
+    export APPTAINERENV_HCRL_ISAACLAB_SRC=/workspace/IsaacLab/source
+fi
+# packages shipped to /workspace/ext/<pkg> read their kit file at ../../../apps = /workspace/apps
 [ -d "$SYNC_DIR/resources/IsaacLab/apps" ] && EXT_BINDS="$EXT_BINDS -B $SYNC_DIR/resources/IsaacLab/apps:/workspace/apps:ro"
 
 echo "(run_singularity.py) apptainer: $(command -v apptainer || echo 'not found') $(apptainer --version 2>/dev/null)," \
