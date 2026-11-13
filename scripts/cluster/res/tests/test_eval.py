@@ -501,6 +501,20 @@ class SlurmTest(unittest.TestCase):
         self.assertTrue(prune.startswith("nohup setsid flock -n /w/trees/.prune.lock "), "detached, one at a time")
         self.assertTrue(prune.endswith(">> /w/trees/.prune.log 2>&1 < /dev/null &"))
 
+    def test_a_wt_asset_worktree_is_staged_in_the_tree(self) -> None:
+        """A --wt set's *_robots worktree ships in the code tree, over the cluster's shared copy."""
+        out = "Run with: pls run --on amd-rtx --tree res-eval-0123456789 -- <script>\n"
+        done = mock.Mock(returncode=0, stdout=out)
+        t = ev.Target("amd-rtx", "slurm", "c571-003", 3, "u@login", "/w", "/w/artifacts", job="35", uuid="GPU-ab")
+        with (
+            mock.patch.object(ev.subprocess, "run", return_value=done) as run,
+            mock.patch.object(ev, "profile_value", return_value=""),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            ev.stage_tree(t, {"robot_rl": "/p", "hcrl_robots": "/q"}, {"hcrl_robots": "/wt"})
+        [stage_call] = [c for c in run.call_args_list if c.args[0][2:3] == ["stage"]]
+        self.assertEqual(stage_call.args[0][2:], ["stage", "res-eval", "robot_rl=/p", "hcrl_robots=/wt"])
+
     def test_a_reused_tree_pruned_before_the_run_is_staged_again(self) -> None:
         out = "Run with: pls run --on amd-rtx --tree res-eval-0123456789 -- <script>\n"
         staged = mock.Mock(returncode=0, stdout=out)
