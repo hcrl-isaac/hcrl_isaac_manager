@@ -872,19 +872,21 @@ def use_tree(t: Target, tree: str) -> str:
     return f"code: staged tree {tree} on {t.pool} (as staged; nothing shipped from here)"
 
 
-def stage_tree(t: Target, code: dict[str, str]) -> str:
-    """Stage ``code`` on the cluster as a code tree (deduplicated against earlier trees) and return its id.
+def stage_tree(t: Target, code: dict[str, str], data: dict[str, str] | None = None) -> str:
+    """Stage ``code`` (and ``data`` worktrees) on the cluster as a code tree (deduplicated against earlier trees).
 
     Earlier ``res-eval`` trees older than ``TREE_KEEP_DAYS`` that no running step marks in use are removed.
 
     Args:
         t: The SLURM target.
         code: Repo name -> local checkout or worktree path.
+        data: Asset repo name (``*_robots``) -> worktree path, staged in place of the cluster's shared copy.
 
     Returns:
         The tree id (``res-eval-<fingerprint>``) for ``develop exec --tree``.
     """
     specs = [f"{repo}={src}" for repo, src in code.items() if repo != "IsaacLab" and not repo.endswith("_robots")]
+    specs += [f"{repo}={src}" for repo, src in (data or {}).items()]
     cmd, env = cluster_dev_cmd(t.pool, "", "stage", "res-eval", *specs)
     q = shlex.quote
     trees = q(profile_value(t.pool, "CLUSTER_TREES_DIR") or f"{t.workspace}/trees")
@@ -1297,10 +1299,12 @@ class Stage:
         data = data or {}
         if data and self.t.kind == "local":
             data = _local_data_in_place(data, self.t.workspace)
-        if data and self.t.kind != "ssh":
+        if data and self.t.kind not in ("ssh", "slurm"):
+            sys.exit(f"[res] --wt data repos ({', '.join(data)}) ship to ssh boxes and SLURM clusters only")
+        if (big := sorted(set(data) & set(DATA_REPOS))) and self.t.kind == "slurm":
             sys.exit(
-                f"[res] --wt data repos ({', '.join(data)}) ship to ssh targets only; on a cluster, stage them with"
-                " `pls stage --on <cluster> <name> <repo>=<path>`"
+                f"[res] --wt {', '.join(big)} does not ship in a code tree; add its new files to the cluster's shared"
+                " copy with `pls stage --on <cluster> data`"
             )
         for repo, src in data.items():
             pointers = lfs_pointers(src)
@@ -1332,7 +1336,7 @@ class Stage:
         if self.t.kind == "slurm":
             # develop stage checks a commit out clean
             ship = {**worktree, **heads}
-            self.tree = stage_tree(self.t, ship) if ship else ""
+            self.tree = stage_tree(self.t, ship, data) if ship or data else ""
             lines = []
             for repo, src in code.items():
                 if repo in worktree:
@@ -1341,6 +1345,7 @@ class Stage:
                     lines.append(f"{repo} {src} {heads[repo][:12]} (main checkout HEAD) -> tree {self.tree}")
                 else:
                     lines.append(f"{repo} {kept}/{repo} (not a git checkout here: the cluster's copy)")
+            lines += [f"{repo} {src} {_describe(src)} -> tree {self.tree}" for repo, src in data.items()]
             return [at(f"/workspace/ext/{repo}", repo) for repo in code], lines
         q = shlex.quote
         res = f"{self.dir}/resources"
