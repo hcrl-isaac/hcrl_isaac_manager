@@ -160,6 +160,18 @@ def _disk_guard() -> None:
         print(f"[pls] run: only {free:.0f} GB free on this machine's disk; {where}", file=sys.stderr)
 
 
+def _check_data_in_place(wt: str) -> None:
+    """Refuse a ``wt`` set whose data repos (``*_robots``, ``motion_datasets``) differ from the resources/ read in place."""
+    if not wt:
+        return
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "cluster" / "res"))
+    import evaluate
+
+    data = evaluate.local_data(str(ROOT), wt)
+    if data:
+        evaluate.local_data_in_place(data, str(ROOT))
+
+
 def _here(argv: list[str], wt: str, command: bool) -> None:
     """This machine, with the ilab venv; ``wt`` routes PYTHONPATH (and repo files) to a worktree set."""
     sys.path.insert(0, str(ROOT / "scripts"))
@@ -168,6 +180,7 @@ def _here(argv: list[str], wt: str, command: bool) -> None:
     pythonpath, core, overridden = select(wt)
     if overridden:
         print(f"[worktree] {wt}: {', '.join(overridden)} (others from main checkouts)", file=sys.stderr)
+    _check_data_in_place(wt)
     # The worktree'd roots precede the editable installs of the main checkouts, so only diverging repos change.
     env = {
         "PYTHONPATH": ":".join(p for p in (pythonpath, os.environ.get("PYTHONPATH", "")) if p),
