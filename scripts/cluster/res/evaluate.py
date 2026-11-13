@@ -554,7 +554,7 @@ def dirty_worktrees(workspace: str, wt: str) -> list[str]:
     return dirty
 
 
-def _local_data_in_place(data: dict[str, str], workspace: str) -> dict[str, str]:
+def local_data_in_place(data: dict[str, str], workspace: str) -> dict[str, str]:
     """A local run reads data repos from ``<workspace>/resources/`` in place, so its worktrees must match them.
 
     Args:
@@ -1296,7 +1296,7 @@ class Stage:
         at = _worktree_env().import_root
         data = data or {}
         if data and self.t.kind == "local":
-            data = _local_data_in_place(data, self.t.workspace)
+            data = local_data_in_place(data, self.t.workspace)
         if data and self.t.kind != "ssh":
             sys.exit(
                 f"[res] --wt data repos ({', '.join(data)}) ship to ssh targets only; on a cluster, stage them with"

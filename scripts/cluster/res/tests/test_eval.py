@@ -551,7 +551,7 @@ class LocalDataInPlaceTest(unittest.TestCase):
 
     def _check(self) -> dict:
         with contextlib.redirect_stderr(io.StringIO()):
-            return ev._local_data_in_place({"ssti_robots": str(self.wt)}, str(self.tmp))
+            return ev.local_data_in_place({"ssti_robots": str(self.wt)}, str(self.tmp))
 
     def test_a_worktree_at_the_shared_commit_reads_in_place(self) -> None:
         self.assertEqual(self._check(), {}, "nothing to ship")
