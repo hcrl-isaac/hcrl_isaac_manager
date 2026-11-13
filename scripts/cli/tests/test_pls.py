@@ -419,6 +419,18 @@ class RunTest(unittest.TestCase):
         self.select.assert_called_once_with("feat")
         self.assertEqual((h.env["PYTHONPATH"], h.cmd[1]), ("/w/a:/w/b:/x", "/w/core/scripts/train.py"))
 
+    def test_a_set_whose_data_worktree_differs_from_resources_stops_before_launch(self) -> None:
+        """Data repos are read from resources/ in place, so a differing worktree would be silently ignored."""
+        fake = mock.Mock()
+        fake.local_data.return_value = {"hcrl_robots": "/m/resources/hcrl_robots/worktrees/feat"}
+        fake.local_data_in_place.side_effect = SystemExit("[res] ... differ: hcrl_robots ...")
+        with mock.patch.dict(sys.modules, {"evaluate": fake}):
+            self._refused("--wt", "feat", "--", "train")
+            fake.local_data.assert_called_once_with(str(launch.ROOT), "feat")
+            fake.local_data.reset_mock()
+            self._pls("--", "train")
+            fake.local_data.assert_not_called()
+
     def test_an_unknown_set_stops_before_launch(self) -> None:
         self.select.side_effect = SystemExit("[worktree] no repo has worktrees/nope; nothing to select")
         self._refused("--wt", "nope", "--", "train")
