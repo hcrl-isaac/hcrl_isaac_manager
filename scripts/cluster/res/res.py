@@ -226,11 +226,11 @@ def _settle(leases: list[ls.Lease], reservations: list[ls.Reservation]) -> None:
         ls.mark_yields(r, leases)
 
 
-def cpu_run_states(leases: list[ls.Lease], pools: list[Pool]) -> dict[str, set[str]]:
-    """For each box holding CPU leases, the stage dirs whose run is gone there (one ssh per box, in parallel).
+def stage_run_states(leases: list[ls.Lease], pools: list[Pool]) -> dict[str, set[str]]:
+    """For each ssh box with leases that record a stage, the stage dirs whose run is gone there (one ssh per box).
 
     Args:
-        leases: The leases (only CPU leases of the given pools' ssh boxes are looked at).
+        leases: The leases (only CPU leases and detached runs' card leases of the given pools' ssh boxes count).
         pools: Pools whose boxes to check.
 
     Returns:
@@ -238,8 +238,8 @@ def cpu_run_states(leases: list[ls.Lease], pools: list[Pool]) -> dict[str, set[s
     """
     by_label: dict[str, list[str]] = {}
     for lease in leases:
-        if ls.is_cpu(lease):
-            by_label.setdefault(lease.report, []).append(lease.stage)
+        if ls.is_cpu(lease) or (lease.stage and not lease.job):
+            by_label.setdefault(lease.report, []).extend(dict.fromkeys([*lease.stages, lease.stage]))
     ssh_pools = {p.name: p for p in pools if p.kind == "ssh"}
     tasks = []
     for label, stages in by_label.items():
@@ -255,17 +255,32 @@ def cpu_run_states(leases: list[ls.Lease], pools: list[Pool]) -> dict[str, set[s
     return {label: state[1] for (label, _, _), state in zip(tasks, states, strict=True) if state is not None}
 
 
+def live_runs(pools: list[Pool]) -> tuple[dict[str, set[str]], set[str]]:
+    """Check the runs behind the leases that record a stage on an ssh box, outside the lease lock (it reaches the boxes).
+
+    Returns:
+        (report label -> ended stage dirs, ids of card leases whose detached run still runs).
+    """
+    with ls.locked_store() as leases:
+        staged = [x for x in leases if ls.is_cpu(x) or (x.stage and not x.job)]
+    ended = stage_run_states(staged, pools)
+    alive = {
+        x.id
+        for x in staged
+        if not ls.is_cpu(x) and x.report in ended and any(s not in ended[x.report] for s in x.stages or [x.stage])
+    }
+    return ended, alive
+
+
 def cmd_status(args: argparse.Namespace, pools: list[Pool]) -> None:
     """Probe, reconcile leases and print every card; a lease store problem only hides the lease column."""
     chosen = select_pools(pools, args.pool)
     reports = probe_all(chosen)
     windows = lease_windows()
     try:
-        with ls.locked_store() as leases:
-            cpu_leases = [x for x in leases if ls.is_cpu(x)]
-        ended = cpu_run_states(cpu_leases, chosen)  # outside the lock: it reaches the boxes
+        ended, alive = live_runs(chosen)
         with ls.locked_state() as (leases, reservations):
-            _report_released(ls.reconcile(leases, reports, **windows))
+            _report_released(ls.reconcile(leases, reports, **windows, alive=alive))
             for label, stages in ended.items():
                 _report_released(ls.reap_cpu(leases, label, stages))
             _settle(leases, reservations)
@@ -426,8 +441,9 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
     windows = lease_windows()
     refused = None
     try:
+        _, alive = live_runs(select_pools(pools, args.pool))
         with ls.locked_state() as (leases, reservations):
-            _report_released(ls.reconcile(leases, reports, **windows))
+            _report_released(ls.reconcile(leases, reports, **windows, alive=alive))
             _settle(leases, reservations)
             mine = {r.id for r in reservations if r.holder == args.holder}
             by_key = {lease.key: lease for lease in leases}
@@ -463,6 +479,8 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
                         lease.expires = now + args.for_ if args.for_ else 0.0
                     else:
                         lease = ls.new_lease(c, r, args.holder, args.note, args.for_, run=run)
+                        if stage := getattr(args, "stage", ""):
+                            lease.stage, lease.stages = stage, [stage]
                         leases.append(lease)
                         if res_ is not None and res_.holder != args.holder:
                             lease.yield_to = res_.id
@@ -731,6 +749,13 @@ def main() -> None:
     cl.add_argument("--for", dest="for_", type=_duration, default=0.0, help="hard time box, e.g. 90m or 2h")
     cl.add_argument("--adopt", action="store_true", help="take over named busy cards whose run you are taking on")
     cl.add_argument("--run", default="", help="the run the lease covers (W&B id, job.step)")
+    cl.add_argument(
+        "--stage",
+        default="",
+        metavar="DIR",
+        help="with --adopt on an ssh box: the stage dir of the detached `pls run` you take over; the lease then stays"
+        " held while that run lives, and `pls run --stop` stops it",
+    )
     cl.add_argument(
         "--wait",
         nargs="?",

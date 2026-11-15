@@ -1809,7 +1809,7 @@ def _print_detached(stage: Stage, lease_id: str, holder: str) -> None:
             file=sys.stderr,
         )
     if lease_id:
-        ends = "`pls res status` finds the run gone" if stage.t.cores else "the card idles"
+        ends = "`pls res status` finds the run gone" if stage.t.cores or stage.t.kind == "ssh" else "the card idles"
         print(f"[res] lease {lease_id} stays held while the run lives; it releases once {ends}", file=sys.stderr)
 
 

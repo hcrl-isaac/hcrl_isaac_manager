@@ -66,6 +66,27 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.run_at(None, [report(c)], 5), [])
         self.assertEqual((self.leases[0].last_active, self.leases[0].idle_since), (T0 + 5 * MIN, 0.0))
 
+    def test_a_live_detached_run_keeps_an_idle_card_leased(self) -> None:
+        c = card()
+        lease = lease_on(c, stage="/s/a", stages=["/s/a"])
+        for minute in (0, 40, 600):
+            self.assertEqual(ls.reconcile([lease], [report(c)], now=T0 + minute * MIN, alive={lease.id}), [])
+        self.assertEqual(lease.idle_since, 0.0)
+        self.assertEqual(ls.reconcile([lease], [report(c)], now=T0 + 601 * MIN), [])  # its run ended: idle starts
+        self.assertEqual(len(ls.reconcile([lease], [report(c)], now=T0 + 640 * MIN)), 1)
+
+    def test_live_runs_reads_detached_card_leases_on_ssh_boxes(self) -> None:
+        live, done, slurm = (lease_on(card(index=i), stage=f"/s/{i}", stages=[f"/s/{i}"]) for i in (1, 2, 3))
+        slurm.job = "77"
+        plain = lease_on(card(index=0))
+        with (
+            mock.patch.object(ls, "locked_store", return_value=contextlib.nullcontext([live, done, slurm, plain])),
+            mock.patch.object(res, "stage_run_states", return_value={"larg/mckennie": {"/s/2"}}) as states,
+        ):
+            ended, alive = res.live_runs([])
+        self.assertEqual([x.id for x in states.call_args.args[0]], [live.id, done.id])
+        self.assertEqual((ended, alive), ({"larg/mckennie": {"/s/2"}}, {live.id}))
+
     def test_unknown_card_leaves_the_lease_alone(self) -> None:
         c = card()
         self.leases = [lease_on(c, idle_since=T0)]
