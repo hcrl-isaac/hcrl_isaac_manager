@@ -329,10 +329,18 @@ class TargetTest(unittest.TestCase):
     def test_with_names_a_known_sibling_checkout(self) -> None:
         repo = Path(tempfile.mkdtemp())
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        self.assertEqual(ev.sibling_args([f"booster-deploy={repo}"]), {"booster-deploy": str(repo)})
-        for spec in ("models-repo", f"booster-deploy={repo}/nope"):
+        self.assertEqual(
+            ev.sibling_args([f"booster-deploy={repo}"]), {"booster-deploy": (str(repo), ev.SIBLINGS["booster-deploy"])}
+        )
+        for spec in ("models-repo", f"booster-deploy={repo}/nope", f"other={repo}/nope"):
             with self.assertRaises(SystemExit):
                 ev.sibling_args([spec])
+
+    def test_with_ships_any_other_checkout_whole_and_importable(self) -> None:
+        repo = Path(tempfile.mkdtemp())
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        path, sib = ev.sibling_args([f"fb-adapt.x={repo}"])["fb-adapt.x"]
+        self.assertEqual((path, sib.dirs, sib.env, sib.importable), (str(repo), (), "FB_ADAPT_X_ROOT", True))
 
     def test_a_bad_pin_is_refused(self) -> None:
         with self.assertRaises(SystemExit):

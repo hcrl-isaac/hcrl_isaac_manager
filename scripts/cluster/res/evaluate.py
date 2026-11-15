@@ -392,31 +392,42 @@ class Sibling:
     """A repo beside the workspace (not under resources/) that a run can ask for with ``--with``."""
 
     path: str  # default checkout, ~ expanded
-    dirs: tuple[str, ...]  # the top-level dirs shipped (a deploy repo's models/ stay behind)
+    dirs: tuple[
+        str, ...
+    ]  # the top-level dirs shipped (a deploy repo's models/ stay behind); () ships every tracked file
     env: str  # the variable the run finds it by
+    importable: bool = False  # its root goes on PYTHONPATH
 
 
 SIBLINGS = {"booster-deploy": Sibling("~/booster-deploy", ("configs", "src"), "BOOSTER_DEPLOY_ROOT")}
 
 
-def sibling_args(specs: list[str]) -> dict[str, str]:
-    """``--with <repo>[=<path>]`` -> repo name -> local checkout, checked to be a git checkout.
+def sibling_args(specs: list[str]) -> dict[str, tuple[str, Sibling]]:
+    """``--with <repo>[=<path>]`` -> repo name -> (local checkout, how it ships), checked to be a git checkout.
+
+    A repo not in ``SIBLINGS`` needs its path, ships every tracked file, goes on PYTHONPATH and is found by
+    ``<REPO>_ROOT``.
 
     Args:
         specs: The ``--with`` values.
 
     Returns:
-        Repo name -> absolute local path.
+        Repo name -> (absolute local path, its ``Sibling``).
     """
     found = {}
     for spec in specs:
         name, _, path = spec.partition("=")
-        if name not in SIBLINGS:
-            sys.exit(f"[res] --with {spec}: known repos are {', '.join(SIBLINGS)}")
-        path = os.path.abspath(os.path.expanduser(path or SIBLINGS[name].path))
+        sib = SIBLINGS.get(name)
+        if sib is None:
+            if not path:
+                sys.exit(
+                    f"[res] --with {spec}: give its checkout as {name}=<path> (known by default: {', '.join(SIBLINGS)})"
+                )
+            sib = Sibling(path, (), f"{re.sub(r'[^A-Za-z0-9]', '_', name).upper()}_ROOT", importable=True)
+        path = os.path.abspath(os.path.expanduser(path or sib.path))
         if not os.path.isdir(os.path.join(path, ".git")) and not os.path.isfile(os.path.join(path, ".git")):
             sys.exit(f"[res] --with {spec}: {path} is not a git checkout")
-        found[name] = path
+        found[name] = (path, sib)
     return found
 
 
@@ -1749,7 +1760,7 @@ def _takes_launcher_args(path: str) -> bool:
         return False
 
 
-def _repo_script(spec: str, wt: str) -> tuple[str, str]:
+def _repo_script(spec: str, wt: str, siblings: dict[str, tuple[str, Sibling]] | None = None) -> tuple[str, str]:
     """``(repo, path)`` for a ``<repo>:<path>`` script inside a shipped package repo, else ``("", "")``.
 
     Args:
@@ -1762,7 +1773,7 @@ def _repo_script(spec: str, wt: str) -> tuple[str, str]:
     if os.path.exists(spec) or ":" not in spec:
         return "", ""
     repo, _, rel = spec.partition(":")
-    code = local_code(local_workspace(), wt)
+    code = {**local_code(local_workspace(), wt), **{n: src for n, (src, _) in (siblings or {}).items()}}
     if repo not in code:
         sys.exit(f"[res] {spec}: {repo} is not a shipped repo ({', '.join(code)})")
     if not os.path.isfile(os.path.join(code[repo], rel)):
@@ -1979,15 +1990,19 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         pools: Configured pools.
         claim: ``res.claim``, which leases the card.
     """
+    siblings = sibling_args(args.with_ or [])
     if args.cmd:  # a command line, run as given on the card: nothing to check or ship but the code
         repo, rel, script = "", "", args.script
     else:
-        repo, rel = _repo_script(args.script, args.wt)
+        repo, rel = _repo_script(args.script, args.wt, siblings)
         script = os.path.abspath(args.script) if not repo else rel
         if not repo and not os.path.isfile(script):
             sys.exit(f"[res] no script {args.script}")
     run_args = [args.script, *args.script_args] if args.cmd else args.script_args
-    local_file = script if not repo else os.path.join(local_code(local_workspace(), args.wt)[repo], rel)
+    if repo in siblings:
+        local_file = os.path.join(siblings[repo][0], rel)
+    else:
+        local_file = script if not repo else os.path.join(local_code(local_workspace(), args.wt)[repo], rel)
     launcher = not args.cmd and _takes_launcher_args(local_file)
     if args.lease and "," in args.lease:
         sys.exit("[res] several leases (lease:A,B) run a job list: add --jobs FILE --out DIR")
@@ -1997,8 +2012,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         sys.exit("[res] --venv builds a venv and --root uses an install root's: pass one")
     env = parse_env(args.env or [])
     refs = parse_checkpoints(args.checkpoint or [])
-    siblings = sibling_args(args.with_ or [])
-    if clash := sorted(set(env) & {SIBLINGS[n].env for n in siblings}):
+    if clash := sorted(set(env) & {sib.env for _, sib in siblings.values()}):
         sys.exit(f"[res] --env {', '.join(clash)} and --with both set it; --with points it at the shipped copy")
     if args.wt and not args.tree and not args.allow_dirty and (dirty := dirty_worktrees(local_workspace(), args.wt)):
         sys.exit(
@@ -2096,8 +2110,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         else:
             code = local_code(source, args.wt)
             pythonpath, manifest = stage.sync_code(code, local_data(source, args.wt), args.root or "")
-        for name, src in siblings.items():  # a sibling repo's dirs, found through its variable, on no PYTHONPATH
-            sib = SIBLINGS[name]
+        for name, (src, sib) in siblings.items():  # a sibling repo, found through its variable (and PYTHONPATH)
             if t.kind == "slurm":
                 sys.exit(f"[res] --with {name} ships to box cards only; SLURM runs do not support it yet")
             if t.kind == "local":
@@ -2105,7 +2118,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
                 manifest.append(f"{name} {src} {_describe(src)} (in place, {sib.env})")
             else:
                 env[sib.env], line = stage.snapshot(name, src, outputs=False, only=sib.dirs)
-                manifest.append(f"{line} ({', '.join(sib.dirs)} only, {sib.env})")
+                manifest.append(f"{line} ({', '.join(sib.dirs) + ' only, ' if sib.dirs else ''}{sib.env})")
+            if sib.importable:
+                pythonpath.append(container_path(t, env[sib.env]))
         if args.root:
             manifest.append(f"python {args.root}/venv (--root)")
         if args.allow_dirty:
@@ -2119,6 +2134,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         work = container_path(t, f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}")
         if args.cmd:  # from the box workspace (its manager root), or the run's work dir in a SLURM container
             target_script, cwd = "", work if t.kind == "slurm" else ""
+        elif repo in siblings:  # a --with repo's own file, from the run's work dir
+            target_script, cwd = f"{container_path(t, env[siblings[repo][1].env])}/{rel}", work
         elif repo:  # run the shipped repo's own file, from its root, so its sibling imports resolve
             # the shipped repos lead pythonpath, each at its package root; importable asset repos (ssti_robots) follow
             entries = dict(zip(code, pythonpath[: len(code)], strict=True)) if not args.tree else {}
@@ -2265,8 +2282,9 @@ def parser() -> argparse.ArgumentParser:
         dest="with_",
         action="append",
         metavar="REPO[=PATH]",
-        help=f"ship a repo beside the workspace and point its variable at it ({', '.join(SIBLINGS)}; default path"
-        " ~/<repo>; repeatable)",
+        help=f"ship a repo beside the workspace and point its variable at it ({', '.join(SIBLINGS)}: default path"
+        " ~/<repo>); any other git checkout as NAME=PATH ships whole, on PYTHONPATH, as <NAME>_ROOT, and runs its"
+        " scripts as NAME:<path> (repeatable)",
     )
     ev.add_argument(
         "--venv",
