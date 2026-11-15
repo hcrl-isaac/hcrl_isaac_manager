@@ -753,7 +753,7 @@ def main() -> None:
         "--stage",
         default="",
         metavar="DIR",
-        help="with --adopt on an ssh box: the stage dir of the detached `pls run` you take over; the lease then stays"
+        help="ssh box: the stage dir of a detached `pls run` on the card (e.g. one you --adopt); the lease then stays"
         " held while that run lives, and `pls run --stop` stops it",
     )
     cl.add_argument(

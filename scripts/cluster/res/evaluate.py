@@ -1845,6 +1845,15 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool], only: str = "") -> i
         rest, stage_dirs = [d for d in stage_dirs if d not in picked], picked
     else:
         rest = []
+    if not stage_dirs:  # releasing it would leave its run on a card that reads free
+        print(
+            f"[res] KEPT lease {lease_id}: it records no detached run (adopted, attached, or started before --stop"
+            f" existed), so nothing was stopped. Stop the run on {host}:{gpu} yourself, then `pls res release"
+            f" {lease_id} --holder {shlex.quote(holder)}`; or release it and re-claim the card with"
+            " `pls res claim <card> --adopt --stage <its stage dir>` so --stop can reach it",
+            file=sys.stderr,
+        )
+        return 1
     t = make_target(pool, host, gpu, job, uuid_)
     gone = True
     for stage_dir in stage_dirs:
@@ -1860,12 +1869,6 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool], only: str = "") -> i
             where = t.ssh if t.kind == "slurm" else t.host
             print(f"[res] log kept at {where}:{stage_dir}/log", file=sys.stderr)
         gone = gone and ended
-    if not stage_dirs:
-        print(
-            f"[res] lease {lease_id} records no detached run (started before --stop existed, or attached);"
-            " releasing it only",
-            file=sys.stderr,
-        )
     if not gone:
         print(f"[res] KEPT lease {lease_id}: a run may still hold the card", file=sys.stderr)
         return 1

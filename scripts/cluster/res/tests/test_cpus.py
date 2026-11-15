@@ -222,6 +222,17 @@ class CpuRunTest(unittest.TestCase):
             proc.wait()
         self.assertEqual(res.live_runs([self.pool]), ({"larg/box": {str(stage)}}, set()))
 
+    def test_stop_keeps_a_lease_that_records_no_run(self) -> None:
+        c = Card("larg", "box", 0, "A40", 0, 46000, 0, uuid="GPU-0")
+        lease = ls.new_lease(c, Report("larg/box", "ssh", [c], owner="u"), "me", "", 0)
+        with ls.locked_store() as leases:
+            leases.append(lease)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 1)
+        self.assertIn("--adopt --stage", err.getvalue())
+        self.assertEqual([x.id for x in self._leases()], [lease.id])
+
     def test_status_releases_a_detached_run_that_ended(self) -> None:
         rc, out = self._eval("--on", "box", "--cpus", "1", "--detach", "--", "-c", "print('done')")
         self.assertEqual(rc, 0, out)
