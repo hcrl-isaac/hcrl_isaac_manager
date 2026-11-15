@@ -24,7 +24,7 @@ import threading
 import time
 import tomllib
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -392,9 +392,8 @@ class Sibling:
     """A repo beside the workspace (not under resources/) that a run can ask for with ``--with``."""
 
     path: str  # default checkout, ~ expanded
-    dirs: tuple[
-        str, ...
-    ]  # the top-level dirs shipped (a deploy repo's models/ stay behind); () ships every tracked file
+    # the top-level dirs shipped (a deploy repo's models/ stay behind); () ships every tracked file
+    dirs: tuple[str, ...]
     env: str  # the variable the run finds it by
     importable: bool = False  # its root goes on PYTHONPATH
 
@@ -402,7 +401,7 @@ class Sibling:
 SIBLINGS = {"booster-deploy": Sibling("~/booster-deploy", ("configs", "src"), "BOOSTER_DEPLOY_ROOT")}
 
 
-def sibling_args(specs: list[str]) -> dict[str, tuple[str, Sibling]]:
+def sibling_args(specs: list[str], workspace: Iterable[str] = ()) -> dict[str, tuple[str, Sibling]]:
     """``--with <repo>[=<path>]`` -> repo name -> (local checkout, how it ships), checked to be a git checkout.
 
     A repo not in ``SIBLINGS`` needs its path, ships every tracked file, goes on PYTHONPATH and is found by
@@ -410,6 +409,7 @@ def sibling_args(specs: list[str]) -> dict[str, tuple[str, Sibling]]:
 
     Args:
         specs: The ``--with`` values.
+        workspace: The workspace's repo names, refused here (another checkout of one goes through ``--wt``).
 
     Returns:
         Repo name -> (absolute local path, its ``Sibling``).
@@ -417,6 +417,8 @@ def sibling_args(specs: list[str]) -> dict[str, tuple[str, Sibling]]:
     found = {}
     for spec in specs:
         name, _, path = spec.partition("=")
+        if name in workspace:  # its imports would still resolve to the staged workspace copy
+            sys.exit(f"[res] --with {spec}: {name} is a workspace repo; run another checkout of it with --wt")
         sib = SIBLINGS.get(name)
         if sib is None:
             if not path:
@@ -1990,7 +1992,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         pools: Configured pools.
         claim: ``res.claim``, which leases the card.
     """
-    siblings = sibling_args(args.with_ or [])
+    siblings = sibling_args(args.with_ or [], local_code(local_workspace(), args.wt))
     if args.cmd:  # a command line, run as given on the card: nothing to check or ship but the code
         repo, rel, script = "", "", args.script
     else:

@@ -342,6 +342,13 @@ class TargetTest(unittest.TestCase):
         path, sib = ev.sibling_args([f"fb-adapt.x={repo}"])["fb-adapt.x"]
         self.assertEqual((path, sib.dirs, sib.env, sib.importable), (str(repo), (), "FB_ADAPT_X_ROOT", True))
 
+    def test_with_refuses_a_workspace_repo(self) -> None:
+        repo = Path(tempfile.mkdtemp())
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        with self.assertRaises(SystemExit) as e:
+            ev.sibling_args([f"robot_rl={repo}"], {"robot_rl": "/ws/resources/robot_rl"})
+        self.assertIn("--wt", str(e.exception))
+
     def test_a_bad_pin_is_refused(self) -> None:
         with self.assertRaises(SystemExit):
             ev.make_target(Pool("a", "ssh", {"user": "u", "pin": "maybe"}), "h", 0)
