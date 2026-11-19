@@ -43,6 +43,7 @@ CONTAINER_TMP = "/tmp/res-eval"  # in the container's /tmp, the step's own node-
 CKPT_CACHE = Path.home() / ".cache" / "hcrl_res" / "checkpoints"
 TRACEBACK = "Traceback (most recent call last)"
 TIMED_OUT = 124
+DEFAULT_STALL_S = 900.0  # an attached run's --stall when none is given
 LIMIT_GRACE_S = 120  # a foreground run's runner-side limit trails its --timeout by this much
 _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -669,6 +670,7 @@ def runner_script(
     root: str = "",
     refs: str = "",
     limit: float = 0,
+    stall: float = 0,
 ) -> str:
     """The bash that runs on the target: a stage log, isolated caches, the given PYTHONPATH, the script's status.
 
@@ -686,6 +688,7 @@ def runner_script(
             ``wandb.init`` loads.
         limit: Seconds after which the runner itself stops the run's process group (0 = no limit), so the limit
             holds with no session watching.
+        stall: Seconds the run's log may go unwritten before the runner stops it (0 = no check).
 
     Returns:
         The run.sh text.
@@ -734,7 +737,7 @@ cat {q(stage + "/MANIFEST")}
 echo "[res] {where} python=$py env: {" ".join(env_names) or "-"}"
 mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
 {f"cp {q(refs)} config-defaults.yaml" if refs else ""}
-{_limit_lines(stage, limit) if limit else ""}
+{_limit_lines(stage, limit, stall) if limit or stall else ""}
 {launch}
 """
 
@@ -742,19 +745,29 @@ mkdir -p {q(cwd or t.workspace)} && cd {q(cwd or t.workspace)} || exit 97
 # Outside the run's process group, so it never keeps the run "alive": polls the runner (pid $1, the group leader)
 # until it exits, or the limit ($2 s) passes and it stops the whole group the way Stage.kill does.
 LIMIT_WATCH = r"""
-p=$1; end=$((SECONDS + $2))
+p=$1; end=$((SECONDS + $2)); stall=$4; log=$5
 live() { ps -eo pgid=,stat= | awk -v p="$p" '$1 == p && $2 !~ /^Z/ {f=1} END {exit !f}'; }
 while kill -0 "$p" 2>/dev/null; do
-    left=$((end - SECONDS))
-    if [ "$left" -le 0 ]; then
-        echo "[res] the run reached its time limit ($3): stopping it"
+    why="" nap=30
+    if [ "$2" -gt 0 ]; then
+        left=$((end - SECONDS))
+        [ "$left" -le 0 ] && why="reached its time limit ($3)"
+        [ "$left" -lt "$nap" ] && nap=$left
+    fi
+    if [ -z "$why" ] && [ "$stall" -gt 0 ]; then
+        idle=$(( $(date +%s) - $(stat -c %Y "$log" 2>/dev/null || date +%s) ))
+        [ "$idle" -ge "$stall" ] && why="wrote no output for $((idle / 60)) min ($6 --stall)"
+        [ $((stall - idle)) -lt "$nap" ] && nap=$((stall - idle))
+    fi
+    if [ -n "$why" ]; then
+        echo "[res] the run $why: stopping it"
         kill -TERM -- -"$p" 2>/dev/null
         for _ in $(seq 60); do live || exit 0; sleep 1; done
         echo "[res] still running 60 s after SIGTERM: killing it"
         kill -KILL -- -"$p" 2>/dev/null
         exit 0
     fi
-    sleep $((left < 30 ? left : 30))
+    sleep $((nap > 1 ? nap : 1))
 done
 """
 
@@ -790,11 +803,18 @@ done
 case "$o" in -1|[0-9]*) [ "$o" = {t.gpu} ] || {{ echo "[res] {t.where} is not cuda:{t.gpu} after {ORDINAL_WAIT_S} s: not starting on another card"; exit 97; }};; esac"""  # fmt: skip
 
 
-def _limit_lines(stage: str, limit: float) -> str:
-    """run.sh line starting the watcher that stops the run after ``limit`` seconds (see LIMIT_WATCH)."""
+def _limit_lines(stage: str, limit: float, stall: float = 0) -> str:
+    """run.sh line starting the watcher that stops the run after ``limit`` seconds, or ``stall`` seconds without
+    output to its log (see LIMIT_WATCH; 0 = none)."""
     q = shlex.quote
-    secs, shown = max(1, round(limit)), f"{limit / 3600:g}h" if limit >= 3600 else f"{round(limit)}s"
-    return f"setsid bash -c {q(LIMIT_WATCH)} limit $$ {secs} {shown} >> {q(stage + '/log')} 2>&1 < /dev/null &"
+
+    def shown(s: float) -> str:
+        return f"{s / 3600:g}h" if s >= 3600 else f"{round(s)}s"
+
+    secs = max(1, round(limit)) if limit else 0
+    log = stage + "/log"
+    args = f"{secs} {shown(limit)} {max(1, round(stall)) if stall else 0} {q(log)} {shown(stall)}"
+    return f"setsid bash -c {q(LIMIT_WATCH)} limit $$ {args} >> {q(log)} 2>&1 < /dev/null &"
 
 
 def _ilab_lines() -> str:
@@ -2189,6 +2209,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
                 refs=refs_file,
                 # a watched run's own timeout fires first; the runner's is the backstop should the session die
                 limit=args.timeout + (0 if args.detach or not args.timeout else LIMIT_GRACE_S),
+                # no session watches a detached run's output, so its runner does, when a --stall was given
+                stall=(args.stall or 0) if args.detach else 0,
             )
         stage.write(runner, "run.sh", mode=0o700)
         staging.stop()
@@ -2203,7 +2225,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         else:
             print(f"[res] running {os.path.basename(script)} on {t.where} (stage {stage.dir})", file=sys.stderr)
             held = taken.id if taken is not None else args.lease or ""
-            rc = run(stage, fill_checkpoints(run_args, paths), args.timeout, args.stall, (held, args.holder))
+            stall = DEFAULT_STALL_S if args.stall is None else args.stall
+            rc = run(stage, fill_checkpoints(run_args, paths), args.timeout, stall, (held, args.holder))
     except KeyboardInterrupt as exc:
         rc = 130
         print(f"[res] interrupted ({exc or 'SIGINT'})", file=sys.stderr)
@@ -2345,7 +2368,11 @@ def parser() -> argparse.ArgumentParser:
         "--timeout", type=_duration, default=0.0, help="kill the run after this long, e.g. 2h (default: none)"
     )
     ev.add_argument(
-        "--stall", type=_duration, default=900.0, help="kill the run after this long with no output (15m; 0 = off)"
+        "--stall",
+        type=_duration,
+        default=None,
+        help="kill the run after this long with no output (0 = off; default 15m, and off for a --detach run, whose"
+        " runner applies it only when given)",
     )
     return ev
 
