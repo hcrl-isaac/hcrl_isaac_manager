@@ -109,6 +109,10 @@ class CheckpointRefTest(unittest.TestCase):
         ref = ck.parse("https://wandb.ai/ent/proj/runs/d1tafrx7@5999")
         self.assertEqual((ref.name, ref.run_path, ref.model), ("CHECKPOINT", "ent/proj/d1tafrx7", "model_5999.pt"))
 
+    def test_forge_wandb_url(self) -> None:
+        ref = ck.parse("https://forge.coreweave.com/wandb/ent/proj/runs/k4n3bist@200")
+        self.assertEqual((ref.run_path, ref.model), ("ent/proj/k4n3bist", "model_200.pt"))
+
     def test_named_run_path_takes_latest(self) -> None:
         ref = ck.parse("REORIENT_CKPT=ent/proj/d1tafrx7")
         self.assertEqual((ref.name, ref.run_path, ref.model), ("REORIENT_CKPT", "ent/proj/d1tafrx7", ""))

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Checkpoint refs for `pls run --on <card>`: parse them anywhere, download W&B ones under the ilab venv (needs wandb).
 
-A ref is a local path, a W&B run URL (https://wandb.ai/<entity>/<project>/runs/<id>), or <entity>/<project>/<id>,
+A ref is a local path, a W&B run URL (https://wandb.ai/<entity>/<project>/runs/<id>, or its
+forge.coreweave.com/wandb form), or <entity>/<project>/<id>,
 optionally suffixed with @<iteration> (model_<iteration>.pt); without it the run's latest checkpoint is used.
 """
 
@@ -14,7 +15,11 @@ import sys
 import types
 from dataclasses import dataclass
 
-_URL = re.compile(r"^https?://(www\.)?wandb\.ai/([^/]+)/([^/]+)/runs/([^/?#@]+)")
+# wandb.ai, and the forge host W&B now prints at run start
+_URL = re.compile(
+    r"^https?://(?:(?:www\.)?wandb\.ai|forge\.coreweave\.com/wandb)/(?P<entity>[^/]+)/(?P<project>[^/]+)/runs/"
+    r"(?P<run>[^/?#@]+)"
+)
 _PATH3 = re.compile(r"^([\w.-]+)/([\w.-]+)/([\w-]+)$")
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -60,7 +65,7 @@ def parse(spec: str, default_name: str = "CHECKPOINT") -> CheckpointRef:
     model = f"model_{it}.pt" if it else ""
     m = _URL.match(base)
     if m:
-        return CheckpointRef(name, run_path=f"{m.group(2)}/{m.group(3)}/{m.group(4)}", model=model)
+        return CheckpointRef(name, run_path=f"{m['entity']}/{m['project']}/{m['run']}", model=model)
     if os.path.exists(ref):
         return CheckpointRef(name, local=os.path.abspath(ref))
     m = _PATH3.match(base)
