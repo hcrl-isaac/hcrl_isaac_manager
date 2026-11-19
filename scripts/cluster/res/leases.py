@@ -15,7 +15,7 @@ import fcntl
 import json
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
@@ -372,6 +372,7 @@ def reconcile(
     now: float | None = None,
     grace_min: float = GRACE_MIN,
     idle_min: float = IDLE_MIN,
+    alive: Collection[str] = (),
 ) -> list[tuple[Lease, str]]:
     """Apply one probe to the leases: renew on the holder's activity, release time-boxed, vanished or idle ones.
 
@@ -385,6 +386,7 @@ def reconcile(
         now: Current Unix time (tests inject it).
         grace_min: Window for a lease whose activity was never seen.
         idle_min: Window for a lease that was active.
+        alive: Ids of card leases whose detached run still runs on its box; they stay active whatever the card shows.
 
     Returns:
         The released leases with the reason for each.
@@ -426,6 +428,8 @@ def reconcile(
         lease.missing_since = 0.0
         lease.report = seen_in[lease.key]  # a label from before reports were split by partition follows its card
         active = _activity(lease, card)
+        if lease.id in alive:  # a CPU-bound run leaves its card idle
+            active = True
         if active is None:
             continue
         if active:

@@ -195,22 +195,50 @@ class CpuRunTest(unittest.TestCase):
         self.assertIn(f"pls run --stop {lease.id} --holder me", out)
         pid = int(Path(lease.stage, "pid").read_text())
         for _ in range(50):
-            if res.cpu_run_states([lease], [self.pool]) == {"larg/box": set()}:
+            if res.stage_run_states([lease], [self.pool]) == {"larg/box": set()}:
                 break
             time.sleep(0.1)
-        self.assertEqual(res.cpu_run_states([lease], [self.pool]), {"larg/box": set()}, "alive on the box")
+        self.assertEqual(res.stage_run_states([lease], [self.pool]), {"larg/box": set()}, "alive on the box")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 0, err.getvalue())
         self.assertFalse(_alive(pid))
         self.assertEqual(self._leases(), [])
 
+    def test_a_detached_card_run_is_alive_until_its_process_group_ends(self) -> None:
+        stage = self.tmp / "scratch" / "stage1"
+        stage.mkdir(parents=True)
+        proc = subprocess.Popen(["sleep", "120"], start_new_session=True)
+        (stage / "pid").write_text(str(proc.pid))
+        c = Card("larg", "box", 0, "A40", 0, 46000, 0, uuid="GPU-0")
+        lease = ls.new_lease(c, Report("larg/box", "ssh", [c], owner="u"), "me", "", 0)
+        lease.stage, lease.stages = str(stage), [str(stage)]
+        with ls.locked_store() as leases:
+            leases.append(lease)
+        try:
+            self.assertEqual(res.live_runs([self.pool]), ({"larg/box": set()}, {lease.id}))
+        finally:
+            proc.kill()
+            proc.wait()
+        self.assertEqual(res.live_runs([self.pool]), ({"larg/box": {str(stage)}}, set()))
+
+    def test_stop_keeps_a_lease_that_records_no_run(self) -> None:
+        c = Card("larg", "box", 0, "A40", 0, 46000, 0, uuid="GPU-0")
+        lease = ls.new_lease(c, Report("larg/box", "ssh", [c], owner="u"), "me", "", 0)
+        with ls.locked_store() as leases:
+            leases.append(lease)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 1)
+        self.assertIn("--adopt --stage", err.getvalue())
+        self.assertEqual([x.id for x in self._leases()], [lease.id])
+
     def test_status_releases_a_detached_run_that_ended(self) -> None:
         rc, out = self._eval("--on", "box", "--cpus", "1", "--detach", "--", "-c", "print('done')")
         self.assertEqual(rc, 0, out)
         [lease] = self._leases()
         for _ in range(100):
-            if res.cpu_run_states([lease], [self.pool]).get("larg/box"):
+            if res.stage_run_states([lease], [self.pool]).get("larg/box"):
                 break
             time.sleep(0.1)
         args = argparse.Namespace(pool=None, free=False, json=False)
