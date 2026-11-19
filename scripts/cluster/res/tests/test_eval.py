@@ -282,7 +282,7 @@ class TargetTest(unittest.TestCase):
         t = ev.make_target(Pool("desk", "ssh", {"user": "u"}), "box", 0)
         runner = ev.runner_script(t, "/s", "x.py", [], [], limit=7200)
         self.assertIn("setsid bash -c", runner)
-        self.assertIn("limit $$ 7200 2h >> /s/log 2>&1 < /dev/null &", runner)
+        self.assertIn("limit $$ 7200 2h 0 /s/log 0s >> /s/log 2>&1 < /dev/null &", runner)
         self.assertIn('kill -TERM -- -"$p"', runner)
         self.assertIn('kill -KILL -- -"$p"', runner)
         self.assertLess(runner.index("limit $$"), runner.index('"$py" x.py'), "the watcher starts before the run")
@@ -1718,6 +1718,28 @@ class EvalRunTest(Isolated):
         self.assertTrue(pid, "the run started")
         self.assertFalse(_alive(pid), "the runner stopped the run at its limit")
         self.assertIn("reached its time limit (3s)", log.read_text())
+
+    def test_a_stall_stops_a_detached_run_with_no_session_watching(self) -> None:
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang", "--stall", "3s")
+        self.assertEqual(rc, 0, out)
+        [stage] = self._stages()
+        log, pid = stage / "log", 0
+        for _ in range(150):
+            text = log.read_text() if log.exists() else ""
+            pid = pid or (self._pid(text) if "PID " in text else 0)
+            if pid and not _alive(pid):
+                break
+            time.sleep(0.2)
+        self.assertTrue(pid, "the run started")
+        self.assertFalse(_alive(pid), "the runner stopped the silent run")
+        self.assertIn("wrote no output for 0 min (3s --stall)", log.read_text())
+
+    def test_a_detached_run_gets_no_stall_check_unless_given(self) -> None:
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang", "--timeout", "1h")
+        self.assertEqual(rc, 0, out)
+        [stage] = self._stages()
+        self.assertIn("limit $$ 3600 1h 0 ", (stage / "run.sh").read_text())
+        self.assertEqual(ev.cmd_stop(self._leases()[0].id, "me", [self.pool]), 0)
 
     def test_exactly_one_card_selector(self) -> None:
         rc, _ = self._eval("--any", "--on", "box:1")
