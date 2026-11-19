@@ -156,7 +156,7 @@ pls run --on <host>:<gpu> --holder <you> -- video_recorder \
 | `--num_envs <N>` | 64 | Env count for the small render sim. |
 | `--video_length <steps>` | 400 | Clip length in env steps (capped to one episode). |
 | `--train_effective_envs <N>` | -- | Training run's `num_envs * world_size`, so the curriculum clock is restored correctly in the render sim. |
-| `--rerecord_from <iter>` / `--rerecord_all` | -- | Re-record checkpoints >= `iter` (or all). |
+| `--rerecord [<iter>]` | -- | Re-record recorded checkpoints: all, or those >= `iter` (`--rerecord_all` / `--rerecord_from` still work, deprecated). |
 | `--stochastic` | off | Record the policy **sampling** actions instead of the deterministic mean. |
 
 ### Cron listener
