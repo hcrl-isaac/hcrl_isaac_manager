@@ -214,6 +214,9 @@ def parse_gpu_query(
     apps_by_uuid: dict[str, list[Proc]] = {}  # a desktop pool's desktop apps
     for line in sections["apps"]:
         f = [x.strip() for x in line.split(",")]
+        # a process outside this namespace; its memory still counts toward the card's usage
+        if len(f) == 3 and f[1] == "[N/A]":
+            continue
         if len(f) != 3 or _int(f[1]) is None:
             raise ProbeError(f"unparsable process line: {line[:120]}")
         user, elapsed, cmd = owners.get(int(f[1]), ("?", "", ""))
