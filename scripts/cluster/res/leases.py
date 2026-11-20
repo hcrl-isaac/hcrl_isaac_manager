@@ -70,6 +70,7 @@ class Lease:
         batch_pid: Local process of the `pls run --jobs` batch working through the lease (0 = none).
         shared: Claimed with ``--share`` on a card other processes use: theirs are no conflict, and only the
             holder's own processes keep the lease alive.
+        neighbors: PIDs on a shared card at the claim: another session's run under the same login is no activity.
     """
 
     id: str
@@ -95,6 +96,7 @@ class Lease:
     stages: list[str] = field(default_factory=list)
     batch_pid: int = 0
     shared: bool = False
+    neighbors: list[str] = field(default_factory=list)
 
 
 def is_cpu(lease: Lease) -> bool:
@@ -360,7 +362,7 @@ def _activity(lease: Lease, card: Card) -> bool | None:
         return None
     if lease.shared:  # the card's other users keep it busy: only the holder's own processes are its activity
         lease.conflict = False
-        return bool(lease.owner) and lease.owner in {p.user for p in card.procs}
+        return any(p.user == lease.owner and str(p.pid) not in lease.neighbors for p in card.procs)
     if card.procs:
         # only attributable processes can show a conflict; unattributed ones (Ray, "?") are not evidence
         users = {p.user for p in card.procs} - {"?"}
@@ -482,6 +484,7 @@ def new_lease(
         run=run,
         previous=previous,
         shared=shared,
+        neighbors=[str(p.pid) for p in card.procs] if shared else [],
     )
 
 

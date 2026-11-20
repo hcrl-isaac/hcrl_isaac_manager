@@ -598,6 +598,20 @@ class CommandTest(CommandBase):
         released = ls.reconcile([lease], [report(theirs)], now=later + 32 * MIN)
         self.assertEqual([x.id for x, _ in released], [lease.id], "its own run ended: the lease lapses")
 
+    def test_a_neighbor_under_the_same_login_is_not_the_holders_activity(self) -> None:
+        same = card(index=2, state="busy", user="me")  # another session's run, same OS user as the holder
+        lease = ls.new_lease(same, report(same), "s", "", 0, shared=True)
+        self.assertEqual(lease.neighbors, ["1"])
+        ls.reconcile([lease], [report(same)], now=T0)
+        self.assertEqual(lease.last_active, 0, "the neighbor's run keeps nothing alive")
+        released = ls.reconcile([lease], [report(same)], now=T0 + 32 * MIN)
+        self.assertEqual([x.id for x, _ in released], [lease.id])
+        lease = ls.new_lease(same, report(same), "s", "", 0, shared=True)
+        mine = card(index=2, state="busy", user="me")
+        mine.procs.append(Proc(9, 3000, "me"))
+        ls.reconcile([lease], [report(mine)], now=T0 + MIN)
+        self.assertEqual(lease.last_active, T0 + MIN, "a process started after the claim is the holder's run")
+
     def test_a_card_you_hold_names_its_lease_instead_of_waiting(self) -> None:
         self.claim("mckennie:0")
         [lease] = self.leases()

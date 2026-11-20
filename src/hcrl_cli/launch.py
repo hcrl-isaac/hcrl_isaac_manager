@@ -57,9 +57,10 @@ On a card, {DEVICE} in the script's arguments becomes the leased card's torch de
 pin cards differently, so a hand-written cuda:N that is not the card is refused.
 
 card options (--holder is required): --holder, --note, --pool, --min-free-gb, --share (beside a card's other
-users when it has --min-free-gb free), --checkpoint, --env, --timeout,
+users when it has --min-free-gb free), --with (its scripts as NAME/<path> or NAME:<path>, ahead of a local file of
+that name), --checkpoint, --env, --timeout,
 --stall, --detach, --gpus N (N cards of one held SLURM node, one torchrun rank each; needs --on <node>), --cpus N,
---venv, --root (an Isaac Lab install root's venv, e.g. an ssh box's 3.x root), --with, --jobs/--out
+--venv, --root (an Isaac Lab install root's venv, e.g. an ssh box's 3.x root), --jobs/--out
 (a job list over lease:A,B,...); `pls run --on any --help`
 describes them.
 

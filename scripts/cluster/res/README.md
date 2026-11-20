@@ -45,8 +45,8 @@ pls res claim box1:0 --share --min-free-gb 10 --holder "<session>"      # a smal
   a lease covers.
 - `--share` (claim or `pls run`) leases a card someone else's processes use when it has `--min-free-gb` free, for a
   small job beside them; `--any --share` takes fully free cards first. It never shares a card another session
-  leased. Only the holder's own processes keep a shared lease alive, so it lapses like any idle lease once its run
-  ends.
+  leased. Only the holder's own processes started after the claim keep a shared lease alive (a neighbor under the
+  same login does not), so it lapses like any idle lease once its run ends.
 - `release` refuses a lease a live `pls run --jobs` batch is working through, since its next jobs need it (`--force`
   overrides), and a second batch on that lease is refused. A claim on a card that is already yours refuses and
   names the lease only as `--on lease:<id>`, so it can never be read as a new claim: claims are not shared.
