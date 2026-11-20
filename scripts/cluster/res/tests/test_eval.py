@@ -73,6 +73,8 @@ def _alive(pid: int) -> bool:
         return False
     try:
         state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):  # exited between the two checks
+        return False
     except (OSError, IndexError):
         return True
     return state not in ("Z", "X")
