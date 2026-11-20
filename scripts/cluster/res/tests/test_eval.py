@@ -66,11 +66,16 @@ exec bash -c "$*"
 
 
 def _alive(pid: int) -> bool:
+    """True while ``pid`` runs; an exited child this test process has not reaped yet is a zombie, not alive."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    return True
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return True
+    return state not in ("Z", "X")
 
 
 def _git_repo(path: Path) -> None:
