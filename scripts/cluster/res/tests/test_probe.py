@@ -205,6 +205,11 @@ class ParseFailureTest(unittest.TestCase):
     def test_garbage_process_line(self) -> None:
         self.assert_fails(output(apps="something odd\n"))
 
+    def test_a_process_nvidia_smi_cannot_see_is_skipped(self) -> None:
+        cards = parse_gpu_query(output(apps=APPS + "GPU-c, [N/A], [N/A]\n"), "larg", "pulisic")
+        self.assertEqual([c.state for c in cards], ["busy", "free", "held", "busy", "held"])
+        self.assertEqual(cards[2].procs, [])
+
     def test_process_on_unknown_card(self) -> None:
         self.assert_fails(output(apps="GPU-zzz, 5, 4000\n", ps=""))
 
