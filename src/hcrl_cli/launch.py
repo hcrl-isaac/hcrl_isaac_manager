@@ -4,6 +4,7 @@ batch job, or on Ray."""
 from __future__ import annotations
 
 import argparse
+import itertools
 import os
 import shutil
 import sys
@@ -55,7 +56,8 @@ python -m pytest'`. Ray runs python scripts only.
 On a card, {DEVICE} in the script's arguments becomes the leased card's torch device (`--device {DEVICE}`): boxes
 pin cards differently, so a hand-written cuda:N that is not the card is refused.
 
-card options (--holder is required): --holder, --note, --pool, --min-free-gb, --checkpoint, --env, --timeout,
+card options (--holder is required): --holder, --note, --pool, --min-free-gb, --share (beside a card's other
+users when it has --min-free-gb free), --checkpoint, --env, --timeout,
 --stall, --detach, --gpus N (N cards of one held SLURM node, one torchrun rank each; needs --on <node>), --cpus N,
 --venv, --root (an Isaac Lab install root's venv, e.g. an ssh box's 3.x root), --with, --jobs/--out
 (a job list over lease:A,B,...); `pls run --on any --help`
@@ -204,11 +206,24 @@ def _here(argv: list[str], wt: str, command: bool) -> None:
     handoff([VENV_PY, path, *args], env=env)
 
 
-def _card_script(script: str) -> str:
+def _with_names(extra: list[str]) -> set[str]:
+    """Names of the repos ``--with REPO[=PATH]`` ships beside the workspace."""
+    specs = [b for a, b in itertools.pairwise(extra) if a == "--with"]
+    specs += [a.removeprefix("--with=") for a in extra if a.startswith("--with=")]
+    return {spec.partition("=")[0] for spec in specs}
+
+
+def _card_script(script: str, shipped: set[str] = frozenset()) -> str:
+    """The card backend's script: a named one, ``<repo>:<path>`` of a workspace or ``--with`` repo, or a local file."""
     if _is_name(script):
         return f"{CORE}:scripts/{script}.py"
     named = _repo_path(script)
-    return f"{named[0]}:{named[1]}" if named else _local_file(script)
+    if named:
+        return f"{named[0]}:{named[1]}"
+    repo, sep, rel = script.partition(":") if ":" in script else script.partition("/")
+    if sep and rel and repo in shipped:  # the backend checks the file in the shipped repo
+        return f"{repo}:{rel}"
+    return _local_file(script)
 
 
 def _repo_script(script: str, where: str) -> str:
@@ -311,5 +326,5 @@ def main(argv: list[str]) -> None:
         wt = ["--wt", ns.wt] if ns.wt else ["--tree", ns.tree] if ns.tree else []
         if ns.on.startswith("local:"):
             _disk_guard()
-        target = ["--cmd", script] if ns.cmd else [_card_script(script)]
+        target = ["--cmd", script] if ns.cmd else [_card_script(script, _with_names(extra))]
         handoff([*CARD_CMD, *extra, *_card_flags(ns.on, _has_cpus(extra)), *wt, *target, "--", *args])
