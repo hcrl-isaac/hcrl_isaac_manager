@@ -410,6 +410,7 @@ def claim(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple[ls.Le
     Returns:
         The new leases with their cards and reports, and the lease windows.
     """
+    ls.check_holder(args.holder, pools)
     wait = getattr(args, "wait", None)
     deadline = time.monotonic() + wait if wait else None
     announced = False
@@ -559,8 +560,9 @@ def cmd_release(args: argparse.Namespace, _pools: list[Pool]) -> None:
         sys.exit(f"[res] no lease for: {', '.join(sorted(missing))}")
 
 
-def cmd_transfer(args: argparse.Namespace, _pools: list[Pool]) -> None:
+def cmd_transfer(args: argparse.Namespace, pools: list[Pool]) -> None:
     """Hand leases (by id or card) to another holder; only the holder may, unless --force."""
+    ls.check_holder(args.to, pools)
     args.targets = _lease_targets(args.targets)
     try:
         with ls.locked_store() as leases:

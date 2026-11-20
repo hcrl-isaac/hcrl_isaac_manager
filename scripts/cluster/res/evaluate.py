@@ -1947,6 +1947,7 @@ def claim_cpus(args: argparse.Namespace, pools: list[Pool]) -> tuple[Pool, str, 
     Returns:
         The box's pool, the host, and the new lease; exits when refused.
     """
+    ls.check_holder(args.holder, pools)
     host, _, rest = args.on.partition(":")
     if rest and rest != "cpu":
         sys.exit(f"[res] --cpus claims no card: name the box (--on {host}), not a card ({args.on})")

@@ -547,6 +547,22 @@ class CommandTest(CommandBase):
             self.claim("mckennie:3", adopt=True)
         self.assertEqual(self.stored(), ["mckennie:0"])
 
+    def test_a_login_is_no_holder(self) -> None:
+        import getpass
+
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim("mckennie:0", holder=getpass.getuser())
+        self.assertIn("is a login", str(ctx.exception.code))
+        self.pools = [Pool("larg-a100", "ssh", {"user": "labuser"})]
+        with self.assertRaises(SystemExit):
+            self.claim("mckennie:0", holder="LabUser")
+        self.assertEqual(self.stored(), [])
+        self.claim("mckennie:0")
+        with self.assertRaises(SystemExit) as ctx:
+            self.transfer("mckennie:0", to="labuser")
+        self.assertIn("is a login", str(ctx.exception.code))
+        self.assertEqual([x.holder for x in self.leases()], ["s"])
+
     def test_a_card_you_hold_names_its_lease_instead_of_waiting(self) -> None:
         self.claim("mckennie:0")
         [lease] = self.leases()
