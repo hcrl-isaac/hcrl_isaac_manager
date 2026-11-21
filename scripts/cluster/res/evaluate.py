@@ -2066,7 +2066,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
                 " --pool, lease:<id>, --gpus, --tree, --wait or --min-free-gb"
             )
         refuse_device(run_args)  # before anything is claimed
-    taken, job, uuid, extra = None, "", "", []
+    taken, job, uuid, extra, reused = None, "", "", [], set()
     if args.cpus:
         pool, host, taken = claim_cpus(args, pools)
         gpu = -1
@@ -2095,15 +2095,18 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             note=args.note or f"pls run {os.path.basename(script)}",
             for_=0.0,
             wait=args.wait,
+            runner_pid=os.getpid(),
         )
         claimed = claim(ns, usable)[0]
+        reused = getattr(ns, "reused", set())  # the holder's own leases the run used: they stay held afterwards
         (taken, card, rep), extra = claimed[0], [x[0] for x in claimed[1:]]
         host, gpu = card.host, card.index
         for lease, _, _ in claimed:
-            print(f"[res] leased {lease.id}: {lease.card} for {args.holder}", file=sys.stderr)
+            verb = "using your lease" if lease.id in reused else "leased"
+            print(f"[res] {verb} {lease.id}: {lease.card} for {args.holder}", file=sys.stderr)
         if extra and rep.kind != "slurm":  # inside the claim's own flow: drop the leases before refusing
             with ls.locked_store() as leases:
-                leases[:] = [x for x in leases if x.id not in {y[0].id for y in claimed}]
+                leases[:] = [x for x in leases if x.id not in {y[0].id for y in claimed} - reused]
             sys.exit("[res] --gpus runs on a SLURM node; box cards take one card per run")
         if rep.kind == "slurm":
             pool, job, uuid = None, card.job, card.uuid
@@ -2250,7 +2253,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             elif rc != 0:
                 where = stage.t.ssh if stage.t.kind == "slurm" else stage.t.host
                 print(f"[res] FAILED with status {rc}; log at {where}:{stage.dir}/log", file=sys.stderr)
-        mine = [x.id for x in (taken, *extra) if x is not None]
+        mine = [x.id for x in (taken, *extra) if x is not None and x.id not in reused]
         if mine and gone:
             with ls.locked_store() as leases:
                 leases[:] = [x for x in leases if x.id not in mine]
@@ -2260,6 +2263,11 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
                 f"[res] KEPT lease(s) {', '.join(mine)}: the run may still hold the cards; release them once it is gone",
                 file=sys.stderr,
             )
+        if reused and gone:  # the reused leases stay held, free for the holder's next run
+            with ls.locked_store() as leases:
+                for x in leases:
+                    if x.id in reused:
+                        x.runner_pid = 0
     sys.exit(rc)
 
 

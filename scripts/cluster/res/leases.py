@@ -68,6 +68,8 @@ class Lease:
         cpus: Cores a CPU-only run holds (``pls run --cpus``; 0 for a card lease).
         cores: The box's cores that run is pinned to, as a taskset list (e.g. ``40-63``).
         batch_pid: Local process of the `pls run --jobs` batch working through the lease (0 = none).
+        runner_pid: Local `pls run` process whose run is on the lease's card (0 = none): a card reads free while that
+            run stages and boots, so this, not the card, says the lease is in use.
     """
 
     id: str
@@ -92,6 +94,7 @@ class Lease:
     cores: str = ""
     stages: list[str] = field(default_factory=list)
     batch_pid: int = 0
+    runner_pid: int = 0
 
 
 def is_cpu(lease: Lease) -> bool:
@@ -108,6 +111,22 @@ def batch_live(lease: Lease) -> bool:
     except OSError:
         return False
     return any(a == b"--jobs" or a.startswith(b"--jobs=") for a in argv)
+
+
+def runner_live(lease: Lease) -> bool:
+    """True while the `pls run` that started a run on the lease is alive; a dead or reused pid does not count."""
+    if not lease.runner_pid:
+        return False
+    try:
+        argv = Path(f"/proc/{lease.runner_pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return False
+    return any(a.endswith(b"evaluate.py") for a in argv)
+
+
+def in_use(lease: Lease) -> bool:
+    """True when a run may be on the lease: a live `pls run` or batch, or a detached run's recorded stage."""
+    return runner_live(lease) or batch_live(lease) or bool(lease.stage or lease.stages)
 
 
 @dataclass
