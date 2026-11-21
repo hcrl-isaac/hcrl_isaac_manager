@@ -452,7 +452,9 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
             yielding = frozenset(k for k, x in by_key.items() if x.yield_to in mine)
             # a node run (--gpus N) may use the caller's own idle leases there, e.g. a node transferred to it
             own = frozenset(
-                k for k, x in by_key.items() if getattr(args, "one_host", False) and x.holder == args.holder
+                k
+                for k, x in by_key.items()
+                if getattr(args, "one_host", False) and x.holder == args.holder and not ls.in_use(x)
             )
             own -= yielding
             args.reused = set()
@@ -503,6 +505,8 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
                             )
                     if res_ is not None and res_.holder == args.holder:
                         res_.used = True
+                    if runner := getattr(args, "runner_pid", 0):  # the card reads free until the run shows on it
+                        lease.runner_pid = runner
                     new.append(lease)
                 for line in notices:
                     print(line, file=sys.stderr)

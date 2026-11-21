@@ -2095,6 +2095,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             note=args.note or f"pls run {os.path.basename(script)}",
             for_=0.0,
             wait=args.wait,
+            runner_pid=os.getpid(),
         )
         claimed = claim(ns, usable)[0]
         reused = getattr(ns, "reused", set())  # the holder's own leases the run used: they stay held afterwards
@@ -2262,6 +2263,11 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
                 f"[res] KEPT lease(s) {', '.join(mine)}: the run may still hold the cards; release them once it is gone",
                 file=sys.stderr,
             )
+        if reused and gone:  # the reused leases stay held, free for the holder's next run
+            with ls.locked_store() as leases:
+                for x in leases:
+                    if x.id in reused:
+                        x.runner_pid = 0
     sys.exit(rc)
 
 

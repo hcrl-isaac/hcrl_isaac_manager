@@ -464,6 +464,30 @@ class CommandTest(CommandBase):
         self.assertEqual(args.reused, before)
         self.assertEqual(len(self.leases()), 3)
 
+    def test_a_multi_gpu_claim_skips_own_leases_whose_run_is_still_booting(self) -> None:
+        self.cards = [card(host="gpub2", index=i, job="8") for i in range(2)]  # free: the run has not shown yet
+        for i in range(2):
+            self.claim(f"gpub2:8:{i}")
+        runner = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "evaluate.py"])
+        try:
+            with ls.locked_store() as leases:
+                for x in leases:
+                    x.runner_pid = runner.pid
+            with self.assertRaises(SystemExit) as ctx:
+                self.claim(any=True, count=2, within="gpub2:8", one_host=True)
+            self.assertIn("no node has 2 free cards", str(ctx.exception.code), "a live run's leases are not reused")
+        finally:
+            runner.kill()
+            runner.wait()
+        with ls.locked_store() as leases:
+            leases[0].stages = ["/stage/detached"]  # a detached run records its stage instead
+        with self.assertRaises(SystemExit):
+            self.claim(any=True, count=2, within="gpub2:8", one_host=True)
+        with ls.locked_store() as leases:
+            leases[0].stages = []
+        self.claim(any=True, count=2, within="gpub2:8", one_host=True)  # the run is gone: both reused
+        self.assertEqual(len(self.leases()), 2)
+
     def test_a_multi_gpu_claim_skips_own_leases_with_a_run_and_others_leases(self) -> None:
         self.cards = [card(host="gpub2", index=0, job="8"), card(host="gpub2", index=1, job="8")]
         self.claim("gpub2:8:0", holder="s")
