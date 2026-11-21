@@ -1846,7 +1846,7 @@ def _print_detached(stage: Stage, lease_id: str, holder: str) -> None:
         print(f"[res] lease {lease_id} stays held while the run lives; it releases once {ends}", file=sys.stderr)
 
 
-def cmd_stop(lease_id: str, holder: str, pools: list[Pool], only: str = "") -> int:
+def cmd_stop(lease_id: str, holder: str, pools: list[Pool], only: str = "", keep_lease: bool = False) -> int:
     """Stop the detached runs on a lease (`pls run --stop`), keep their logs, and release its leases once all are gone.
 
     Args:
@@ -1855,6 +1855,7 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool], only: str = "") -> i
         pools: Configured pools.
         only: One run to stop, by its stage dir or the dir's last component (``--stage``); the lease keeps its other
             runs and its card while any remain.
+        keep_lease: Keep the leases held once their runs are gone (``--keep-lease``), e.g. to relaunch on the card.
 
     Returns:
         0 when the runs stopped are gone (and, once none is left, the leases of every card of a ``--gpus`` run
@@ -1914,6 +1915,9 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool], only: str = "") -> i
                     lease.stage = lease.stages[-1] if lease.stages else lease.stage
                     if lease.id != lease_id and not lease.stages:
                         emptied.append(lease.id)
+                        lease.stage = ""
+            if keep_lease:
+                emptied = []
             leases[:] = [x for x in leases if x.id not in emptied]
         names = ", ".join(d.rstrip("/").rsplit("/", 1)[-1] for d in rest)
         print(f"[res] KEPT lease {lease_id} for its other runs ({names})", file=sys.stderr)
@@ -1925,8 +1929,18 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool], only: str = "") -> i
         ours = set(stage_dirs)
         runs = {x.id: set(x.stages) or ({x.stage} - {""}) for x in leases}
         ids = [lease_id, *(x.id for x in leases if x.id != lease_id and runs[x.id] and runs[x.id] <= ours)]
-        leases[:] = [x for x in leases if x.id not in ids]
-    print(f"[res] released {', '.join(ids)}", file=sys.stderr)
+        if keep_lease:  # held, with no run recorded: the holder's next launch on the card finds it free
+            for x in leases:
+                if x.id in ids:
+                    x.stages, x.stage = [], ""
+        else:
+            leases[:] = [x for x in leases if x.id not in ids]
+    if keep_lease:
+        print(
+            f"[res] KEPT lease(s) {', '.join(ids)} for your next run: `pls run --on lease:{lease_id}`", file=sys.stderr
+        )
+    else:
+        print(f"[res] released {', '.join(ids)}", file=sys.stderr)
     return 0
 
 
@@ -2398,12 +2412,17 @@ def main(argv: list[str] | None = None) -> None:
         sp.add_argument(
             "--stage", default="", help="stop only this run (its stage id, e.g. 75c9b10f); the lease keeps the others"
         )
+        sp.add_argument(
+            "--keep-lease",
+            action="store_true",
+            help="keep the card leased once the run is gone, to relaunch on it (`pls run --on lease:<id>`)",
+        )
         st = sp.parse_args(argv)
         try:
             pools = res.load_pools()
         except Exception as exc:
             sys.exit(f"[res] cannot read the compute inventory: {type(exc).__name__}: {exc}")
-        sys.exit(cmd_stop(st.stop, st.holder, pools, st.stage))
+        sys.exit(cmd_stop(st.stop, st.holder, pools, st.stage, st.keep_lease))
     args = parse_args(argv)
     if args.jobs:
         import batch

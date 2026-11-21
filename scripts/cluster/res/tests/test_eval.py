@@ -1575,6 +1575,23 @@ class EvalRunTest(Isolated):
         self.assertFalse(any(_alive(p) for p in pids), "both runs are gone, not just the newest")
         self.assertEqual(self._leases(), [])
 
+    def test_stop_keep_lease_leaves_the_card_held_for_a_relaunch(self) -> None:
+        """--keep-lease stops the run but keeps its lease, with no run recorded, so a relaunch can use it."""
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        [lease] = self._leases()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool], keep_lease=True), 0, err.getvalue())
+        self.assertIn("KEPT lease", err.getvalue())
+        [kept] = self._leases()
+        self.assertEqual((kept.id, kept.stages, kept.stage), (lease.id, [], ""))
+        rc, out = self._eval("--lease", lease.id, "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 0)
+        self.assertEqual(self._leases(), [], "a plain --stop still releases")
+
     def test_stop_one_stage_keeps_the_lease_for_its_other_run(self) -> None:
         """--stage stops one of a lease's runs; the other keeps running and the lease, until it is stopped too."""
         for argv in (("--any",), None):
