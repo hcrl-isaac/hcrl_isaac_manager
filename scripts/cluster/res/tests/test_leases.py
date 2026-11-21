@@ -448,6 +448,34 @@ class CommandTest(CommandBase):
         self.assertIn("no node has 2 free cards", str(ctx.exception.code))
         self.assertEqual(self.stored(), [])
 
+    def test_a_multi_gpu_claim_runs_on_the_holders_own_idle_leases_there(self) -> None:
+        node = [card(host="gpub2", index=i, job="8") for i in range(3)]
+        self.cards = node
+        for i in range(3):
+            self.claim(f"gpub2:8:{i}", holder="t")
+        self.transfer(*(f"gpub2:8:{i}" for i in range(3)), holder="t", to="s")
+        before = {x.id for x in self.leases()}
+        args = argparse.Namespace(
+            cards=[], any=True, count=3, within="gpub2:8", one_host=True, min_free_gb=0, pool=None,
+            holder="s", note="", for_=0.0,
+        )  # fmt: skip
+        taken, _ = res.claim(args, self.pools)
+        self.assertEqual({lease.id for lease, _, _ in taken}, before, "no new lease: the transferred ones are used")
+        self.assertEqual(args.reused, before)
+        self.assertEqual(len(self.leases()), 3)
+
+    def test_a_multi_gpu_claim_skips_own_leases_with_a_run_and_others_leases(self) -> None:
+        self.cards = [card(host="gpub2", index=0, job="8"), card(host="gpub2", index=1, job="8")]
+        self.claim("gpub2:8:0", holder="s")
+        self.claim("gpub2:8:1", holder="t")
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim(any=True, count=2, within="gpub2:8", one_host=True)
+        self.assertIn("no node has 2 free cards", str(ctx.exception.code))
+        self.cards = [card(host="gpub2", index=0, job="8", state="busy"), card(host="gpub2", index=1, job="8")]
+        with self.assertRaises(SystemExit):
+            self.claim(any=True, count=2, within="gpub2:8", one_host=True)
+        self.assertEqual(len(self.leases()), 2)
+
     def test_release_accepts_host_job_gpu(self) -> None:
         self.cards = [card(host="gpub1", index=0, job="7")]
         self.claim("gpub1:7:0")

@@ -327,12 +327,13 @@ def _choose(
     args: argparse.Namespace,
     yielding: frozenset[str] = frozenset(),
     rank: Callable[[Card, Report], int] = lambda c, r: 0,
+    own: frozenset[str] = frozenset(),
 ) -> list[tuple[Card, Report]]:
     """The cards a claim takes: all named ones, or --any free ones packed onto partly used hosts first.
 
     ``taken`` are the leases by card key. ``yielding`` are cards whose leases yield to the caller's reservation: the
-    caller may take them although they are leased and in use. ``rank`` orders --any candidates before the packing
-    (lower first).
+    caller may take them although they are leased and in use. ``own`` are the caller's own leases it may run on again
+    when nothing runs there. ``rank`` orders --any candidates before the packing (lower first).
     """
     adopt = getattr(args, "adopt", False)
     if args.any and adopt:
@@ -345,6 +346,7 @@ def _choose(
             (c, r)
             for c, r in seen
             if (ls.card_key(c) in yielding)
+            or (ls.card_key(c) in own and c.state == "free")
             or (
                 c.state == "free"
                 and ls.card_key(c) not in taken
@@ -448,6 +450,12 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
             mine = {r.id for r in reservations if r.holder == args.holder}
             by_key = {lease.key: lease for lease in leases}
             yielding = frozenset(k for k, x in by_key.items() if x.yield_to in mine)
+            # a node run (--gpus N) may use the caller's own idle leases there, e.g. a node transferred to it
+            own = frozenset(
+                k for k, x in by_key.items() if getattr(args, "one_host", False) and x.holder == args.holder
+            )
+            own -= yielding
+            args.reused = set()
 
             def rank(c: Card, r: Report) -> int:  # a priority holder takes its reserved cards first, others last
                 res_ = ls.covering(reservations, ls.card_key(c), r.pool)
@@ -456,7 +464,9 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
                 return 0 if res_.holder == args.holder else 2
 
             try:
-                chosen = _choose(seen, {k: x for k, x in by_key.items() if k not in yielding}, args, yielding, rank)
+                chosen = _choose(
+                    seen, {k: x for k, x in by_key.items() if k not in yielding}, args, yielding, rank, own
+                )
             except SystemExit as exc:  # keep the reconcile result even when the claim is refused
                 refused = exc
             else:
@@ -465,7 +475,10 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
                 for c, r in chosen:
                     key = ls.card_key(c)
                     res_ = ls.covering(reservations, key, r.pool)
-                    if key in yielding:  # preempt: the yielding lease moves to the priority holder
+                    if key in own:  # the caller's own lease: run on it as is, and leave it held afterwards
+                        lease = by_key[key]
+                        args.reused.add(lease.id)
+                    elif key in yielding:  # preempt: the yielding lease moves to the priority holder
                         lease = by_key[key]
                         notices.append(
                             f"[res] TOOK {lease.card} from {lease.holder} (lease {lease.id}) under your reservation: "
