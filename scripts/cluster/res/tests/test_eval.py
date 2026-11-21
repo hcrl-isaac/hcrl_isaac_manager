@@ -1593,6 +1593,24 @@ class EvalRunTest(Isolated):
             self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool]), 0)
         self.assertEqual(self._leases(), [], "a plain --stop still releases")
 
+    def test_stop_drops_a_finished_runs_record_instead_of_keeping_the_lease(self) -> None:
+        """A transferred lease may record the previous holder's ended run: stopping the live one still releases it."""
+        rc, out = self._eval("--any", "--detach", "--env", "MODE=hang")
+        self.assertEqual(rc, 0, out)
+        [lease] = self._leases()
+        live = Path(lease.stage)
+        done = self.tmp / "finished-stage"
+        done.mkdir()
+        (done / "heartbeat").touch()
+        (done / "status").write_text("0\n")  # the earlier run ended and drained its card
+        with ls.locked_store() as leases:
+            leases[0].stages = [str(done), str(live)]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(ev.cmd_stop(lease.id, "me", [self.pool], live.name), 0, err.getvalue())
+        self.assertIn("already ended", err.getvalue())
+        self.assertEqual(self._leases(), [], "no live run is left, so the card is released")
+
     def test_stop_one_stage_keeps_the_lease_for_its_other_run(self) -> None:
         """--stage stops one of a lease's runs; the other keeps running and the lease, until it is stopped too."""
         for argv in (("--any",), None):

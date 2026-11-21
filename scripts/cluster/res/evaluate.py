@@ -1889,6 +1889,21 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool], only: str = "", keep
         )
         return 1
     t = make_target(pool, host, gpu, job, uuid_)
+    if rest:  # a run that already ended (or a transferred lease's previous holder's) keeps nothing
+        probe = Stage(t)
+        q = shlex.quote
+        # ended: its status is written, its stage was removed, or (SLURM) its runner's heartbeat went stale
+        stale = '|| [ -n "$(find {d}/heartbeat -mmin +2 2>/dev/null)" ]' if t.kind == "slurm" else ""
+        ended = [d for d in rest if probe.sh(f"[ -f {q(d)}/status ] || [ ! -d {q(d)} ] {stale.format(d=q(d))}") == 0]
+        if ended:
+            with ls.locked_store() as leases:
+                for lease in leases:
+                    if set(lease.stages) & set(ended):
+                        lease.stages = [d for d in lease.stages if d not in ended]
+                        lease.stage = lease.stages[-1] if lease.stages else ""
+            names = ", ".join(d.rstrip("/").rsplit("/", 1)[-1] for d in ended)
+            print(f"[res] dropped the lease's record of runs that already ended ({names})", file=sys.stderr)
+            rest = [d for d in rest if d not in ended]
     gone = True
     for stage_dir in stage_dirs:
         stage = Stage(t)
