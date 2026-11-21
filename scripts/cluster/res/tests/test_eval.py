@@ -1586,6 +1586,7 @@ class EvalRunTest(Isolated):
         self.assertIn("KEPT lease", err.getvalue())
         [kept] = self._leases()
         self.assertEqual((kept.id, kept.stages, kept.stage), (lease.id, [], ""))
+        self.assertGreater(kept.last_active, time.time() - 60, "the relaunch gets a full idle window")
         rc, out = self._eval("--lease", lease.id, "--detach", "--env", "MODE=hang")
         self.assertEqual(rc, 0, out)
         with contextlib.redirect_stderr(io.StringIO()):

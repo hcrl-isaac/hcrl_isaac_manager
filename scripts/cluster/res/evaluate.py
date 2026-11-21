@@ -1930,9 +1930,11 @@ def cmd_stop(lease_id: str, holder: str, pools: list[Pool], only: str = "", keep
         runs = {x.id: set(x.stages) or ({x.stage} - {""}) for x in leases}
         ids = [lease_id, *(x.id for x in leases if x.id != lease_id and runs[x.id] and runs[x.id] <= ours)]
         if keep_lease:  # held, with no run recorded: the holder's next launch on the card finds it free
+            now = time.time()  # the relaunch gets a full idle window from here
             for x in leases:
                 if x.id in ids:
                     x.stages, x.stage = [], ""
+                    x.last_active, x.idle_since = now, 0.0
         else:
             leases[:] = [x for x in leases if x.id not in ids]
     if keep_lease:
