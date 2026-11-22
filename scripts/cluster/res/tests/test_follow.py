@@ -1,6 +1,7 @@
 """`pls run --detach -- train ...` follow-up: start confirmation, the async recorder and the watch, on a local stage."""
 
 import argparse
+import os
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,29 @@ class StartedTest(unittest.TestCase):
         Path(stage.dir, "log").write_text(f"{URL}\nTraceback (most recent call last):\n")
         Path(stage.dir, "status").write_text("1")
         self.assertIsNone(follow.started(stage, 60, 0))
+
+    def test_a_runner_that_is_gone_without_a_status_never_started(self) -> None:
+        stage = _stage()
+        Path(stage.dir, "log").write_text("[res] no Isaac Lab root venv at /r/venv/bin/python on box\n")
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        Path(stage.dir, "pid").write_text(str(dead.pid))
+        self.assertIsNone(follow.started(stage, 60, 0), "a preflight refusal writes no status")
+
+    def test_a_live_runner_still_booting_is_waited_on(self) -> None:
+        stage = _stage()
+        Path(stage.dir, "log").write_text("booting Kit\n")
+        Path(stage.dir, "pid").write_text(str(os.getpid()))
+        ticks = iter([0, 10, 20, 70])
+        sleeps = []
+        self.assertIsNone(follow.started(stage, 60, 0, clock=lambda: next(ticks), sleep=sleeps.append))
+        self.assertEqual(len(sleeps), 2, "it polled until the deadline")
+
+    def test_a_slurm_heartbeat_gone_stale_is_an_end(self) -> None:
+        stage = _stage()
+        stage.t.kind = "slurm"
+        with mock.patch.object(follow, "_probe", lambda st, cmd: "__ENDED__\n" if "heartbeat" in cmd else ""):
+            self.assertIsNone(follow.started(stage, 60, 0))
 
     def test_no_iteration_by_the_deadline_is_no_start(self) -> None:
         stage = _stage()

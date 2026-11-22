@@ -51,12 +51,18 @@ def started(
     """The run's W&B run (``entity/project/id``, "" without one) and final iteration once it logs a first iteration.
 
     Returns:
-        None when the run ended (its stage has a ``status``) or logged no iteration within ``deadline_s``.
+        None when the run ended (a ``status``, a dead runner, a SLURM heartbeat 2 min old) or logged no iteration
+        within ``deadline_s``.
     """
     d = shlex.quote(stage.dir)
+    # a preflight refusal exits before any status is written, so a runner that is gone counts as ended too
+    if stage.t.kind == "slurm":
+        gone = f"[ -e {d}/heartbeat ] && [ $(( $(date +%s) - $(stat -c %Y {d}/heartbeat) )) -gt 120 ]"
+    else:
+        gone = f'p=$(cat {d}/pid 2>/dev/null) && [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null'
     cmd = (
         f"grep -m1 -oE 'Learning iteration [0-9]+/[0-9]+' {d}/log; grep -m1 -oE 'https://[^ ]+/runs/[A-Za-z0-9]+'"
-        f" {d}/log; [ -e {d}/status ] && echo __ENDED__"
+        f" {d}/log; {{ [ -e {d}/status ] || {{ {gone}; }}; }} && echo __ENDED__"
     )
     end = clock() + deadline_s
     while True:
@@ -135,6 +141,7 @@ def after_launch(stage: Stage, args: argparse.Namespace, script_args: list[str],
     got = started(stage)
     if got is None:
         print(f"[res] FAILED: the run logged no training iteration; log at {where}:{stage.dir}/log", file=sys.stderr)
+        sys.stderr.write(_probe(stage, f"tail -n 8 {shlex.quote(stage.dir)}/log"))
         return 1
     run, target = got
     print(f"[res] training toward iteration {target}" + (f" (W&B {run})" if run else ""), file=sys.stderr)
