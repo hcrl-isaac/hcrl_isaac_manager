@@ -98,7 +98,8 @@ Project skills live in `.claude/skills/`. Use them rather than re-deriving the s
   terms, and compare against a do-nothing policy. A metric pinned at a constant while reward rises is a bug.
 - Before choosing any clip, clamp, floor or gate threshold, print the quantity's percentiles and put the bound in a gap.
 - A launched run that dies looks like a healthy one. Watch every run for progress, failure *and* stall (log mtime
-  older than ~15 min): `scripts/tools/watch_run.sh` does this; the `launch-run` skill covers it.
+  older than ~15 min): a `--detach` train launch watches it (and arms its async recorder), so run it in the
+  background; anything else gets `scripts/tools/watch_run.sh`. The `launch-run` skill covers both.
 
 ## Task and reward design
 

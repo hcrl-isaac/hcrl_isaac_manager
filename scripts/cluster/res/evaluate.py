@@ -30,6 +30,7 @@ from pathlib import Path
 from types import ModuleType
 
 import checkpoints as ck
+import follow
 import leases as ls
 from inventory import MANAGER_DIR, RES_DIR, Pool, profile_value, ssh_pool_of, ssh_scratch
 from probe import MASTER_OPTS, SSH_OPTS, box_cpu_state
@@ -2258,6 +2259,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
                 _record_stage(lease_id, stage.dir)
             _print_detached(stage, held, args.holder)
             rc = 0
+            if not args.cmd and os.path.basename(script) == "train.py" and not getattr(args, "no_watch", False):
+                rc = follow.after_launch(stage, args, run_args, pools)
         else:
             print(f"[res] running {os.path.basename(script)} on {t.where} (stage {stage.dir})", file=sys.stderr)
             held = taken.id if taken is not None else args.lease or ""
@@ -2323,7 +2326,17 @@ def parser() -> argparse.ArgumentParser:
     ev.add_argument(
         "script", help="script on this machine, or <repo>:<path> inside a shipped repo; its arguments follow --"
     )
-    ev.add_argument("--detach", action="store_true", help="start the run and return; the lease stays held")
+    ev.add_argument(
+        "--detach",
+        action="store_true",
+        help="start the run detached; the lease stays held. A train run is then followed: the launch waits for its"
+        " first iteration, arms its async recorder (--eval/--video async) and watches it to its end, so run it in the"
+        " background",
+    )
+    ev.add_argument(
+        "--no-watch", action="store_true", help="--detach: return once a train run is started, with no watch"
+    )
+    ev.add_argument("--no-recorder", action="store_true", help="--detach: arm no async recorder for an async train run")
     ev.add_argument("--cmd", action="store_true", help=argparse.SUPPRESS)  # script + its args are a command line
     # the card selectors and --wt come from `pls run --on/--wt` (see `pls run --help`), so they are not listed here
     ev.add_argument("--on", help=argparse.SUPPRESS)  # host:gpu, host:job:gpu, or local:<gpu>
