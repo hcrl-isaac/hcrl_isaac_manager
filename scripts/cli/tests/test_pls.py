@@ -488,6 +488,17 @@ class RunTest(unittest.TestCase):
                 h = self._pls("--on", "any", "--holder", "me", "--wt", "feat", "--", script)
                 self.assertEqual(h.cmd[-4:], ["--wt", "feat", shipped, "--"])
 
+    def test_card_scripts_name_a_with_repo_file(self) -> None:
+        for with_, script in (
+            (["--with", "fbda=/x/fbda"], "fbda/scripts/run.py"),
+            (["--with", "fbda=/x/fbda"], "fbda:scripts/run.py"),
+            (["--with=fbda=/x/fbda"], "fbda/scripts/run.py"),
+        ):
+            with self.subTest(with_=with_, script=script):
+                h = self._pls("--on", "any", "--holder", "me", *with_, "--", script)
+                self.assertEqual(h.cmd[-2:], ["fbda:scripts/run.py", "--"])
+        self._refused("--on", "any", "--holder", "me", "--", "fbda/scripts/run.py")
+
     def test_ray_trains_through_job_and_ships_other_scripts_through_run(self) -> None:
         h = self._pls("--on", "ray", "--", "train", "--task", "T")
         self.assertEqual((h.cmd, h.env), ([launch.RAY_BACKEND, "job", "--task", "T"], {}))

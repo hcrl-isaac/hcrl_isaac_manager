@@ -35,6 +35,7 @@ pls res release <id|host:gpu|host:job:gpu> --holder "<session>"         # --forc
 pls res transfer <id|host:gpu> --holder "<you>" --to "<session>"        # hand a lease over (--force: not yours)
 pls res extend <id|host:gpu> --holder "<you>" --for 30h                # a new time box from now (none: no box)
 pls res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take over a busy card's running run
+pls res claim box1:0 --share --min-free-gb 10 --holder "<session>"      # a small job beside a card's other user
 ```
 
 - A handover moves the lease (`transfer`, which records the previous holder) instead of releasing and reclaiming:
@@ -42,6 +43,10 @@ pls res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take o
   whose run you take on when nobody leases it any more; it needs named cards and refuses leased or unknown ones. An
   adopted lease starts active, so its run renews it and the run's end releases it as usual. `--run` records the run
   a lease covers.
+- `--share` (claim or `pls run`) leases a card someone else's processes use when it has `--min-free-gb` free, for a
+  small job beside them; `--any --share` takes fully free cards first. It never shares a card another session
+  leased. Only the holder's own processes started after the claim keep a shared lease alive (a neighbor under the
+  same login does not), so it lapses like any idle lease once its run ends.
 - `release` refuses a lease a live `pls run --jobs` batch is working through, since its next jobs need it (`--force`
   overrides), and a second batch on that lease is refused. A claim on a card that is already yours refuses and
   names the lease only as `--on lease:<id>`, so it can never be read as a new claim: claims are not shared.

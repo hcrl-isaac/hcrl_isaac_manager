@@ -2090,6 +2090,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             within=on if args.gpus > 1 else "",  # N free cards of this one node
             one_host=args.gpus > 1,
             min_free_gb=args.min_free_gb,
+            share=args.share,
             pool=args.pool,
             holder=args.holder,
             note=args.note or f"pls run {os.path.basename(script)}",
@@ -2289,7 +2290,12 @@ def parser() -> argparse.ArgumentParser:
     ev.add_argument("--any", action="store_true", help=argparse.SUPPRESS)
     ev.add_argument("--lease", help=argparse.SUPPRESS)  # a card already leased, left leased afterwards
     ev.add_argument("--pool", action="append", help="only these pools (repeatable; prefix match)")
-    ev.add_argument("--min-free-gb", type=float, default=0, help="with --any: free memory the card needs")
+    ev.add_argument("--min-free-gb", type=float, default=0, help="free memory the card needs (--any, --share)")
+    ev.add_argument(
+        "--share",
+        action="store_true",
+        help="run on a card other processes use when it has --min-free-gb free (a small job beside someone's run)",
+    )
     ev.add_argument("--holder", required=True, help="your session name")
     ev.add_argument(
         "--wait",
