@@ -27,7 +27,8 @@ TRAIN = "scripts/train.py"
 RESUME_FLAGS = ("--load_run", "--checkpoint", "--max_iterations", "--resume")
 POLL_S = 30.0
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-WANDB_URL = re.compile(r"https://wandb\.ai/[^\s/]+/[^\s/]+/runs/\w+")
+# any W&B host (wandb.ai, or a dedicated one such as forge.coreweave.com/wandb): .../<entity>/<project>/runs/<id>
+WANDB_URL = re.compile(r"https://\S+?/[^\s/]+/[^\s/]+/runs/\w+")
 ITERATION = re.compile(r"Learning iteration (\d+)/(\d+)")
 STARTED = re.compile(r"started detached on .* \(stage (\S+)\)")
 FAILURES = (
@@ -137,8 +138,9 @@ def wandb_checkpoints(url: str) -> dict[int, int]:
     """Iteration -> size of each ``model_<it>.pt`` the W&B run holds."""
     import wandb
 
-    entity, project, _, run_id = url.split("wandb.ai/", 1)[1].split("/")[:4]
-    run = wandb.Api().run(f"{entity}/{project}/{run_id}")
+    head, _, run_id = url.partition("/runs/")
+    entity, project = head.rstrip("/").split("/")[-2:]
+    run = wandb.Api().run(f"{entity}/{project}/{run_id.split('/')[0]}")
     found = {}
     for f in run.files():
         if m := re.fullmatch(r"model_(\d+)\.pt", f.name):

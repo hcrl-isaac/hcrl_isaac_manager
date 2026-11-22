@@ -48,6 +48,10 @@ class HelperTest(unittest.TestCase):
     def test_progress_reads_the_last_url_and_iteration_through_color_codes(self) -> None:
         self.assertEqual(move.progress(LOG), ("https://wandb.ai/ent/proj/runs/ab12cd34", 1200, 3000))
         self.assertIsNone(move.progress("Learning iteration 3/10"), "no W&B run yet")
+        forge = (
+            "wandb: View run at https://forge.coreweave.com/wandb/ent/proj/runs/ug5vpkfc\n Learning iteration 159/600\n"
+        )
+        self.assertEqual(move.progress(forge), ("https://forge.coreweave.com/wandb/ent/proj/runs/ug5vpkfc", 159, 600))
 
     def test_a_checkpoint_counts_once_its_size_holds_over_a_poll(self) -> None:
         sizes = iter([{1000: 5}, {1000: 5, 1200: 10}, {1000: 5, 1200: 20}, {1000: 5, 1200: 20}])
