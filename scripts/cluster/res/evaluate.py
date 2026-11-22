@@ -2191,6 +2191,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         # the code a run ran, for its W&B config under pls_refs: a replay restages the commits, or --tree reuses the tree
         pls_refs = {"repos": stage.refs, "tree": stage.tree, "wt": args.wt, "root": args.root, "manifest": manifest}
         stage.write(json.dumps({"pls_refs": {"value": pls_refs}}) + "\n", "wandb_config.yaml", mode=0o644)
+        if raw := getattr(args, "raw_argv", None):  # the launch, as `pls run --move` relaunches it
+            stage.write(json.dumps(raw) + "\n", "pls_argv.json", mode=0o644)
         # snapshots are read-only, runs may be concurrent and a stage is removed after a success, so relative outputs
         # (train.py's logs/, a census's tables) go to a writable working dir of this run's own, kept afterwards
         work = container_path(t, f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}")
@@ -2449,8 +2451,13 @@ def main(argv: list[str] | None = None) -> None:
     import res
 
     argv = sys.argv[1:] if argv is None else argv
+    head = argv[: argv.index("--")] if "--" in argv else argv
+    if "--move" in head:  # `pls run --move <lease> --to <card> --holder <you>`: a detached train.py run, elsewhere
+        import move
+
+        sys.exit(move.main(argv, res.load_pools()))
     # `pls run --stop <lease> --holder <you>`: no script, no card to claim; a script's own --stop (after --) is its own
-    if "--stop" in (argv[: argv.index("--")] if "--" in argv else argv):
+    if "--stop" in head:
         sp = argparse.ArgumentParser(prog="pls run --stop", description="stop a detached run and release its lease")
         sp.add_argument("--stop", required=True, metavar="LEASE", help="the lease the detached run holds")
         sp.add_argument("--holder", required=True, help="your session name (must match the lease)")
@@ -2469,6 +2476,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(f"[res] cannot read the compute inventory: {type(exc).__name__}: {exc}")
         sys.exit(cmd_stop(st.stop, st.holder, pools, st.stage, st.keep_lease))
     args = parse_args(argv)
+    args.raw_argv = list(argv)  # what `pls run --move` relaunches from
     if args.jobs:
         import batch
 

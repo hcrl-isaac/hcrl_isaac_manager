@@ -163,6 +163,21 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   lease. A lease that records no run (one taken before `--stop` existed) is just released.
   `--keep-lease` keeps the card leased once the run is gone, so a relaunch (`pls run --on lease:<id>`) needs no
   reclaim and the card is never unheld in between. Like any lease it lapses after 30 min idle, counted from the stop.
+- `pls run --move <lease> --to <same|lease:<id>|host:gpu> --holder <you>` moves a detached `train.py` run, e.g. off a
+  node whose hold ends: it claims the target first, waits (`--wait`, 30 min) for a checkpoint newer than any on the
+  run's W&B run, stops the run (keeping the lease when the card stays the same), relaunches it detached with the same
+  `pls run` options and resume arguments (`--load_run <its W&B run> --checkpoint model_<k>.pt --max_iterations
+  <total - k>`), and waits (`--verify`, 30 min) for a learning iteration past k. The relaunch trains the code the run
+  ran: worktrees at its recorded commits (`move-<lease>-<time>`, removed after staging), however far the checkouts
+  moved since. It refuses runs launched before it existed (no `pls_argv.json` in the stage), runs on several cards or
+  cores, other scripts, and runs that shipped uncommitted changes, whose code cannot be rebuilt.
+  What a move costs: the run continues as a new W&B run from the checkpoint, so its history, evals and videos split
+  across two W&B runs (the move prints both); an off-policy run (SAC, FB-CPR) restarts with an empty replay buffer and
+  first runs its cfg's `resume_warmup_steps_per_env` iterations of collection on top of its remaining iterations: it
+  keeps every training update it had left and ends that many iterations later.
+  Once the relaunch trains, the new W&B run of an async run (`--eval`/`--video async`) gets its own recorder as a
+  launch does (not with `--no-recorder` on the launch), and the move stays on the moved run's watch to its end, so run
+  it in the background; `--no-watch` returns once the relaunch trains.
 
 - The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
   several jobs), `--on any`, `--on <pool>` or `--on lease:<id>`. A busy card is refused (`--wait [limit]` waits for
