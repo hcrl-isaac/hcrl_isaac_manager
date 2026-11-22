@@ -13,9 +13,82 @@ Add ``foo`` to ``workspace.yaml``'s ``projects:`` and run ``resolve_workspace.py
 from __future__ import annotations
 
 import argparse
+import subprocess
 from pathlib import Path
 
 MANAGER_DIR = Path(__file__).resolve().parent.parent
+
+
+# a task repo's tests/conftest.py, as the workspace's task repos carry it (Kit at import, the --device card)
+CONFTEST = r'''"""Pytest fixtures for the smoke tests.
+
+With the full Isaac Sim runtime installed, Kit is launched at conftest import, before the task packages import
+(``isaaclab.app.AppLauncher`` itself is importable pre-launch). Kit-less Isaac Lab 3.0 imports without an app,
+so ``sim_app`` is then ``None``; with no Isaac Lab at all (e.g. a hosted CI runner) the suite is skipped.
+"""
+
+import importlib.machinery
+import importlib.util
+import sys
+
+import pytest
+
+_ISAAC_AVAILABLE = importlib.util.find_spec("isaaclab") is not None
+# Isaac Sim installs ``isaacsim`` as a regular package; the importer extra alone leaves a namespace (no origin).
+_ISAACSIM = importlib.machinery.PathFinder().find_spec("isaacsim")
+_KIT_AVAILABLE = _ISAAC_AVAILABLE and _ISAACSIM is not None and _ISAACSIM.origin is not None
+
+
+def _device_flag(argv: list[str]) -> str:
+    """The ``--device`` flag's value: read here, since Kit launches at import, before pytest parses it."""
+    for i, arg in enumerate(argv):
+        if arg.startswith("--device="):
+            return arg.split("=", 1)[1]
+        if arg == "--device" and i + 1 < len(argv):
+            return argv[i + 1]
+    return "cuda:0"
+
+
+DEVICE = _device_flag(sys.argv)
+_APP = None
+if _KIT_AVAILABLE:
+    from isaaclab.app import AppLauncher
+
+    # Kit parses sys.argv and segfaults on pytest's flags (e.g. `-m "not gpu"`); hide them for the launch.
+    _argv, sys.argv = sys.argv, sys.argv[:1]
+    _APP = AppLauncher(headless=True, multi_gpu=False, device=DEVICE).app
+    sys.argv = _argv
+
+
+def pytest_addoption(parser):
+    parser.addoption("--device", default="cuda:0", help="torch device the GPU tests launch Kit on (e.g. cuda:3)")
+
+
+def pytest_terminal_summary(terminalreporter):
+    # names the physical card, so a GPU result shows which card it ran on
+    torch = sys.modules.get("torch")
+    if DEVICE.startswith("cuda") and torch is not None and torch.cuda.is_initialized():
+        props = torch.cuda.get_device_properties(torch.device(DEVICE))
+        kit = "Kit" if _APP is not None else "kitless"
+        terminalreporter.write_line(f"[conftest] tests ran on {DEVICE}: {props.name} GPU-{props.uuid} ({kit})")
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "gpu: heavier check that instantiates env cfgs (needs a GPU)")
+
+
+@pytest.fixture(scope="session")
+def device():
+    """The torch device Kit launched on (``--device``)."""
+    return DEVICE
+
+
+@pytest.fixture(scope="session")
+def sim_app():
+    if not _ISAAC_AVAILABLE:
+        pytest.skip("Isaac Lab not installed")
+    return _APP
+'''
 
 
 def _files(name: str, org: str) -> dict[str, str]:
@@ -112,35 +185,7 @@ def _files(name: str, org: str) -> dict[str, str]:
             "smoke (usually unnecessary -- the smoke tests cover every registered task automatically).\n"
         ),
         "pytest.ini": "[pytest]\ntestpaths = tests\nmarkers =\n    gpu: heavier check that instantiates env cfgs (needs a GPU)\n",
-        "tests/conftest.py": (
-            '"""Pytest fixtures for the smoke tests.\n\n'
-            "With the full Isaac Sim runtime installed, Kit is launched at conftest import, before the task packages\n"
-            "import. Kit-less Isaac Lab 3 imports without an app, so ``sim_app`` is then ``None``; with no Isaac Lab\n"
-            'at all (e.g. a hosted CI runner) the suite is skipped.\n"""\n\n'
-            "import importlib.util\n"
-            "import sys\n\n"
-            "import pytest\n\n"
-            '_ISAAC_AVAILABLE = importlib.util.find_spec("isaaclab") is not None\n'
-            "# the importer extra installs part of the isaacsim namespace, so test for Kit itself\n"
-            "try:\n"
-            '    _KIT_AVAILABLE = _ISAAC_AVAILABLE and importlib.util.find_spec("isaacsim.simulation_app") is not None\n'
-            "except ValueError:  # Isaac Sim's package rewires its modules, leaving them without a spec\n"
-            "    _KIT_AVAILABLE = True\n"
-            "_APP = None\n"
-            "if _KIT_AVAILABLE:\n"
-            "    from isaaclab.app import AppLauncher\n\n"
-            '    # Kit parses sys.argv and segfaults on pytest\'s flags (e.g. `-m "not gpu"`); hide them for the launch.\n'
-            "    _argv, sys.argv = sys.argv, sys.argv[:1]\n"
-            "    _APP = AppLauncher(headless=True, multi_gpu=False).app\n"
-            "    sys.argv = _argv\n\n\n"
-            "def pytest_configure(config):\n"
-            '    config.addinivalue_line("markers", "gpu: heavier check that instantiates env cfgs (needs a GPU)")\n\n\n'
-            '@pytest.fixture(scope="session")\n'
-            "def sim_app():\n"
-            "    if not _ISAAC_AVAILABLE:\n"
-            '        pytest.skip("Isaac Lab not installed")\n'
-            "    return _APP\n"
-        ),
+        "tests/conftest.py": CONFTEST,
         ".pre-commit-config.yaml": (
             "repos:\n"
             "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
@@ -199,8 +244,8 @@ def _files(name: str, org: str) -> dict[str, str]:
             "def test_configs_are_legible(sim_app):\n"
             "    testing.run_config_legibility_check(PACKAGE, SOURCE)\n\n\n"
             "@pytest.mark.gpu\n"
-            "def test_tasks_run(sim_app):\n"
-            "    testing.run_gpu_smoke(PACKAGE, SOURCE)\n"
+            "def test_tasks_run(sim_app, device):\n"
+            "    testing.run_gpu_smoke(PACKAGE, SOURCE, device=device)\n"
         ),
         ".github/workflows/ci.yml": (
             "name: ci\n\n"
@@ -235,9 +280,11 @@ def main() -> None:
         p = dest / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
-    print(f"[new] scaffolded {dest} ({name}/ namespace).")
+    # its own repo from the start, so git inside it never reaches the enclosing manager checkout
+    subprocess.run(["git", "init", "-q", "-b", "main", str(dest)], check=True)
+    print(f"[new] scaffolded {dest} ({name}/ namespace) as a new git repo on main.")
     print(
-        f"[new] next: git init it, push it, and register it. A repo in {args.org}: add '{name}' to\n"
+        f"[new] next: commit and push it, and register it. A repo in {args.org}: add '{name}' to\n"
         "      workspace.defaults.yaml available_projects, then pick it in `pls setup`. A repo elsewhere: add it to\n"
         "      your gitignored workspace.yaml as\n"
         f"      `projects: [{{name: {name}, git: <its clone URL>, ref: main}}]`, then `pls setup`. Until it is registered\n"
