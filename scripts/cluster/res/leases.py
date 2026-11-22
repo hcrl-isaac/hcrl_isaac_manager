@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import getpass
 import json
+import sys
 import time
 import uuid
 from collections.abc import Collection, Iterator
@@ -240,6 +242,13 @@ def settle(
             if lease.yield_to == res.id:
                 lease.yield_to = ""
     return ended
+
+
+def check_holder(holder: str, pools: list) -> None:
+    """Exit when ``holder`` is a login (this machine's, or a pool's) rather than a session name."""
+    logins = {getpass.getuser(), *(str(p.settings["user"]) for p in pools if p.settings.get("user"))}
+    if holder.strip().lower() in {x.lower() for x in logins}:
+        sys.exit(f"[res] --holder {holder!r} is a login, not a session: name the session that holds the card")
 
 
 def card_key(card: Card) -> str:
