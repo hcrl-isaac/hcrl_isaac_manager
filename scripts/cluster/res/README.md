@@ -153,6 +153,8 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
 - `pls run --stop <lease> --holder <you>` stops a detached run: the process group (a SLURM run's `stop` file), then,
   once it is gone, removes the stage but its log and releases the lease. A run that may still be alive keeps the
   lease. A lease that records no run (one taken before `--stop` existed) is just released.
+  `--keep-lease` keeps the card leased once the run is gone, so a relaunch (`pls run --on lease:<id>`) needs no
+  reclaim and the card is never unheld in between. Like any lease it lapses after 30 min idle, counted from the stop.
 
 - The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
   several jobs), `--on any`, `--on <pool>` or `--on lease:<id>`. A busy card is refused (`--wait [limit]` waits for
