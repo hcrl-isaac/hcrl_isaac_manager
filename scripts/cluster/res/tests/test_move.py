@@ -26,9 +26,9 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(args[:2], ["--task", "Crab-Agile-v0"])
         self.assertEqual(opts[-2:], ["--wt", "agile"])
 
-    def test_card_selection_and_detach_go_the_rest_stays_in_order(self) -> None:
+    def test_card_selection_wt_and_detach_go_the_rest_stays_in_order(self) -> None:
         opts, _, _ = move.split_launch(LAUNCH)
-        self.assertEqual(move.drop_card_selection(opts), ["--holder", "s", "--stall", "45m", "--wt", "agile"])
+        self.assertEqual(move.drop_card_selection(opts), ["--holder", "s", "--stall", "45m"])
         self.assertEqual(move.drop_card_selection(["--any", "--pool", "a", "--wait", "4h", "--x"]), ["--x"])
 
     def test_previous_resume_arguments_are_dropped_in_both_forms(self) -> None:
@@ -62,6 +62,52 @@ class HelperTest(unittest.TestCase):
             self.assertIsNone(move.wait_checkpoint("u", 1000, move.time.monotonic() - 1))
 
 
+class PinTest(unittest.TestCase):
+    def test_pin_checks_out_the_recorded_commit_not_the_current_head(self) -> None:
+        import subprocess
+        import tempfile
+
+        root = Path(tempfile.mkdtemp())
+        repo = root / "resources" / "ssti_tasks"
+        repo.mkdir(parents=True)
+
+        def git(*a: str) -> str:
+            env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                   "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin"}  # fmt: skip
+            return subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True,
+                                  env=env).stdout.strip()  # fmt: skip
+
+        git("init", "-q")
+        (repo / "f").write_text("ran")
+        git("add", "f")
+        git("commit", "-qm", "ran")
+        ran = git("rev-parse", "HEAD")
+        (repo / "f").write_text("later")
+        git("commit", "-qam", "later")
+        refs = {"pls_refs": {"value": {"repos": {"ssti_tasks": {"commit": ran, "dirty": 0}}, "tree": "", "wt": ""}}}
+        with (
+            mock.patch.object(move, "read_stage", lambda st, rel: json.dumps(refs)),
+            mock.patch.object(move.ev, "local_workspace", lambda: str(root)),
+            mock.patch.object(move.ev, "local_code", lambda ws, wt: {"ssti_tasks": str(repo)}),
+        ):
+            wt, made = move.pin_code(None, "move-t")
+        pinned = repo / "worktrees" / "move-t"
+        self.assertEqual((wt, (pinned / "f").read_text()), ("move-t", "ran"), "the code the run ran, not HEAD")
+        move.unpin(made)
+        self.assertFalse(pinned.exists())
+
+    def test_a_run_with_uncommitted_changes_cannot_be_pinned(self) -> None:
+        refs = {"pls_refs": {"value": {"repos": {"ssti_tasks": {"commit": "abc", "dirty": 2}}, "tree": "", "wt": ""}}}
+        with (
+            mock.patch.object(move, "read_stage", lambda st, rel: json.dumps(refs)),
+            mock.patch.object(move.ev, "local_workspace", lambda: "/nowhere"),
+            mock.patch.object(move.ev, "local_code", lambda ws, wt: {"ssti_tasks": "/nowhere/resources/ssti_tasks"}),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            move.pin_code(None, "move-t")
+        self.assertIn("uncommitted", str(ctx.exception.code))
+
+
 class MoveTest(unittest.TestCase):
     def setUp(self) -> None:
         self.lease = SimpleNamespace(id="old", stages=["/s/a1"], stage="/s/a1", cpus=0)
@@ -71,7 +117,7 @@ class MoveTest(unittest.TestCase):
             mock.patch.object(move.ev, "make_target", lambda *a: SimpleNamespace(kind="ssh")),
             mock.patch.object(move.ev, "Stage", lambda t: SimpleNamespace(t=t, dir="")),
             mock.patch.object(move, "read_stage", lambda st, rel: self.files.get(rel)),
-            mock.patch.object(move, "code_drift", lambda st: []),
+            mock.patch.object(move, "pin_code", lambda st, tag: ("move-x", [])),
             mock.patch.object(move, "wandb_checkpoints", lambda url: {1000: 5}),
             mock.patch.object(move, "wait_checkpoint", lambda url, after, dl: 1250),
             mock.patch.object(move, "confirm", lambda st, past, dl: "ok"),
@@ -90,7 +136,7 @@ class MoveTest(unittest.TestCase):
             move.ev, "cmd_stop", lambda i, h, p, keep_lease=False: self.stops.append(keep_lease) or 0
         )
         go = mock.patch.object(
-            move, "relaunch", lambda o, s, a, lid: self.launches.append((o, s, a, lid)) or (0, "/s/b2")
+            move, "relaunch", lambda o, s, a, lid, wt: self.launches.append((o, s, a, lid, wt)) or (0, "/s/b2")
         )
         for p in (stop, go):
             p.start()
@@ -99,8 +145,8 @@ class MoveTest(unittest.TestCase):
     def test_a_same_card_move_keeps_the_lease_and_resumes_with_the_remaining_budget(self) -> None:
         self.assertEqual(move.cmd_move("old", "s", "same", 60, 60, []), 0)
         self.assertEqual(self.stops, [True], "the card stays leased between stop and relaunch")
-        [(_, script, args, lease_id)] = self.launches
-        self.assertEqual((script, lease_id), ("hcrl_isaaclab:scripts/train.py", "old"))
+        [(_, script, args, lease_id, wt)] = self.launches
+        self.assertEqual((script, lease_id, wt), ("hcrl_isaaclab:scripts/train.py", "old", "move-x"))
         self.assertEqual(args[-6:], ["--load_run", "https://wandb.ai/ent/proj/runs/ab12cd34", "--checkpoint",
                                      "model_1250.pt", "--max_iterations", "1750"])  # fmt: skip
         self.assertEqual(args.count("--max_iterations"), 1, "the launch's own budget is replaced, not doubled")
@@ -129,14 +175,25 @@ class MoveTest(unittest.TestCase):
                 self.files.clear()
                 self.files.update(saved)
 
-    def test_changed_code_is_refused(self) -> None:
-        drift = mock.patch.object(
-            move, "code_drift", lambda st: ["ssti_tasks ran 1234abcd, its worktree is at 9999ffff"]
-        )
-        with drift, self.assertRaises(SystemExit) as ctx:
+    def test_code_that_cannot_be_rebuilt_is_refused_before_anything_stops(self) -> None:
+        def dirty(st: object, tag: str) -> None:
+            raise SystemExit("[move] the run shipped uncommitted changes in ssti_tasks, so its code cannot be rebuilt")
+
+        with mock.patch.object(move, "pin_code", dirty), self.assertRaises(SystemExit) as ctx:
             move.cmd_move("old", "s", "same", 60, 60, [])
-        self.assertIn("code changed", str(ctx.exception.code))
-        self.assertEqual(self.stops, [])
+        self.assertIn("cannot be rebuilt", str(ctx.exception.code))
+        self.assertEqual((self.stops, self.launches), ([], []))
+
+    def test_the_pinned_worktrees_go_even_when_the_move_fails(self) -> None:
+        removed = []
+        with (
+            mock.patch.object(move, "pin_code", lambda st, tag: ("move-x", [("main", "wt")])),
+            mock.patch.object(move, "unpin", removed.extend),
+            mock.patch.object(move, "wait_checkpoint", lambda url, after, dl: None),
+            self.assertRaises(SystemExit),
+        ):
+            move.cmd_move("old", "s", "same", 60, 60, [])
+        self.assertEqual(removed, [("main", "wt")])
 
     def test_no_checkpoint_in_time_stops_nothing(self) -> None:
         with mock.patch.object(move, "wait_checkpoint", lambda url, after, dl: None), self.assertRaises(SystemExit):

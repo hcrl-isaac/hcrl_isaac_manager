@@ -1,9 +1,10 @@
 """`pls run --move <lease>`: carry a detached train.py run to another card from its next checkpoint.
 
-The run must have been launched by a `pls run` that records its argv in the stage (``pls_argv.json``), and the code it
-ran must still be what its worktrees hold, so the relaunch trains the same thing. The move claims the target first,
-waits for a checkpoint newer than any already on W&B, stops the run (keeping the lease when the card stays the same),
-relaunches it detached from that checkpoint with the remaining iteration budget, and confirms it trains past it.
+The run must have been launched by a `pls run` that records its argv in the stage (``pls_argv.json``). The relaunch
+trains the code the run ran: worktrees at its recorded commits, whatever the checkouts hold now. The move claims the
+target first, waits for a checkpoint newer than any already on W&B, stops the run (keeping the lease when the card
+stays the same), relaunches it detached from that checkpoint with the remaining iteration budget, and confirms it
+trains past it.
 """
 
 from __future__ import annotations
@@ -58,9 +59,9 @@ def split_launch(argv: list[str]) -> tuple[list[str], str, list[str]]:
 
 
 def drop_card_selection(opts: list[str]) -> list[str]:
-    """The launch options without the card selection and --detach, which the move sets itself."""
+    """The launch options without the card selection, --wt and --detach, which the move sets itself."""
     sel = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    for flag in ("--on", "--lease", "--min-free-gb", "--gpus"):
+    for flag in ("--on", "--lease", "--min-free-gb", "--gpus", "--wt"):
         sel.add_argument(flag)
     sel.add_argument("--pool", action="append")
     sel.add_argument("--wait", nargs="?", const="")
@@ -93,20 +94,43 @@ def progress(log: str) -> tuple[str, int, int] | None:
     return urls[-1], int(its[-1][0]), int(its[-1][1])
 
 
-def code_drift(stage: ev.Stage) -> list[str]:
-    """The repos whose worktree commit differs from what the run ran (empty for a --tree run)."""
+def unpin(made: list[tuple[str, str]]) -> None:
+    """Remove the worktrees :func:`pin_code` made."""
+    for main, path in made:
+        subprocess.run(["git", "-C", main, "worktree", "remove", "--force", path], capture_output=True)
+
+
+def pin_code(stage: ev.Stage, tag: str) -> tuple[str, list[tuple[str, str]]]:
+    """A worktree set named ``tag`` at the commits the run ran ("" for a --tree run, which reuses its tree).
+
+    Returns:
+        The set's name and the (main checkout, worktree) pairs made; exits when the run shipped uncommitted changes
+        or a commit is not here, since then its code cannot be rebuilt.
+    """
     raw = read_stage(stage, "wandb_config.yaml")
     if raw is None:
-        return ["the run recorded no code refs"]
+        sys.exit("[move] the run recorded no code refs (wandb_config.yaml), so its code cannot be rebuilt")
     refs = json.loads(raw)["pls_refs"]["value"]
     if refs.get("tree"):
-        return []
-    code = ev.local_code(ev.local_workspace(), refs.get("wt") or "")
-    drift = []
+        return "", []
+    workspace = ev.local_workspace()
+    code = ev.local_code(workspace, refs.get("wt") or "")
+    made: list[tuple[str, str]] = []
     for repo, ran in refs.get("repos", {}).items():
-        if repo in code and (now := ev._head(code[repo])) != ran.get("commit"):
-            drift.append(f"{repo} ran {str(ran.get('commit'))[:8]}, its worktree is at {now[:8]}")
-    return drift
+        if repo not in code:  # data and asset repos ship as any launch ships them
+            continue
+        main = str(Path(workspace, "resources", repo))
+        path = str(Path(main, "worktrees", tag))
+        if ran.get("dirty"):
+            unpin(made)
+            sys.exit(f"[move] the run shipped uncommitted changes in {repo}, so its code cannot be rebuilt")
+        out = subprocess.run(["git", "-C", main, "worktree", "add", "--detach", path, str(ran.get("commit"))],
+                             capture_output=True, text=True)  # fmt: skip
+        if out.returncode != 0:
+            unpin(made)
+            sys.exit(f"[move] cannot check out {repo} at {str(ran.get('commit'))[:8]}: {out.stderr.strip()}")
+        made.append((main, path))
+    return tag, made
 
 
 def wandb_checkpoints(url: str) -> dict[int, int]:
@@ -153,9 +177,11 @@ def target_lease(to: str, lease_id: str, holder: str, pools: list[Pool]) -> str:
     return lease.id
 
 
-def relaunch(opts: list[str], script: str, args: list[str], lease_id: str) -> tuple[int, str]:
-    """Start the run detached on ``lease_id`` through `pls run`'s own path; its status and new stage dir."""
-    argv = [*drop_card_selection(opts), "--lease", lease_id, "--detach", script, "--", *args]
+def relaunch(opts: list[str], script: str, args: list[str], lease_id: str, wt: str) -> tuple[int, str]:
+    """Start the run detached on ``lease_id`` (from worktree set ``wt``) through `pls run`'s own path; its status and
+    new stage dir."""
+    pinned = ["--wt", wt] if wt else []
+    argv = [*drop_card_selection(opts), *pinned, "--lease", lease_id, "--detach", script, "--", *args]
     out = subprocess.run([sys.executable, ev.__file__, *argv], capture_output=True, text=True)
     sys.stderr.write(out.stderr)
     found = STARTED.findall(out.stderr)
@@ -204,12 +230,22 @@ def cmd_move(lease_id: str, holder: str, to: str, wait_s: float, verify_s: float
     opts, script, args = split_launch(json.loads(raw))
     if not script.replace(":", "/").endswith(TRAIN):
         sys.exit(f"[move] --move moves hcrl_isaaclab's train.py runs; this run is {script}")
-    if drift := code_drift(stage):
-        sys.exit("[move] the code changed since the launch, so a relaunch would train other code: " + "; ".join(drift))
     state = progress(read_stage(stage, "log") or "")
     if state is None:
         sys.exit("[move] the run has not logged a W&B run and a learning iteration yet; let it start first")
     url, _, total = state
+    wt, made = pin_code(stage, f"move-{lease_id}-{int(time.time())}")
+    try:
+        return _move(lease_id, holder, to, wait_s, verify_s, pools, opts, script, args, url, total, wt)
+    finally:
+        unpin(made)
+
+
+def _move(
+    lease_id: str, holder: str, to: str, wait_s: float, verify_s: float, pools: list[Pool],
+    opts: list[str], script: str, args: list[str], url: str, total: int, wt: str,
+) -> int:  # fmt: skip
+    """The move once the run is known movable and its code pinned: claim, wait, stop, relaunch, confirm."""
     have = wandb_checkpoints(url)
     target = target_lease(to, lease_id, holder, pools)
     print(f"[move] waiting up to {wait_s / 60:g} min for a checkpoint past {max(have, default=-1)} on {url}",
@@ -223,7 +259,7 @@ def cmd_move(lease_id: str, holder: str, to: str, wait_s: float, verify_s: float
     if ev.cmd_stop(lease_id, holder, pools, keep_lease=target == lease_id) != 0:
         sys.exit(f"[move] the run did not stop cleanly; nothing relaunched (lease {target} stays held)")
     resume = ["--load_run", url, "--checkpoint", f"model_{ckpt}.pt", "--max_iterations", str(total - ckpt)]
-    rc, new_dir = relaunch(opts, script, [*drop_resume(args), *resume], target)
+    rc, new_dir = relaunch(opts, script, [*drop_resume(args), *resume], target, wt)
     if rc != 0 or not new_dir:
         sys.exit(f"[move] the relaunch failed (status {rc}); resume by hand from model_{ckpt}.pt of {url}")
     t_pool, t_host, t_gpu, t_job, t_uuid = ev._lease_card(target, holder, pools)
