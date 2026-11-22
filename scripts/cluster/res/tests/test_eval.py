@@ -26,6 +26,7 @@ RES = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RES))
 import checkpoints as ck
 import evaluate as ev
+import follow
 import leases as ls
 import res
 from inventory import Pool
@@ -1532,6 +1533,26 @@ class EvalRunTest(Isolated):
             rc, _ = self._eval("--any")
         self.assertIn("not a shipped repo", str(rc))
         self.assertEqual(self._leases(), [])
+
+    def test_a_detached_train_run_is_followed_to_its_watch_verdict_unless_no_watch(self) -> None:
+        self.script = self.tmp / "train.py"
+        self.script.write_text("print('Learning iteration 0/40', flush=True)\nimport time; time.sleep(30)\n")
+        watched = []
+        with (
+            mock.patch.object(follow, "POLL_S", 0.2),
+            mock.patch.object(follow, "watch", lambda st, run, target, label: watched.append(target) or 4),
+        ):
+            rc, out = self._eval("--any", "--detach", "--", "--video", "on")
+            self.assertEqual((rc, watched), (4, [40]), out)
+            self._stop_all()
+            rc, out = self._eval("--any", "--detach", "--no-watch")
+            self._stop_all()
+        self.assertEqual((rc, watched), (0, [40]), out)
+
+    def _stop_all(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            for lease in self._leases():
+                ev.cmd_stop(f"lease:{lease.id}", "me", [self.pool])
 
     def test_detach_returns_at_once_and_keeps_the_lease(self) -> None:
         start = time.monotonic()

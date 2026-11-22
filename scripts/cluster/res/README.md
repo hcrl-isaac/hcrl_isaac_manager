@@ -150,6 +150,14 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
 - `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
   owns its stage dir, which its lease records, and the lease stays held until the card goes idle. `--timeout`
   and `--stall` do not apply to a detached run.
+- A detached `train` run is then followed, so launch it in the background: the launch waits for its first
+  `Learning iteration` (failing if the run ends or 40 min pass first), arms an async recorder when the run records
+  async (`--eval`/`--video async`), then stays on `scripts/tools/watch_run.sh` until the run ends. Its exit is the
+  watch's verdict (0 only once the run finished), which wakes the session that launched it; stopping the watch leaves
+  the run. The recorder (`video_recorder.py --mode async --follow --only_run <id>`) takes a shared card
+  (`--share --min-free-gb 12`) of the first pool that sets `recorder_root` (an Isaac Lab install root on its hosts)
+  and can start one, with the run's `--wt`, and ends when the run does. `--no-watch` returns at launch;
+  `--no-recorder` arms none.
 - `pls run --stop <lease> --holder <you>` stops a detached run: the process group (a SLURM run's `stop` file), then,
   once it is gone, removes the stage but its log and releases the lease. A run that may still be alive keeps the
   lease. A lease that records no run (one taken before `--stop` existed) is just released.

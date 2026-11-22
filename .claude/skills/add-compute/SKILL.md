@@ -35,7 +35,9 @@ pls setup --add <pool-name> --kind ssh --hosts <host1>,<host2> --user <login> [-
 
 `--domain` is appended to each short host name (omit it if the short name resolves); `--pin device` only if Kit
 refuses a masked CUDA_VISIBLE_DEVICES on these boxes; `--render` for RT-core cards (A40, RTX PRO, 5090), whose
-`scripts/larg/train.sh` runs record video in-process; on a box its owner also uses (a desktop), `--min-free-disk-gb`,
+`scripts/larg/train.sh` runs record video in-process (set `recorder_root = "<root>"` on such a pool by hand, an
+Isaac Lab install root on every host, and `pls run --detach -- train ... --video async` arms its run's recorder
+there); on a box its owner also uses (a desktop), `--min-free-disk-gb`,
 `--max-hours` and `--desktop` set the guardrails in `scripts/cluster/res/README.md`; `--update` replaces an
 existing pool. It writes the pool into
 `scripts/cluster/res/compute.local.toml` (gitignored, merged over `compute.toml`; the main checkout's serves every
