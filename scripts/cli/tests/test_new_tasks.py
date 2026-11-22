@@ -31,6 +31,21 @@ class NewTasksTest(unittest.TestCase):
         compile(conftest, "conftest.py", "exec")
         compile(smoke, "test_smoke.py", "exec")
 
+    def test_its_conftest_is_the_one_every_checked_out_task_repo_carries(self) -> None:
+        common = subprocess.run(
+            ["git", "-C", str(SCRIPT.parent), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        resources = Path(common).parent / "resources"  # the main checkout's, also from a worktree
+        repos = sorted(resources.glob("*_tasks/tests/conftest.py")) if common else []
+        if not repos:
+            self.skipTest("no task repo checked out (a hosted CI runner)")
+        scaffolded = (self.dest / "tests" / "conftest.py").read_text()
+        for conftest in repos:
+            with self.subTest(repo=conftest.parents[1].name):
+                self.assertEqual(scaffolded, conftest.read_text(), "update CONFTEST in new_tasks.py to match")
+
     def test_an_existing_dest_is_refused(self) -> None:
         out = subprocess.run([sys.executable, str(SCRIPT), "demo", "--dest", str(self.dest)], capture_output=True)
         self.assertNotEqual(out.returncode, 0)
