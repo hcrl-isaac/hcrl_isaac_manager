@@ -148,6 +148,18 @@ def wandb_checkpoints(url: str) -> dict[int, int]:
     return found
 
 
+def resume_warmup(url: str) -> int:
+    """Iterations an off-policy resume of the run collects before it updates (its cfg's resume warm-up), else 0."""
+    import wandb
+
+    head, _, run_id = url.partition("/runs/")
+    entity, project = head.rstrip("/").split("/")[-2:]
+    cfg = wandb.Api().run(f"{entity}/{project}/{run_id.split('/')[0]}").config.get("train_cfg", {})
+    if not str(cfg.get("class_name", "")).endswith("OffPolicyRunner"):
+        return 0
+    return int(cfg.get("resume_warmup_steps_per_env") or 0)
+
+
 def wait_checkpoint(url: str, after: int, deadline: float, poll_s: float = POLL_S) -> int | None:
     """The first checkpoint past ``after`` whose upload finished (its size held over one poll), or None."""
     seen: dict[int, int] = {}
@@ -257,10 +269,15 @@ def _move(
         sys.exit(f"[move] no new checkpoint in {wait_s / 60:g} min; the run keeps going and lease {target} stays held")
     if ckpt >= total:
         sys.exit(f"[move] the run reached its last checkpoint ({ckpt}/{total}); nothing left to move")
+    # an off-policy resume refills its replay buffer for `warmup` iterations on top of --max_iterations: keep the end
+    warmup = resume_warmup(url)
+    left = total - ckpt - warmup
+    if left <= 0:
+        sys.exit(f"[move] {total - ckpt} iterations are left, within the resume warm-up of {warmup}; nothing to move")
     print(f"[move] checkpoint model_{ckpt}.pt is on W&B; stopping the run", file=sys.stderr)
     if ev.cmd_stop(lease_id, holder, pools, keep_lease=target == lease_id) != 0:
         sys.exit(f"[move] the run did not stop cleanly; nothing relaunched (lease {target} stays held)")
-    resume = ["--load_run", url, "--checkpoint", f"model_{ckpt}.pt", "--max_iterations", str(total - ckpt)]
+    resume = ["--load_run", url, "--checkpoint", f"model_{ckpt}.pt", "--max_iterations", str(left)]
     rc, new_dir = relaunch(opts, script, [*drop_resume(args), *resume], target, wt)
     if rc != 0 or not new_dir:
         sys.exit(f"[move] the relaunch failed (status {rc}); resume by hand from model_{ckpt}.pt of {url}")
@@ -272,6 +289,11 @@ def _move(
         print(f"[move] the relaunch has not trained past {ckpt} ({verdict}); check {new_dir}/log", file=sys.stderr)
         return 1
     print(f"[move] moved: training past iteration {ckpt} on lease {target} (stage {new_dir})", file=sys.stderr)
+    if warmup:
+        print(
+            f"[move] it refills its replay buffer first: updates resume at iteration {ckpt + warmup}", file=sys.stderr
+        )
+    print(f"[move] the run continues as a new W&B run; its history up to {ckpt} stays in {url}", file=sys.stderr)
     return 0
 
 

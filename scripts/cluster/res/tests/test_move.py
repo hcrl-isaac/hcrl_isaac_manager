@@ -115,6 +115,7 @@ class PinTest(unittest.TestCase):
 class MoveTest(unittest.TestCase):
     def setUp(self) -> None:
         self.lease = SimpleNamespace(id="old", stages=["/s/a1"], stage="/s/a1", cpus=0)
+        self.warmup = 0
         self.files = {"pls_argv.json": json.dumps(LAUNCH), "log": LOG}
         patches = [
             mock.patch.object(move.ev, "_lease_card", lambda i, h, p: ("pool", "host", 0, "", "uuid")),
@@ -124,6 +125,7 @@ class MoveTest(unittest.TestCase):
             mock.patch.object(move, "pin_code", lambda st, tag: ("move-x", [])),
             mock.patch.object(move, "wandb_checkpoints", lambda url: {1000: 5}),
             mock.patch.object(move, "wait_checkpoint", lambda url, after, dl: 1250),
+            mock.patch.object(move, "resume_warmup", lambda url: self.warmup),
             mock.patch.object(move, "confirm", lambda st, past, dl: "ok"),
             mock.patch.object(move.ls, "is_cpu", lambda x: False),
         ]
@@ -161,6 +163,19 @@ class MoveTest(unittest.TestCase):
             self.stops.clear()
             self.assertEqual(move.cmd_move("old", "s", "c107-026:1", 60, 60, []), 0)
         self.assertEqual((order, self.stops, self.launches[0][3]), (["claim"], [False], "new"))
+
+    def test_an_off_policy_resume_keeps_its_end_despite_the_buffer_warm_up(self) -> None:
+        self.warmup = 500
+        self.assertEqual(move.cmd_move("old", "s", "same", 60, 60, []), 0)
+        args = self.launches[0][2]
+        self.assertEqual(args[args.index("--max_iterations") + 1], "1250", "3000 - 1250 - 500: ends at 3000 as before")
+
+    def test_no_budget_left_past_the_warm_up_stops_nothing(self) -> None:
+        self.warmup = 1750
+        with self.assertRaises(SystemExit) as ctx:
+            move.cmd_move("old", "s", "same", 60, 60, [])
+        self.assertIn("warm-up", str(ctx.exception.code))
+        self.assertEqual((self.stops, self.launches), ([], []))
 
     def test_refusals_leave_the_run_alone(self) -> None:
         cases = {
