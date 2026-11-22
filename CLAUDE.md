@@ -97,6 +97,8 @@ Project skills live in `.claude/skills/`. Use them rather than re-deriving the s
 - Judge a policy by `Metrics/*`, termination rates, task measures and cumulative reward, never by single reward
   terms, and compare against a do-nothing policy. A metric pinned at a constant while reward rises is a bug.
 - Before choosing any clip, clamp, floor or gate threshold, print the quantity's percentiles and put the bound in a gap.
+- Seed a recipe only once its settings are the task's cfg defaults (no launch overrides), and trust a seed only after
+  diffing its dumped env_cfg against the reference run's: recorder passes can overwrite W&B `pls_refs`.
 - A launched run that dies looks like a healthy one. Watch every run for progress, failure *and* stall (log mtime
   older than ~15 min): `scripts/tools/watch_run.sh` does this; the `launch-run` skill covers it.
 
