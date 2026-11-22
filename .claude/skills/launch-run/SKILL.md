@@ -44,22 +44,25 @@ pls run --on <target> [--detach] -- train --task <id> --run_name <delta> --run_g
   When several Kit processes start at once, give each its own `TMPDIR`, `XDG_CACHE_HOME` and `OMNI_CACHE_DIR`, and
   stagger launches about 20 s apart (concurrent URDF imports race).
 
-## 4. Confirm it started
+## 4. Confirm it started, arm the recorder and the watchdog
 
-A launcher returning a log path is not a start. Wait for the first `Learning iteration` line in that log (or the W&B
-run's first logged iteration), then read the first few iterations for NaNs or a pinned metric.
+A `--detach` train launch on a card does all three: it waits for the first `Learning iteration`, arms an async
+recorder for an `--eval`/`--video async` run (on a pool with `recorder_root`), then stays on
+`scripts/tools/watch_run.sh` until the run ends. Run that launch in the background (Bash `run_in_background`) so its
+exit wakes you; a `NO RECORDER` line means you arm one by hand. Read the first few iterations for NaNs or a pinned
+metric.
 
-## 5. Arm the watchdog
+Everything else (`--batch`, `--on ray`, an attached run) gets its watchdog by hand, also in the background:
 
 ```bash
 scripts/tools/watch_run.sh [--wandb <entity/project/run_id>] <label> <log> <target-iters> [stall_min] [report_every]
 ```
 
-`<log>` is a local path, `user@host:/path` when the log is written on another host, or `ray:<job_id>`. It exits
-FINISHED, STALLED, DEAD, FAILED or BLIND. Run it in the background so it wakes you when it exits, and treat every
-exit except FINISHED as needing a look: check the log and the card (`pls res status`) before deciding it was noise.
+`<log>` is a local path, `user@host:/path` when the log is written on another host, or `ray:<job_id>`. Either way
+it exits FINISHED, STALLED, DEAD, FAILED or BLIND; treat every exit except FINISHED as needing a look: check the log
+and the card (`pls res status`) before deciding it was noise.
 
-## 6. When it ends
+## 5. When it ends
 
 Confirm from the log that the final checkpoint was saved, not just that the process exited. Stop a run you own with
 `pls run --stop <lease>` or `pls jobs --on <cluster> stop <job>`, then check the card drained (Isaac keeps its VRAM
