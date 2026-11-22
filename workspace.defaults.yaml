@@ -24,3 +24,6 @@ available_projects:
   - name: mbrl
     description: Model-based RL tasks (SuperMimic world-model tracking, world-model BFM)
     default: false
+  - name: rlzero
+    description: RLZero video imitation (zero-shot BFM behaviors from language or video; pulls hcrl_vlm)
+    default: false
