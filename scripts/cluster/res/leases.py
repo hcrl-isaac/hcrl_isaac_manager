@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import getpass
 import json
+import sys
 import time
 import uuid
 from collections.abc import Collection, Iterator
@@ -68,6 +70,11 @@ class Lease:
         cpus: Cores a CPU-only run holds (``pls run --cpus``; 0 for a card lease).
         cores: The box's cores that run is pinned to, as a taskset list (e.g. ``40-63``).
         batch_pid: Local process of the `pls run --jobs` batch working through the lease (0 = none).
+        runner_pid: Local `pls run` process whose run is on the lease's card (0 = none): a card reads free while that
+            run stages and boots, so this, not the card, says the lease is in use.
+        shared: Claimed with ``--share`` on a card other processes use: theirs are no conflict, and only the
+            holder's own processes keep the lease alive.
+        neighbors: PIDs on a shared card at the claim: another session's run under the same login is no activity.
     """
 
     id: str
@@ -92,6 +99,9 @@ class Lease:
     cores: str = ""
     stages: list[str] = field(default_factory=list)
     batch_pid: int = 0
+    runner_pid: int = 0
+    shared: bool = False
+    neighbors: list[str] = field(default_factory=list)
 
 
 def is_cpu(lease: Lease) -> bool:
@@ -108,6 +118,22 @@ def batch_live(lease: Lease) -> bool:
     except OSError:
         return False
     return any(a == b"--jobs" or a.startswith(b"--jobs=") for a in argv)
+
+
+def runner_live(lease: Lease) -> bool:
+    """True while the `pls run` that started a run on the lease is alive; a dead or reused pid does not count."""
+    if not lease.runner_pid:
+        return False
+    try:
+        argv = Path(f"/proc/{lease.runner_pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return False
+    return any(a.endswith(b"evaluate.py") for a in argv)
+
+
+def in_use(lease: Lease) -> bool:
+    """True when a run may be on the lease: a live `pls run` or batch, or a detached run's recorded stage."""
+    return runner_live(lease) or batch_live(lease) or bool(lease.stage or lease.stages)
 
 
 @dataclass
@@ -237,6 +263,13 @@ def settle(
     return ended
 
 
+def check_holder(holder: str, pools: list) -> None:
+    """Exit when ``holder`` is a login (this machine's, or a pool's) rather than a session name."""
+    logins = {getpass.getuser(), *(str(p.settings["user"]) for p in pools if p.settings.get("user"))}
+    if holder.strip().lower() in {x.lower() for x in logins}:
+        sys.exit(f"[res] --holder {holder!r} is a login, not a session: name the session that holds the card")
+
+
 def card_key(card: Card) -> str:
     """Unique key of a card: its uuid, or host:job:index (SLURM jobs on one node can share an index)."""
     return card.uuid or f"{card.host}:{card.job}:{card.index}"
@@ -355,6 +388,9 @@ def _activity(lease: Lease, card: Card) -> bool | None:
     """True if the holder's activity shows on the card, False if it is idle, None if it cannot be told."""
     if card.state == "unknown":
         return None
+    if lease.shared:  # the card's other users keep it busy: only the holder's own processes are its activity
+        lease.conflict = False
+        return any(p.user == lease.owner and str(p.pid) not in lease.neighbors for p in card.procs)
     if card.procs:
         # only attributable processes can show a conflict; unattributed ones (Ray, "?") are not evidence
         users = {p.user for p in card.procs} - {"?"}
@@ -448,10 +484,18 @@ def reconcile(
 
 
 def new_lease(
-    card: Card, report: Report, holder: str, note: str, for_s: float, run: str = "", previous: str = ""
+    card: Card,
+    report: Report,
+    holder: str,
+    note: str,
+    for_s: float,
+    run: str = "",
+    previous: str = "",
+    shared: bool = False,
 ) -> Lease:
     """Lease on a card, held by `holder` (attributed to the report's OS user); a card already in use (adopted) starts
-    active, so its run renews the lease and its end releases it."""
+    active, so its run renews the lease and its end releases it. A shared lease starts unused: the card's use is
+    someone else's."""
     now = time.time()
     return Lease(
         id=uuid.uuid4().hex[:6],
@@ -464,9 +508,11 @@ def new_lease(
         note=note,
         created=now,
         expires=now + for_s if for_s else 0.0,
-        last_active=now if card.state in ("busy", "held") else 0.0,
+        last_active=now if card.state in ("busy", "held") and not shared else 0.0,
         run=run,
         previous=previous,
+        shared=shared,
+        neighbors=[str(p.pid) for p in card.procs] if shared else [],
     )
 
 

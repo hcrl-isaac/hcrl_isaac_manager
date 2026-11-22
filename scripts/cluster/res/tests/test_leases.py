@@ -448,6 +448,58 @@ class CommandTest(CommandBase):
         self.assertIn("no node has 2 free cards", str(ctx.exception.code))
         self.assertEqual(self.stored(), [])
 
+    def test_a_multi_gpu_claim_runs_on_the_holders_own_idle_leases_there(self) -> None:
+        node = [card(host="gpub2", index=i, job="8") for i in range(3)]
+        self.cards = node
+        for i in range(3):
+            self.claim(f"gpub2:8:{i}", holder="t")
+        self.transfer(*(f"gpub2:8:{i}" for i in range(3)), holder="t", to="s")
+        before = {x.id for x in self.leases()}
+        args = argparse.Namespace(
+            cards=[], any=True, count=3, within="gpub2:8", one_host=True, min_free_gb=0, pool=None,
+            holder="s", note="", for_=0.0,
+        )  # fmt: skip
+        taken, _ = res.claim(args, self.pools)
+        self.assertEqual({lease.id for lease, _, _ in taken}, before, "no new lease: the transferred ones are used")
+        self.assertEqual(args.reused, before)
+        self.assertEqual(len(self.leases()), 3)
+
+    def test_a_multi_gpu_claim_skips_own_leases_whose_run_is_still_booting(self) -> None:
+        self.cards = [card(host="gpub2", index=i, job="8") for i in range(2)]  # free: the run has not shown yet
+        for i in range(2):
+            self.claim(f"gpub2:8:{i}")
+        runner = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "evaluate.py"])
+        try:
+            with ls.locked_store() as leases:
+                for x in leases:
+                    x.runner_pid = runner.pid
+            with self.assertRaises(SystemExit) as ctx:
+                self.claim(any=True, count=2, within="gpub2:8", one_host=True)
+            self.assertIn("no node has 2 free cards", str(ctx.exception.code), "a live run's leases are not reused")
+        finally:
+            runner.kill()
+            runner.wait()
+        with ls.locked_store() as leases:
+            leases[0].stages = ["/stage/detached"]  # a detached run records its stage instead
+        with self.assertRaises(SystemExit):
+            self.claim(any=True, count=2, within="gpub2:8", one_host=True)
+        with ls.locked_store() as leases:
+            leases[0].stages = []
+        self.claim(any=True, count=2, within="gpub2:8", one_host=True)  # the run is gone: both reused
+        self.assertEqual(len(self.leases()), 2)
+
+    def test_a_multi_gpu_claim_skips_own_leases_with_a_run_and_others_leases(self) -> None:
+        self.cards = [card(host="gpub2", index=0, job="8"), card(host="gpub2", index=1, job="8")]
+        self.claim("gpub2:8:0", holder="s")
+        self.claim("gpub2:8:1", holder="t")
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim(any=True, count=2, within="gpub2:8", one_host=True)
+        self.assertIn("no node has 2 free cards", str(ctx.exception.code))
+        self.cards = [card(host="gpub2", index=0, job="8", state="busy"), card(host="gpub2", index=1, job="8")]
+        with self.assertRaises(SystemExit):
+            self.claim(any=True, count=2, within="gpub2:8", one_host=True)
+        self.assertEqual(len(self.leases()), 2)
+
     def test_release_accepts_host_job_gpu(self) -> None:
         self.cards = [card(host="gpub1", index=0, job="7")]
         self.claim("gpub1:7:0")
@@ -546,6 +598,87 @@ class CommandTest(CommandBase):
         with self.assertRaises(SystemExit):
             self.claim("mckennie:3", adopt=True)
         self.assertEqual(self.stored(), ["mckennie:0"])
+
+    def test_a_login_is_no_holder(self) -> None:
+        import getpass
+
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim("mckennie:0", holder=getpass.getuser())
+        self.assertIn("is a login", str(ctx.exception.code))
+        self.pools = [Pool("larg-a100", "ssh", {"user": "labuser"})]
+        with self.assertRaises(SystemExit):
+            self.claim("mckennie:0", holder="LabUser")
+        self.assertEqual(self.stored(), [])
+        self.claim("mckennie:0")
+        with self.assertRaises(SystemExit) as ctx:
+            self.transfer("mckennie:0", to="labuser")
+        self.assertIn("is a login", str(ctx.exception.code))
+        self.assertEqual([x.holder for x in self.leases()], ["s"])
+
+    def test_share_needs_min_free_gb(self) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim("mckennie:2", share=True)
+        self.assertIn("--min-free-gb", str(ctx.exception.code))
+        self.assertEqual(self.stored(), [])
+
+    def test_share_takes_a_busy_card_with_room_and_starts_unused(self) -> None:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.claim("mckennie:2", share=True, min_free_gb=10)
+        self.assertIn("shared", out.getvalue())
+        [lease] = self.leases()
+        self.assertTrue(lease.shared)
+        self.assertEqual(lease.last_active, 0, "the card's use is someone else's")
+
+    def test_share_refuses_a_busy_card_without_room(self) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim("mckennie:2", share=True, min_free_gb=100)
+        self.assertIn("under --min-free-gb", str(ctx.exception.code))
+        self.assertEqual(self.stored(), [])
+
+    def test_share_any_takes_a_free_card_first(self) -> None:
+        self.claim(any=True, share=True, min_free_gb=10)
+        [lease] = self.leases()
+        self.assertNotEqual(lease.card, "mckennie:2")
+        self.assertFalse(lease.shared)
+        self.cards = [card(index=2, state="busy")]
+        self.claim(any=True, share=True, min_free_gb=10, holder="b")
+        self.assertIn("mckennie:2", self.stored())
+
+    def test_share_never_takes_a_card_another_session_leased(self) -> None:
+        self.claim("mckennie:2", share=True, min_free_gb=10)
+        with self.assertRaises(SystemExit) as ctx:
+            self.claim("mckennie:2", share=True, min_free_gb=10, holder="b")
+        self.assertIn("is leased", str(ctx.exception.code))
+
+    def test_a_shared_lease_lives_on_the_holders_processes_only(self) -> None:
+        theirs = card(index=2, state="busy", user="other")
+        lease = ls.new_lease(theirs, report(theirs), "s", "", 0, shared=True)
+        ls.reconcile([lease], [report(theirs)], now=T0)
+        self.assertFalse(lease.conflict, "other users on a shared card are expected")
+        self.assertEqual(lease.last_active, 0, "their run is not the holder's activity")
+        both = card(index=2, state="busy", user="other")
+        both.procs.append(Proc(2, 3000, "me"))
+        ls.reconcile([lease], [report(both)], now=T0 + MIN)
+        self.assertEqual(lease.last_active, T0 + MIN)
+        later = T0 + MIN
+        ls.reconcile([lease], [report(theirs)], now=later + MIN)
+        released = ls.reconcile([lease], [report(theirs)], now=later + 32 * MIN)
+        self.assertEqual([x.id for x, _ in released], [lease.id], "its own run ended: the lease lapses")
+
+    def test_a_neighbor_under_the_same_login_is_not_the_holders_activity(self) -> None:
+        same = card(index=2, state="busy", user="me")  # another session's run, same OS user as the holder
+        lease = ls.new_lease(same, report(same), "s", "", 0, shared=True)
+        self.assertEqual(lease.neighbors, ["1"])
+        ls.reconcile([lease], [report(same)], now=T0)
+        self.assertEqual(lease.last_active, 0, "the neighbor's run keeps nothing alive")
+        released = ls.reconcile([lease], [report(same)], now=T0 + 32 * MIN)
+        self.assertEqual([x.id for x, _ in released], [lease.id])
+        lease = ls.new_lease(same, report(same), "s", "", 0, shared=True)
+        mine = card(index=2, state="busy", user="me")
+        mine.procs.append(Proc(9, 3000, "me"))
+        ls.reconcile([lease], [report(mine)], now=T0 + MIN)
+        self.assertEqual(lease.last_active, T0 + MIN, "a process started after the claim is the holder's run")
 
     def test_a_card_you_hold_names_its_lease_instead_of_waiting(self) -> None:
         self.claim("mckennie:0")
