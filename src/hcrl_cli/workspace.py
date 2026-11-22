@@ -123,11 +123,13 @@ def install() -> bool:
     _section("Workspace packages")
     retired = run([VENV_PY, "scripts/resolve_workspace.py", "--retire-renamed"], capture=True, check=False)
     retired = set(retired.stdout.split())
-    # a package that is not checked out (hcrl_sim2real or holosoma without a project needing it) is passed over
+    # a package that is not checked out (hcrl_sim2real, hcrl_vlm or holosoma without a project needing it) is passed
+    # over; hcrl_vlm precedes the task repos that depend on it
     packages = [
         "resources/hcrl_isaaclab",
         "resources/robot_rl",
         "resources/hcrl_sim2real",
+        "resources/hcrl_vlm",
         *sorted(glob.glob("resources/*_tasks")),
         *sorted(glob.glob("resources/*_robots")),
         "resources/holosoma/src/holosoma_retargeting",
