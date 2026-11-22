@@ -164,18 +164,11 @@ class MoveTest(unittest.TestCase):
             self.assertEqual(move.cmd_move("old", "s", "c107-026:1", 60, 60, []), 0)
         self.assertEqual((order, self.stops, self.launches[0][3]), (["claim"], [False], "new"))
 
-    def test_an_off_policy_resume_keeps_its_end_despite_the_buffer_warm_up(self) -> None:
+    def test_an_off_policy_resume_keeps_every_update_it_had_left(self) -> None:
         self.warmup = 500
         self.assertEqual(move.cmd_move("old", "s", "same", 60, 60, []), 0)
         args = self.launches[0][2]
-        self.assertEqual(args[args.index("--max_iterations") + 1], "1250", "3000 - 1250 - 500: ends at 3000 as before")
-
-    def test_no_budget_left_past_the_warm_up_stops_nothing(self) -> None:
-        self.warmup = 1750
-        with self.assertRaises(SystemExit) as ctx:
-            move.cmd_move("old", "s", "same", 60, 60, [])
-        self.assertIn("warm-up", str(ctx.exception.code))
-        self.assertEqual((self.stops, self.launches), ([], []))
+        self.assertEqual(args[args.index("--max_iterations") + 1], "1750", "3000 - 1250; the warm-up comes on top")
 
     def test_refusals_leave_the_run_alone(self) -> None:
         cases = {

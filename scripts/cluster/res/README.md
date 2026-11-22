@@ -165,8 +165,8 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   cores, other scripts, and runs that shipped uncommitted changes, whose code cannot be rebuilt.
   What a move costs: the run continues as a new W&B run from the checkpoint, so its history, evals and videos split
   across two W&B runs (the move prints both); an off-policy run (SAC, FB-CPR) restarts with an empty replay buffer and
-  first runs its cfg's `resume_warmup_steps_per_env` iterations of collection, which the move takes out of
-  `--max_iterations` so the run still ends at its original iteration.
+  first runs its cfg's `resume_warmup_steps_per_env` iterations of collection on top of its remaining iterations: it
+  keeps every training update it had left and ends that many iterations later.
 
 - The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
   several jobs), `--on any`, `--on <pool>` or `--on lease:<id>`. A busy card is refused (`--wait [limit]` waits for

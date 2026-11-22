@@ -269,11 +269,10 @@ def _move(
         sys.exit(f"[move] no new checkpoint in {wait_s / 60:g} min; the run keeps going and lease {target} stays held")
     if ckpt >= total:
         sys.exit(f"[move] the run reached its last checkpoint ({ckpt}/{total}); nothing left to move")
-    # an off-policy resume refills its replay buffer for `warmup` iterations on top of --max_iterations: keep the end
+    # an off-policy resume refills its replay buffer for `warmup` iterations on top of --max_iterations, so the run
+    # keeps every training update it had left and ends `warmup` iterations later
     warmup = resume_warmup(url)
-    left = total - ckpt - warmup
-    if left <= 0:
-        sys.exit(f"[move] {total - ckpt} iterations are left, within the resume warm-up of {warmup}; nothing to move")
+    left = total - ckpt
     print(f"[move] checkpoint model_{ckpt}.pt is on W&B; stopping the run", file=sys.stderr)
     if ev.cmd_stop(lease_id, holder, pools, keep_lease=target == lease_id) != 0:
         sys.exit(f"[move] the run did not stop cleanly; nothing relaunched (lease {target} stays held)")
@@ -290,8 +289,10 @@ def _move(
         return 1
     print(f"[move] moved: training past iteration {ckpt} on lease {target} (stage {new_dir})", file=sys.stderr)
     if warmup:
+        end = total + warmup
         print(
-            f"[move] it refills its replay buffer first: updates resume at iteration {ckpt + warmup}", file=sys.stderr
+            f"[move] it refills its replay buffer first: updates resume at {ckpt + warmup}, and it ends at {end}",
+            file=sys.stderr,
         )
     print(f"[move] the run continues as a new W&B run; its history up to {ckpt} stays in {url}", file=sys.stderr)
     return 0
