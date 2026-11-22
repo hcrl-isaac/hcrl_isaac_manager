@@ -1,0 +1,148 @@
+"""Unit tests for `pls run --move` (run all script tests: pls test-scripts)."""
+
+import json
+import sys
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+RES = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(RES))
+import move
+
+LAUNCH = [
+    "--holder", "s", "--on", "c112-022:3", "--wait", "--detach", "--stall", "45m", "--wt", "agile",
+    "hcrl_isaaclab:scripts/train.py", "--", "--task", "Crab-Agile-v0", "--run_name", "slot-sgs",
+    "--max_iterations", "3000",
+]  # fmt: skip
+LOG = "\x1b[1m wandb: View run at https://wandb.ai/ent/proj/runs/ab12cd34\n Learning iteration 1200/3000\n"
+
+
+class HelperTest(unittest.TestCase):
+    def test_split_launch_finds_the_script_before_the_dashes(self) -> None:
+        opts, script, args = move.split_launch(LAUNCH)
+        self.assertEqual(script, "hcrl_isaaclab:scripts/train.py")
+        self.assertEqual(args[:2], ["--task", "Crab-Agile-v0"])
+        self.assertEqual(opts[-2:], ["--wt", "agile"])
+
+    def test_card_selection_and_detach_go_the_rest_stays_in_order(self) -> None:
+        opts, _, _ = move.split_launch(LAUNCH)
+        self.assertEqual(move.drop_card_selection(opts), ["--holder", "s", "--stall", "45m", "--wt", "agile"])
+        self.assertEqual(move.drop_card_selection(["--any", "--pool", "a", "--wait", "4h", "--x"]), ["--x"])
+
+    def test_previous_resume_arguments_are_dropped_in_both_forms(self) -> None:
+        args = [
+            "--task",
+            "T",
+            "--load_run",
+            "u",
+            "--checkpoint=model_5.pt",
+            "--resume",
+            "True",
+            "--max_iterations",
+            "9",
+        ]
+        self.assertEqual(move.drop_resume(args), ["--task", "T"])
+
+    def test_progress_reads_the_last_url_and_iteration_through_color_codes(self) -> None:
+        self.assertEqual(move.progress(LOG), ("https://wandb.ai/ent/proj/runs/ab12cd34", 1200, 3000))
+        self.assertIsNone(move.progress("Learning iteration 3/10"), "no W&B run yet")
+
+    def test_a_checkpoint_counts_once_its_size_holds_over_a_poll(self) -> None:
+        sizes = iter([{1000: 5}, {1000: 5, 1200: 10}, {1000: 5, 1200: 20}, {1000: 5, 1200: 20}])
+        with (
+            mock.patch.object(move, "wandb_checkpoints", lambda url: next(sizes)),
+            mock.patch.object(move.time, "sleep"),
+        ):
+            self.assertEqual(move.wait_checkpoint("u", 1000, move.time.monotonic() + 60), 1200)
+
+    def test_no_new_checkpoint_before_the_deadline_gives_none(self) -> None:
+        with mock.patch.object(move, "wandb_checkpoints", lambda url: {1000: 5}), mock.patch.object(move.time, "sleep"):
+            self.assertIsNone(move.wait_checkpoint("u", 1000, move.time.monotonic() - 1))
+
+
+class MoveTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.lease = SimpleNamespace(id="old", stages=["/s/a1"], stage="/s/a1", cpus=0)
+        self.files = {"pls_argv.json": json.dumps(LAUNCH), "log": LOG}
+        patches = [
+            mock.patch.object(move.ev, "_lease_card", lambda i, h, p: ("pool", "host", 0, "", "uuid")),
+            mock.patch.object(move.ev, "make_target", lambda *a: SimpleNamespace(kind="ssh")),
+            mock.patch.object(move.ev, "Stage", lambda t: SimpleNamespace(t=t, dir="")),
+            mock.patch.object(move, "read_stage", lambda st, rel: self.files.get(rel)),
+            mock.patch.object(move, "code_drift", lambda st: []),
+            mock.patch.object(move, "wandb_checkpoints", lambda url: {1000: 5}),
+            mock.patch.object(move, "wait_checkpoint", lambda url, after, dl: 1250),
+            mock.patch.object(move, "confirm", lambda st, past, dl: "ok"),
+            mock.patch.object(move.ls, "is_cpu", lambda x: False),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        store = mock.MagicMock()
+        store.__enter__.return_value = [self.lease]
+        lock = mock.patch.object(move.ls, "locked_store", lambda: store)
+        lock.start()
+        self.addCleanup(lock.stop)
+        self.stops, self.launches = [], []
+        stop = mock.patch.object(
+            move.ev, "cmd_stop", lambda i, h, p, keep_lease=False: self.stops.append(keep_lease) or 0
+        )
+        go = mock.patch.object(
+            move, "relaunch", lambda o, s, a, lid: self.launches.append((o, s, a, lid)) or (0, "/s/b2")
+        )
+        for p in (stop, go):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_a_same_card_move_keeps_the_lease_and_resumes_with_the_remaining_budget(self) -> None:
+        self.assertEqual(move.cmd_move("old", "s", "same", 60, 60, []), 0)
+        self.assertEqual(self.stops, [True], "the card stays leased between stop and relaunch")
+        [(_, script, args, lease_id)] = self.launches
+        self.assertEqual((script, lease_id), ("hcrl_isaaclab:scripts/train.py", "old"))
+        self.assertEqual(args[-6:], ["--load_run", "https://wandb.ai/ent/proj/runs/ab12cd34", "--checkpoint",
+                                     "model_1250.pt", "--max_iterations", "1750"])  # fmt: skip
+        self.assertEqual(args.count("--max_iterations"), 1, "the launch's own budget is replaced, not doubled")
+
+    def test_a_move_elsewhere_claims_the_target_before_stopping_and_releases_the_old_card(self) -> None:
+        order = []
+        with mock.patch.object(move, "target_lease", lambda to, i, h, p: order.append("claim") or "new"):
+            self.stops.clear()
+            self.assertEqual(move.cmd_move("old", "s", "c107-026:1", 60, 60, []), 0)
+        self.assertEqual((order, self.stops, self.launches[0][3]), (["claim"], [False], "new"))
+
+    def test_refusals_leave_the_run_alone(self) -> None:
+        cases = {
+            "predates --move": lambda: self.files.pop("pls_argv.json"),
+            "train.py": lambda: self.files.update({"pls_argv.json": json.dumps(["--holder", "s", "probe.py", "--"])}),
+            "not logged": lambda: self.files.update({"log": "booting"}),
+        }
+        for says, make in cases.items():
+            with self.subTest(says=says):
+                saved = dict(self.files)
+                make()
+                with self.assertRaises(SystemExit) as ctx:
+                    move.cmd_move("old", "s", "same", 60, 60, [])
+                self.assertIn(says, str(ctx.exception.code))
+                self.assertEqual((self.stops, self.launches), ([], []))
+                self.files.clear()
+                self.files.update(saved)
+
+    def test_changed_code_is_refused(self) -> None:
+        drift = mock.patch.object(
+            move, "code_drift", lambda st: ["ssti_tasks ran 1234abcd, its worktree is at 9999ffff"]
+        )
+        with drift, self.assertRaises(SystemExit) as ctx:
+            move.cmd_move("old", "s", "same", 60, 60, [])
+        self.assertIn("code changed", str(ctx.exception.code))
+        self.assertEqual(self.stops, [])
+
+    def test_no_checkpoint_in_time_stops_nothing(self) -> None:
+        with mock.patch.object(move, "wait_checkpoint", lambda url, after, dl: None), self.assertRaises(SystemExit):
+            move.cmd_move("old", "s", "same", 60, 60, [])
+        self.assertEqual((self.stops, self.launches), ([], []))
+
+
+if __name__ == "__main__":
+    unittest.main()

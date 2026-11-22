@@ -150,6 +150,13 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   lease. A lease that records no run (one taken before `--stop` existed) is just released.
   `--keep-lease` keeps the card leased once the run is gone, so a relaunch (`pls run --on lease:<id>`) needs no
   reclaim and the card is never unheld in between. Like any lease it lapses after 30 min idle, counted from the stop.
+- `pls run --move <lease> --to <same|lease:<id>|host:gpu> --holder <you>` moves a detached `train.py` run, e.g. off a
+  node whose hold ends: it claims the target first, waits (`--wait`, 30 min) for a checkpoint newer than any on the
+  run's W&B run, stops the run (keeping the lease when the card stays the same), relaunches it detached with the same
+  `pls run` options and resume arguments (`--load_run <its W&B run> --checkpoint model_<k>.pt --max_iterations
+  <total - k>`), and waits (`--verify`, 30 min) for a learning iteration past k. It refuses runs launched before it
+  existed (no `pls_argv.json` in the stage), runs on several cards or cores, other scripts, and runs whose worktree
+  commits changed since the launch, since a relaunch would then train other code.
 
 - The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
   several jobs), `--on any`, `--on <pool>` or `--on lease:<id>`. A busy card is refused (`--wait [limit]` waits for
