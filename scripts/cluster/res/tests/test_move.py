@@ -1,6 +1,7 @@
 """Unit tests for `pls run --move` (run all script tests: pls test-scripts)."""
 
 import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -112,6 +113,15 @@ class PinTest(unittest.TestCase):
         self.assertIn("uncommitted", str(ctx.exception.code))
 
 
+class RelaunchTest(unittest.TestCase):
+    def test_the_relaunch_returns_at_start_since_the_move_confirms_it(self) -> None:
+        out = subprocess.CompletedProcess([], 0, "", "[res] started detached on h:gpu0 (stage /s/b2)\n")
+        with mock.patch.object(move.subprocess, "run", lambda cmd, **kw: self.__dict__.update(cmd=cmd) or out):
+            self.assertEqual(move.relaunch(["--holder", "s"], "train.py", ["--task", "T"], "L", ""), (0, "/s/b2"))
+        i = self.cmd.index("train.py")
+        self.assertIn("--no-watch", self.cmd[:i])
+
+
 class MoveTest(unittest.TestCase):
     def setUp(self) -> None:
         self.lease = SimpleNamespace(id="old", stages=["/s/a1"], stage="/s/a1", cpus=0)
@@ -144,7 +154,12 @@ class MoveTest(unittest.TestCase):
         go = mock.patch.object(
             move, "relaunch", lambda o, s, a, lid, wt: self.launches.append((o, s, a, lid, wt)) or (0, "/s/b2")
         )
-        for p in (stop, go):
+        self.watched, self.armed, self.verdict = [], [], 0
+        watch = mock.patch.object(
+            move.follow, "watch", lambda st, run, tot, lbl: self.watched.append((run, tot)) or self.verdict
+        )
+        arm = mock.patch.object(move.follow, "arm_recorder", lambda run, h, wt, pools: self.armed.append(run) or "a40")
+        for p in (stop, go, watch, arm):
             p.start()
             self.addCleanup(p.stop)
 
@@ -156,6 +171,22 @@ class MoveTest(unittest.TestCase):
         self.assertEqual(args[-6:], ["--load_run", "https://wandb.ai/ent/proj/runs/ab12cd34", "--checkpoint",
                                      "model_1250.pt", "--max_iterations", "1750"])  # fmt: skip
         self.assertEqual(args.count("--max_iterations"), 1, "the launch's own budget is replaced, not doubled")
+
+    def test_the_moved_run_is_watched_to_its_end_unless_no_watch(self) -> None:
+        self.verdict = 7
+        self.assertEqual(move.cmd_move("old", "s", "same", 60, 60, []), 7, "the watch's verdict is the move's exit")
+        self.assertEqual(self.watched, [("ent/proj/ab12cd34", 3000)])
+        self.assertEqual(move.cmd_move("old", "s", "same", 60, 60, [], watch=False), 0)
+        self.assertEqual(len(self.watched), 1)
+        self.assertEqual(self.armed, [], "an in-process video run needs no recorder")
+
+    def test_a_moved_async_run_gets_a_recorder_for_its_new_wandb_run(self) -> None:
+        self.files["pls_argv.json"] = json.dumps([*LAUNCH, "--video", "async"])
+        move.cmd_move("old", "s", "same", 60, 60, [], watch=False)
+        self.assertEqual(self.armed, ["ent/proj/ab12cd34"])
+        self.files["pls_argv.json"] = json.dumps(["--no-recorder", *LAUNCH, "--video", "async"])
+        move.cmd_move("old", "s", "same", 60, 60, [], watch=False)
+        self.assertEqual(len(self.armed), 1, "--no-recorder on the launch carries over")
 
     def test_a_move_elsewhere_claims_the_target_before_stopping_and_releases_the_old_card(self) -> None:
         order = []

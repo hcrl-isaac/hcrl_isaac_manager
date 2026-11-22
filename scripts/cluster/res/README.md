@@ -175,6 +175,9 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   across two W&B runs (the move prints both); an off-policy run (SAC, FB-CPR) restarts with an empty replay buffer and
   first runs its cfg's `resume_warmup_steps_per_env` iterations of collection on top of its remaining iterations: it
   keeps every training update it had left and ends that many iterations later.
+  Once the relaunch trains, the new W&B run of an async run (`--eval`/`--video async`) gets its own recorder as a
+  launch does (not with `--no-recorder` on the launch), and the move stays on the moved run's watch to its end, so run
+  it in the background; `--no-watch` returns once the relaunch trains.
 
 - The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
   several jobs), `--on any`, `--on <pool>` or `--on lease:<id>`. A busy card is refused (`--wait [limit]` waits for

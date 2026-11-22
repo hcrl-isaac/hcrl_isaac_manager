@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import evaluate as ev
+import follow
 import leases as ls
 from inventory import Pool
 
@@ -195,7 +196,7 @@ def relaunch(opts: list[str], script: str, args: list[str], lease_id: str, wt: s
     """Start the run detached on ``lease_id`` (from worktree set ``wt``) through `pls run`'s own path; its status and
     new stage dir."""
     pinned = ["--wt", wt] if wt else []
-    argv = [*drop_card_selection(opts), *pinned, "--lease", lease_id, "--detach", script, "--", *args]
+    argv = [*drop_card_selection(opts), *pinned, "--lease", lease_id, "--detach", "--no-watch", script, "--", *args]
     out = subprocess.run([sys.executable, ev.__file__, *argv], capture_output=True, text=True)
     sys.stderr.write(out.stderr)
     found = STARTED.findall(out.stderr)
@@ -214,8 +215,10 @@ def confirm(stage: ev.Stage, past: int, deadline: float, poll_s: float = POLL_S)
     return "timeout"
 
 
-def cmd_move(lease_id: str, holder: str, to: str, wait_s: float, verify_s: float, pools: list[Pool]) -> int:
-    """Move the detached train.py run on ``lease_id`` to ``to`` from its next checkpoint.
+def cmd_move(
+    lease_id: str, holder: str, to: str, wait_s: float, verify_s: float, pools: list[Pool], watch: bool = True
+) -> int:
+    """Move the detached train.py run on ``lease_id`` to ``to`` from its next checkpoint, then watch it there.
 
     Args:
         lease_id: The lease the run holds (its id, or ``lease:<id>``).
@@ -224,9 +227,11 @@ def cmd_move(lease_id: str, holder: str, to: str, wait_s: float, verify_s: float
         wait_s: How long to wait for the next checkpoint before giving up (the run keeps going).
         verify_s: How long the relaunch has to train past that checkpoint.
         pools: Configured pools.
+        watch: Watch the moved run to its end, as a `pls run --detach` launch does.
 
     Returns:
-        0 once the relaunch trains past the checkpoint, 1 otherwise (each step says what was left).
+        The watch's verdict (0 once the moved run finished), or with no watch 0 once the relaunch trains past the
+        checkpoint; 1 when it does not (each step says what was left).
     """
     lease_id = lease_id.removeprefix("lease:")
     pool, host, gpu, job, uuid_ = ev._lease_card(lease_id, holder, pools)
@@ -250,16 +255,28 @@ def cmd_move(lease_id: str, holder: str, to: str, wait_s: float, verify_s: float
     url, _, total = state
     wt, made = pin_code(stage, f"move-{lease_id}-{int(time.time())}")
     try:
-        return _move(lease_id, holder, to, wait_s, verify_s, pools, opts, script, args, url, total, wt)
+        new = _move(lease_id, holder, to, wait_s, verify_s, pools, opts, script, args, url, total, wt)
     finally:
         unpin(made)
+    if new is None:
+        return 1
+    moved = progress(read_stage(new, "log") or "")
+    if not watch or moved is None:
+        return 0
+    run = follow.WANDB_RUN.search(moved[0])
+    print("[move] watching the moved run to its end (stopping this watch leaves the run running)", file=sys.stderr)
+    return follow.watch(new, "/".join(run.groups()) if run else "", moved[2], follow._run_name(args, new.dir))
 
 
 def _move(
     lease_id: str, holder: str, to: str, wait_s: float, verify_s: float, pools: list[Pool],
     opts: list[str], script: str, args: list[str], url: str, total: int, wt: str,
-) -> int:  # fmt: skip
-    """The move once the run is known movable and its code pinned: claim, wait, stop, relaunch, confirm."""
+) -> ev.Stage | None:  # fmt: skip
+    """The move once the run is known movable and its code pinned: claim, wait, stop, relaunch, confirm, recorder.
+
+    Returns:
+        The relaunched run's stage once it trains past the checkpoint, else None.
+    """
     have = wandb_checkpoints(url)
     target = target_lease(to, lease_id, holder, pools)
     print(f"[move] waiting up to {wait_s / 60:g} min for a checkpoint past {max(have, default=-1)} on {url}",
@@ -286,7 +303,7 @@ def _move(
     verdict = confirm(new, ckpt, time.monotonic() + verify_s)
     if verdict != "ok":
         print(f"[move] the relaunch has not trained past {ckpt} ({verdict}); check {new_dir}/log", file=sys.stderr)
-        return 1
+        return None
     print(f"[move] moved: training past iteration {ckpt} on lease {target} (stage {new_dir})", file=sys.stderr)
     if warmup:
         end = total + warmup
@@ -295,7 +312,21 @@ def _move(
             file=sys.stderr,
         )
     print(f"[move] the run continues as a new W&B run; its history up to {ckpt} stays in {url}", file=sys.stderr)
-    return 0
+    arm_moved_recorder(new, holder, wt, opts, args, pools)
+    return new
+
+
+def arm_moved_recorder(stage: ev.Stage, holder: str, wt: str, opts: list[str], args: list[str], pools: list) -> None:
+    """The new W&B run of a moved async run gets its own recorder, as its launch's did (none with --no-recorder)."""
+    if follow.eval_mode(args) != "async" or "--no-recorder" in opts:
+        return
+    moved = progress(read_stage(stage, "log") or "")
+    run = follow.WANDB_RUN.search(moved[0]) if moved else None
+    on = follow.arm_recorder("/".join(run.groups()), holder, wt, pools) if run else ""
+    if on:
+        print(f"[move] armed an async recorder for the new W&B run on {on}", file=sys.stderr)
+    else:
+        print("[move] NO RECORDER for the new W&B run: arm one by hand", file=sys.stderr)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -310,10 +341,11 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--wait", type=ev._duration, default=1800.0, help="how long to wait for the next checkpoint")
     p.add_argument("--verify", type=ev._duration, default=1800.0, help="how long the relaunch has to train past it")
+    p.add_argument("--no-watch", action="store_true", help="return once the moved run trains, with no watch")
     return p
 
 
 def main(argv: list[str], pools: list[Pool]) -> int:
     """Parse `pls run --move` and move the run."""
     a: Any = parser().parse_args(argv)
-    return cmd_move(a.move, a.holder, a.to, a.wait, a.verify, pools)
+    return cmd_move(a.move, a.holder, a.to, a.wait, a.verify, pools, watch=not a.no_watch)
