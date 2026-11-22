@@ -70,6 +70,9 @@ class Lease:
         cpus: Cores a CPU-only run holds (``pls run --cpus``; 0 for a card lease).
         cores: The box's cores that run is pinned to, as a taskset list (e.g. ``40-63``).
         batch_pid: Local process of the `pls run --jobs` batch working through the lease (0 = none).
+        shared: Claimed with ``--share`` on a card other processes use: theirs are no conflict, and only the
+            holder's own processes keep the lease alive.
+        neighbors: PIDs on a shared card at the claim: another session's run under the same login is no activity.
     """
 
     id: str
@@ -94,6 +97,8 @@ class Lease:
     cores: str = ""
     stages: list[str] = field(default_factory=list)
     batch_pid: int = 0
+    shared: bool = False
+    neighbors: list[str] = field(default_factory=list)
 
 
 def is_cpu(lease: Lease) -> bool:
@@ -364,6 +369,9 @@ def _activity(lease: Lease, card: Card) -> bool | None:
     """True if the holder's activity shows on the card, False if it is idle, None if it cannot be told."""
     if card.state == "unknown":
         return None
+    if lease.shared:  # the card's other users keep it busy: only the holder's own processes are its activity
+        lease.conflict = False
+        return any(p.user == lease.owner and str(p.pid) not in lease.neighbors for p in card.procs)
     if card.procs:
         # only attributable processes can show a conflict; unattributed ones (Ray, "?") are not evidence
         users = {p.user for p in card.procs} - {"?"}
@@ -457,10 +465,18 @@ def reconcile(
 
 
 def new_lease(
-    card: Card, report: Report, holder: str, note: str, for_s: float, run: str = "", previous: str = ""
+    card: Card,
+    report: Report,
+    holder: str,
+    note: str,
+    for_s: float,
+    run: str = "",
+    previous: str = "",
+    shared: bool = False,
 ) -> Lease:
     """Lease on a card, held by `holder` (attributed to the report's OS user); a card already in use (adopted) starts
-    active, so its run renews the lease and its end releases it."""
+    active, so its run renews the lease and its end releases it. A shared lease starts unused: the card's use is
+    someone else's."""
     now = time.time()
     return Lease(
         id=uuid.uuid4().hex[:6],
@@ -473,9 +489,11 @@ def new_lease(
         note=note,
         created=now,
         expires=now + for_s if for_s else 0.0,
-        last_active=now if card.state in ("busy", "held") else 0.0,
+        last_active=now if card.state in ("busy", "held") and not shared else 0.0,
         run=run,
         previous=previous,
+        shared=shared,
+        neighbors=[str(p.pid) for p in card.procs] if shared else [],
     )
 
 
