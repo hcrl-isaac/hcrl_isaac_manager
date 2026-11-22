@@ -336,8 +336,18 @@ def _choose(
     when nothing runs there. ``rank`` orders --any candidates before the packing (lower first).
     """
     adopt = getattr(args, "adopt", False)
+    share = getattr(args, "share", False)
     if args.any and adopt:
         sys.exit("[res] --adopt takes over named cards; name them (host:gpu ...)")
+    if share and adopt:
+        sys.exit("[res] --share runs beside a card's other users and --adopt takes their run over: pick one")
+    if share and args.min_free_gb <= 0:
+        sys.exit("[res] --share needs --min-free-gb: the free memory your run needs on a card others use")
+    need = args.min_free_gb * 1024
+
+    def shareable(c: Card) -> bool:  # in use by someone else, with room for this run beside them
+        return share and c.state in ("busy", "held") and c.mem_total - c.mem_used >= need
+
     if args.any:
         explicit_ray = {
             r.pool for _, r in seen if r.kind == "ray" and any(r.pool.startswith(s) for s in args.pool or [])
@@ -348,9 +358,9 @@ def _choose(
             if (ls.card_key(c) in yielding)
             or (ls.card_key(c) in own and c.state == "free")
             or (
-                c.state == "free"
+                (c.state == "free" or shareable(c))
                 and ls.card_key(c) not in taken
-                and c.mem_total - c.mem_used >= args.min_free_gb * 1024
+                and c.mem_total - c.mem_used >= need
                 and (r.kind != "ray" or r.pool in explicit_ray)  # Ray schedules onto its own free cards
             )
         ]
@@ -359,7 +369,16 @@ def _choose(
 
         def pack(cr: tuple[Card, Report]) -> tuple:
             c = cr[0]
-            return (rank(*cr), c.host not in in_use, per_host[c.host], -(c.mem_total - c.mem_used), c.host, c.index)
+            shared = c.state != "free"  # a shared card only once no free one fits
+            return (
+                rank(*cr),
+                shared,
+                c.host not in in_use,
+                per_host[c.host],
+                -(c.mem_total - c.mem_used),
+                c.host,
+                c.index,
+            )
 
         within = getattr(args, "within", "")
         if within:  # host or host:job: only that node's cards
@@ -389,8 +408,17 @@ def _choose(
             sys.exit(f"[res] {spec} is already yours; nothing claimed. Run on it with `--on lease:{taken[key].id}`")
         if key in taken:
             raise Busy(f"[res] {spec} is leased; move it with `pls res transfer {spec} --to <holder>`; nothing claimed")
-        if card.state != "free" and not (adopt and card.state in ("busy", "held")):
-            hint = "; pass --adopt to take over the run on it" if card.state in ("busy", "held") else ""
+        if card.state != "free" and not (adopt and card.state in ("busy", "held")) and not shareable(card):
+            if share and card.state in ("busy", "held"):
+                free_gb = (card.mem_total - card.mem_used) / 1024
+                raise Busy(
+                    f"[res] {spec} has {free_gb:.1f} GB free, under --min-free-gb {args.min_free_gb:g}; nothing claimed"
+                )
+            hint = (
+                "; pass --share --min-free-gb N to run beside its user, or --adopt to take over the run on it"
+                if card.state in ("busy", "held")
+                else ""
+            )
             raise Busy(f"[res] {spec} is {card.state}{hint}; nothing claimed")
         if key in {ls.card_key(c) for c, _ in chosen}:
             continue
@@ -493,7 +521,8 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
                         lease.created, lease.idle_since = now, 0.0
                         lease.expires = now + args.for_ if args.for_ else 0.0
                     else:
-                        lease = ls.new_lease(c, r, args.holder, args.note, args.for_, run=run)
+                        shared = getattr(args, "share", False) and c.state != "free"
+                        lease = ls.new_lease(c, r, args.holder, args.note, args.for_, run=run, shared=shared)
                         if stage := getattr(args, "stage", ""):
                             lease.stage, lease.stages = stage, [stage]
                         leases.append(lease)
@@ -526,7 +555,7 @@ def cmd_claim(args: argparse.Namespace, pools: list[Pool]) -> None:
     taken, windows = claim(args, pools)
     for lease, card, rep in taken:
         box = f", time box {int(args.for_ // 60)} min" if args.for_ else ""
-        verb = "adopted" if card.state != "free" else "claimed"
+        verb = "shared" if lease.shared else "adopted" if card.state != "free" else "claimed"
         verb = f"took over (from {lease.previous})" if lease.previous and card.state != "free" else verb
         run = f", run {lease.run}" if lease.run else ""
         print(f"{verb} {lease.id}: {lease.card} ({rep.pool}{box}{run}) for {lease.holder}")
@@ -759,7 +788,13 @@ def main() -> None:
     cl.add_argument("cards", nargs="*", help="cards as host:gpu, or host:job:gpu on a SLURM node")
     cl.add_argument("--any", action="store_true", help="pick free cards instead of naming them")
     cl.add_argument("--count", type=_positive_int, default=1, help="with --any: how many cards")
-    cl.add_argument("--min-free-gb", type=float, default=0, help="with --any: free memory each card needs")
+    cl.add_argument("--min-free-gb", type=float, default=0, help="free memory each card needs (--any, --share)")
+    cl.add_argument(
+        "--share",
+        action="store_true",
+        help="also take cards other processes use, when they have --min-free-gb free; the lease lives on your own"
+        " processes there",
+    )
     cl.add_argument("--pool", action="append", help="only probe/pick from these pools (prefix match)")
     cl.add_argument("--holder", required=True, help="who holds it (your session name)")
     cl.add_argument("--note", default="", help="what it is for")

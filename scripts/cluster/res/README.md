@@ -35,6 +35,7 @@ pls res release <id|host:gpu|host:job:gpu> --holder "<session>"         # --forc
 pls res transfer <id|host:gpu> --holder "<you>" --to "<session>"        # hand a lease over (--force: not yours)
 pls res extend <id|host:gpu> --holder "<you>" --for 30h                # a new time box from now (none: no box)
 pls res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take over a busy card's running run
+pls res claim box1:0 --share --min-free-gb 10 --holder "<session>"      # a small job beside a card's other user
 ```
 
 - A handover moves the lease (`transfer`, which records the previous holder) instead of releasing and reclaiming:
@@ -42,6 +43,10 @@ pls res claim gpub065:0 --adopt --run ni2cb9af --holder "<session>"     # take o
   whose run you take on when nobody leases it any more; it needs named cards and refuses leased or unknown ones. An
   adopted lease starts active, so its run renews it and the run's end releases it as usual. `--run` records the run
   a lease covers.
+- `--share` (claim or `pls run`) leases a card someone else's processes use when it has `--min-free-gb` free, for a
+  small job beside them; `--any --share` takes fully free cards first. It never shares a card another session
+  leased. Only the holder's own processes started after the claim keep a shared lease alive (a neighbor under the
+  same login does not), so it lapses like any idle lease once its run ends.
 - `release` refuses a lease a live `pls run --jobs` batch is working through, since its next jobs need it (`--force`
   overrides), and a second batch on that lease is refused. A claim on a card that is already yours refuses and
   names the lease only as `--on lease:<id>`, so it can never be read as a new claim: claims are not shared.
@@ -148,6 +153,8 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
 - `pls run --stop <lease> --holder <you>` stops a detached run: the process group (a SLURM run's `stop` file), then,
   once it is gone, removes the stage but its log and releases the lease. A run that may still be alive keeps the
   lease. A lease that records no run (one taken before `--stop` existed) is just released.
+  `--keep-lease` keeps the card leased once the run is gone, so a relaunch (`pls run --on lease:<id>`) needs no
+  reclaim and the card is never unheld in between. Like any lease it lapses after 30 min idle, counted from the stop.
 
 - The card comes from `--on host:gpu` (`local:<gpu>` for this machine; `host:job:gpu` when a SLURM node runs
   several jobs), `--on any`, `--on <pool>` or `--on lease:<id>`. A busy card is refused (`--wait [limit]` waits for
