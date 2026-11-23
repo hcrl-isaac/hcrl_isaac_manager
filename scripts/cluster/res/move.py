@@ -253,6 +253,22 @@ def confirm(stage: ev.Stage, past: int, deadline: float, poll_s: float = POLL_S)
     return "timeout"
 
 
+def manual_steps(lease_id: str, holder: str, state: tuple[str, int, int] | None) -> str:
+    """The refusal for a run that records no launch, with the by-hand move its log allows."""
+    head = "[move] the run records no launch (pls_argv.json): it predates --move; move it by hand this once:"
+    if state is None:
+        resume = "--load_run <its W&B run> --checkpoint model_<k>.pt --max_iterations <total - k>"
+    else:
+        url, _, total = state
+        resume = f"--load_run {url} --checkpoint model_<k>.pt --max_iterations {total}-<k>"
+    return (
+        f"{head}\n  1. once model_<k>.pt is on its W&B run: pls run --stop {lease_id} --holder {shlex.quote(holder)}"
+        f" --keep-lease\n  2. pls run --on lease:{lease_id} --detach -- train <its own arguments> {resume}\n"
+        "     run 2 in the background: a detached train launch stays on its watch until the run ends (--no-watch"
+        " returns at once, with no watch)"
+    )
+
+
 def cmd_move(
     lease_id: str, holder: str, to: str, wait_s: float, verify_s: float, pools: list[Pool], watch: bool = True
 ) -> int:
@@ -286,7 +302,7 @@ def cmd_move(
     stage.dir = stages[0]
     raw = read_stage(stage, "pls_argv.json")
     if raw is None:
-        sys.exit("[move] the run records no launch (pls_argv.json): it predates --move; move it by hand this once")
+        sys.exit(manual_steps(lease_id, holder, progress(read_stage(stage, "log") or "")))
     opts, script, args = split_launch(json.loads(raw))
     if not script.replace(":", "/").endswith(TRAIN):
         sys.exit(f"[move] --move moves hcrl_isaaclab's train.py runs; this run is {script}")
