@@ -135,7 +135,10 @@ def _reservation_lines(reservations: list[ls.Reservation], leases: list[ls.Lease
 
 
 def render(
-    reports: list[Report], held: dict[str, ls.Lease], reservations: list[ls.Reservation] | None = None
+    reports: list[Report],
+    held: dict[str, ls.Lease],
+    reservations: list[ls.Reservation] | None = None,
+    every: list[ls.Lease] | None = None,
 ) -> tuple[str, Counter]:
     """Format reports as a per-pool table, marking leased and reserved cards.
 
@@ -168,7 +171,9 @@ def render(
             if c.state == "held" and not who:
                 who = "in use, no visible process"
             if lease:
-                who = f"{_lease_text(lease, c)} {who}".strip()
+                others = [x.holder for x in every or [] if x.key == lease.key and x is not lease]
+                share = (" [open]" if lease.open else "") + "".join(f" + {h} sharing" for h in others)
+                who = f"{_lease_text(lease, c)}{share} {who}".strip()
             r = ls.covering(reservations or [], ls.card_key(c), rep.pool)
             if r and not (lease and lease.holder == r.holder):
                 who = f"[RESERVED {r.holder} {ls.eta_text(r)}] {who}".strip()
@@ -284,11 +289,11 @@ def cmd_status(args: argparse.Namespace, pools: list[Pool]) -> None:
             for label, stages in ended.items():
                 _report_released(ls.reap_cpu(leases, label, stages))
             _settle(leases, reservations)
-            held = {lease.key: lease for lease in leases}
+            held, every = ls.by_card(leases), list(leases)
             reserved = list(reservations)
     except Exception as exc:  # the card table must still print when the lease store is broken
         print(f"[res] WARNING: leases not shown: {type(exc).__name__}: {exc}", file=sys.stderr)
-        held, reserved = {}, []
+        held, every, reserved = {}, [], []
     if args.free:
         for rep in reports:
             rep.cards = [
@@ -297,12 +302,12 @@ def cmd_status(args: argparse.Namespace, pools: list[Pool]) -> None:
     if args.json:
         out = {
             "reports": [r.to_dict() for r in reports],
-            "leases": [vars(x) for x in held.values()],
+            "leases": [vars(x) for x in every],
             "reservations": [vars(x) for x in reserved],
         }
         print(json.dumps(out, indent=1))
     else:
-        print(render(reports, held, reserved)[0])
+        print(render(reports, held, reserved, every)[0])
     if reports and all(r.error or (r.cards and all(c.state == "unknown" for c in r.cards)) for r in reports):
         sys.exit(2)
 
@@ -359,7 +364,7 @@ def _choose(
             or (ls.card_key(c) in own and c.state == "free")
             or (
                 (c.state == "free" or shareable(c))
-                and ls.card_key(c) not in taken
+                and (ls.card_key(c) not in taken or (share and taken[ls.card_key(c)].open))
                 and c.mem_total - c.mem_used >= need
                 and (r.kind != "ray" or r.pool in explicit_ray)  # Ray schedules onto its own free cards
             )
@@ -407,8 +412,16 @@ def _choose(
             continue
         if key in taken and taken[key].holder == args.holder:  # never frees by waiting: say how to use it
             sys.exit(f"[res] {spec} is already yours; nothing claimed. Run on it with `--on lease:{taken[key].id}`")
-        if key in taken:
-            raise Busy(f"[res] {spec} is leased; move it with `pls res transfer {spec} --to <holder>`; nothing claimed")
+        if key in taken and not (share and taken[key].open):
+            how = (
+                "pass --share to run beside its runs"
+                if taken[key].open
+                else (
+                    f"its holder ({taken[key].holder}) can let you --share it with `pls res open {spec}`, or move it with"
+                    f" `pls res transfer {spec} --to <holder>`"
+                )
+            )
+            raise Busy(f"[res] {spec} is leased; {how}; nothing claimed")
         if card.state != "free" and not (adopt and card.state in ("busy", "held")) and not shareable(card):
             if share and card.state in ("busy", "held"):
                 free_gb = (card.mem_total - card.mem_used) / 1024
@@ -478,7 +491,7 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
             _report_released(ls.reconcile(leases, reports, **windows, alive=alive))
             _settle(leases, reservations)
             mine = {r.id for r in reservations if r.holder == args.holder}
-            by_key = {lease.key: lease for lease in leases}
+            by_key = ls.by_card(leases)
             yielding = frozenset(k for k, x in by_key.items() if x.yield_to in mine)
             # a node run (--gpus N) may use the caller's own idle leases there, e.g. a node transferred to it
             own = frozenset(
@@ -578,13 +591,44 @@ def _lease_targets(targets: list[str]) -> list[str]:
     return [t.removeprefix("lease:") for t in targets]
 
 
+def _matching(leases: list[ls.Lease], targets: set[str], holder: str) -> list[ls.Lease]:
+    """Leases ``targets`` names by id, card or key; a card several sessions lease names only the caller's there."""
+    hits = [x for x in leases if x.id in targets or x.card in targets or x.key in targets]
+    mine = {x.key for x in hits if x.holder == holder}
+    return [x for x in hits if x.id in targets or x.holder == holder or x.key not in mine]
+
+
+def cmd_open(args: argparse.Namespace, _pools: list[Pool]) -> None:
+    """Let other sessions --share your leased cards (by id or card) beside your runs, or stop letting them (--close)."""
+    args.targets = _lease_targets(args.targets)
+    try:
+        with ls.locked_store() as leases:
+            targets = set(args.targets) | {_slurm_label(t) for t in args.targets}
+            chosen = _matching(leases, targets, args.holder)
+            foreign = [x for x in chosen if x.holder != args.holder]
+            if foreign:
+                names = ", ".join(f"{x.id} ({x.holder})" for x in foreign)
+                sys.exit(f"[res] held by someone else: {names}; only a card's holder opens it")
+            found = {x.id for x in chosen} | {x.card for x in chosen} | {x.key for x in chosen}
+            missing = {t for t in args.targets if t not in found and _slurm_label(t) not in found}
+            if missing:
+                sys.exit(f"[res] no lease for: {', '.join(sorted(missing))}; nothing changed")
+            for lease in chosen:
+                lease.open = not args.close
+    except ls.LeaseStoreError as exc:
+        sys.exit(f"[res] nothing changed: {exc}")
+    for lease in chosen:
+        how = "open: other sessions may --share it beside your runs" if lease.open else "closed to sharing"
+        print(f"{lease.id}: {lease.card} ({lease.holder}) {how}")
+
+
 def cmd_release(args: argparse.Namespace, _pools: list[Pool]) -> None:
     """Drop leases by id or card; only the holder may, unless --force."""
     args.targets = _lease_targets(args.targets)
     try:
         with ls.locked_state() as (leases, reservations):
             targets = set(args.targets) | {_slurm_label(t) for t in args.targets}
-            gone = [x for x in leases if x.id in targets or x.card in targets or x.key in targets]
+            gone = _matching(leases, targets, args.holder)
             foreign = [x for x in gone if x.holder != args.holder]
             if foreign and not args.force:
                 names = ", ".join(f"{x.id} ({x.holder})" for x in foreign)
@@ -614,7 +658,7 @@ def cmd_transfer(args: argparse.Namespace, pools: list[Pool]) -> None:
     try:
         with ls.locked_store() as leases:
             targets = set(args.targets) | {_slurm_label(t) for t in args.targets}
-            moving = [x for x in leases if x.id in targets or x.card in targets or x.key in targets]
+            moving = _matching(leases, targets, args.holder)
             found = {x.id for x in moving} | {x.card for x in moving} | {x.key for x in moving}
             missing = {t for t in args.targets if t not in found and _slurm_label(t) not in found}
             if missing:
@@ -640,7 +684,7 @@ def cmd_extend(args: argparse.Namespace, _pools: list[Pool]) -> None:
     try:
         with ls.locked_store() as leases:
             targets = set(args.targets) | {_slurm_label(t) for t in args.targets}
-            chosen = [x for x in leases if x.id in targets or x.card in targets or x.key in targets]
+            chosen = _matching(leases, targets, args.holder)
             found = {x.id for x in chosen} | {x.card for x in chosen} | {x.key for x in chosen}
             missing = {t for t in args.targets if t not in found and _slurm_label(t) not in found}
             if missing:
@@ -829,6 +873,10 @@ def main() -> None:
     tr.add_argument("--note", default="", help="new note (default: keep)")
     tr.add_argument("--run", default="", help="the run the lease covers (default: keep)")
     tr.add_argument("--force", action="store_true", help="transfer someone else's lease")
+    op = sub.add_parser("open", help="let other sessions --share your leased cards beside your runs")
+    op.add_argument("targets", nargs="+", help="your leases, by id or host:gpu")
+    op.add_argument("--holder", required=True, help="your session name (must match the lease)")
+    op.add_argument("--close", action="store_true", help="stop letting them (their leases stay until released)")
     ex = sub.add_parser("extend", help="give your leases (id or host:gpu) a new time box from now")
     ex.add_argument("targets", nargs="+")
     ex.add_argument("--holder", required=True, help="your session name (must match the lease)")
@@ -862,6 +910,7 @@ def main() -> None:
         "claim": cmd_claim,
         "release": cmd_release,
         "transfer": cmd_transfer,
+        "open": cmd_open,
         "extend": cmd_extend,
         "reserve": cmd_reserve,
         "leases": cmd_leases,
