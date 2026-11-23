@@ -54,8 +54,9 @@ _push_data() {  # _push_data [SET [keep]] : from the SET's worktree of a data re
         # a file left as its Git LFS pointer (not fetched here) would overwrite the cluster's real copy
         skip="$(_lfs_pointers "$src")"
         if [ ${#only[@]} -gt 0 ]; then
-            # a branch's changed file under an existing name stays the cluster's old copy: its run would load that
-            changed="$(_data_rsync "$repo" "$src" "$skip" -n -i --size-only | awk '/^<f/ && !/^<f\+/ { print $2 }')"
+            # a branch's changed file under an existing name stays the cluster's old copy: its run would load that. A
+            # checksum catches a same-size retrain; rsync hashes only the set's own files that match a cluster file's size
+            changed="$(_data_rsync "$repo" "$src" "$skip" -n -i --checksum | awk '/^<f/ && !/^<f\+/ { print $2 }')"
             if [ -n "$changed" ] && [ -z "$keep" ]; then
                 err "${repo}: these files of ${set} differ from the cluster's copy, which a push never replaces:"
                 printf '  %s\n' $changed >&2

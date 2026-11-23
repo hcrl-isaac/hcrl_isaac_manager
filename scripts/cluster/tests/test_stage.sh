@@ -262,6 +262,9 @@ check "--keep-existing adds the set's new files" "[ $rc = 0 ] && grep -qx branch
 check "and leaves a file already there as it was, saying so" \
     "grep -qx pt '$R/resources/motion_datasets/clips/walk.pt' && grep -q 'walk.pt differs on the cluster' '$T/out_dwt'"
 check "its worktrees dir is not copied" "[ ! -e '$R/resources/motion_datasets/worktrees' ]"
+echo pq > "$md/clips/walk.pt"  # a same-size change, as a retrained policy of one architecture is
+dev data --wt t2 > "$T/out_dwt4" 2>&1; rc=$?
+check "a same-size changed file is refused too" "[ $rc != 0 ] && grep -q 'clips/walk.pt' '$T/out_dwt4'"
 rm "$md/clips/walk.pt"
 dev data --wt t2 > "$T/out_dwt3" 2>&1; rc=$?
 check "a set adding only new files needs no flag" "[ $rc = 0 ]"
