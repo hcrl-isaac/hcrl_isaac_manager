@@ -82,6 +82,26 @@ class PushDataTest(unittest.TestCase):
         self.assertFalse((dest / "lafan1" / "notes.txt").exists(), "only the training-file allowlist ships")
         self.assertFalse((dest / "worktrees").exists(), "worktrees never ship")
 
+    def test_a_set_adds_only_new_files_and_refuses_a_changed_one(self) -> None:
+        """--wt adds the set's new files, never replaces the box's copy, and names a same-named file that differs."""
+        dest = self.ws / "resources" / "motion_datasets"
+        (dest / "lafan1").mkdir(parents=True)
+        (dest / "lafan1" / "walk.pt").write_bytes(b"main")
+        wt = self.src / "worktrees" / "wt" / "lafan1"
+        (wt / "walk.pt").write_bytes(b"main")
+        self.assertEqual(pd.changed(self.t, str(wt.parent), str(dest)), [], "an identical file is no change")
+        (wt / "walk.pt").write_bytes(b"branch")
+        self.assertEqual(pd.changed(self.t, str(wt.parent), str(dest)), ["lafan1/walk.pt"])
+        self.assertEqual(pd.push(self.t, str(wt.parent), str(dest), only_new=True), 0)
+        self.assertEqual((dest / "lafan1" / "wt.pt").read_bytes(), b"w", "the set's new file is added")
+        self.assertEqual((dest / "lafan1" / "walk.pt").read_bytes(), b"main", "the box's copy is never replaced")
+
+    def test_the_source_is_the_sets_worktree(self) -> None:
+        resources = str(self.src.parent)
+        self.assertEqual(pd.source(resources, "motion_datasets", ""), str(self.src))
+        self.assertEqual(pd.source(resources, "motion_datasets", "wt"), str(self.src / "worktrees" / "wt"))
+        self.assertEqual(pd.source(resources, "motion_datasets", "nope"), "")
+
 
 if __name__ == "__main__":
     unittest.main()
