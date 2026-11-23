@@ -372,6 +372,7 @@ def _choose(
             shared = c.state != "free"  # a shared card only once no free one fits
             return (
                 rank(*cr),
+                ls.card_key(c) not in own,  # a node run takes the caller's idle leases there before new cards
                 shared,
                 c.host not in in_use,
                 per_host[c.host],

@@ -72,6 +72,16 @@ def drop_card_selection(opts: list[str]) -> list[str]:
     return sel.parse_known_args(opts)[1]
 
 
+def launch_value(opts: list[str], flag: str) -> str:
+    """The value the recorded launch gave ``flag`` ("" when it gave none)."""
+    for i, a in enumerate(opts):
+        if a == flag and i + 1 < len(opts):
+            return opts[i + 1]
+        if a.startswith(flag + "="):
+            return a.split("=", 1)[1]
+    return ""
+
+
 def drop_resume(args: list[str]) -> list[str]:
     """The script arguments without a previous resume (each of RESUME_FLAGS takes a value)."""
     out, skip = [], False
@@ -192,11 +202,39 @@ def target_lease(to: str, lease_id: str, holder: str, pools: list[Pool]) -> str:
     return lease.id
 
 
-def relaunch(opts: list[str], script: str, args: list[str], lease_id: str, wt: str) -> tuple[int, str]:
-    """Start the run detached on ``lease_id`` (from worktree set ``wt``) through `pls run`'s own path; its status and
-    new stage dir."""
+def target_node(to: str, node: str, gpus: int, lease_id: str, holder: str, pools: list[Pool]) -> str:
+    """The node a ``--gpus`` run moves onto: its own (``same``, whose leases the stop keeps) or another one held,
+    whose ``gpus`` cards are claimed first so the run never stops without somewhere to go."""
+    if to == "same":
+        return node
+    if to.startswith("lease:"):
+        sys.exit(f"[move] a --gpus {gpus} run moves to a node (host:job, as --on takes it), not to one lease")
+    import res
+
+    ns = argparse.Namespace(
+        cards=[], any=True, count=gpus, within=ev.resolve_on(to, pools), one_host=True, min_free_gb=0, share=False,
+        pool=None, holder=holder, note=f"move target of {lease_id}", for_=0.0, wait=None,
+    )  # fmt: skip
+    for lease, _, _ in res.claim(ns, [p for p in pools if p.kind in ev.SUPPORTED])[0]:
+        print(f"[move] leased {lease.id}: {lease.card} for the move", file=sys.stderr)
+    return to
+
+
+def recording_lease(stage_dir: str) -> str:
+    """A lease that records ``stage_dir`` (each card of a ``--gpus`` run's does)."""
+    with ls.locked_store() as leases:
+        return next((x.id for x in leases if stage_dir in x.stages or x.stage == stage_dir), "")
+
+
+def relaunch(
+    opts: list[str], script: str, args: list[str], lease_id: str, wt: str, on: str = "", gpus: int = 1
+) -> tuple[int, str]:
+    """Start the run detached on ``lease_id``, or a ``--gpus`` run on ``on``'s cards (from worktree set ``wt``),
+    through `pls run`'s own path; its status and new stage dir."""
     pinned = ["--wt", wt] if wt else []
-    argv = [*drop_card_selection(opts), *pinned, "--lease", lease_id, "--detach", "--no-watch", script, "--", *args]
+    # the stopped run's cards may still be draining: a --gpus claim waits for them to free
+    where = ["--on", on, "--gpus", str(gpus), "--wait", "10m"] if gpus > 1 else ["--lease", lease_id]
+    argv = [*drop_card_selection(opts), *pinned, *where, "--detach", "--no-watch", script, "--", *args]
     out = subprocess.run([sys.executable, ev.__file__, *argv], capture_output=True, text=True)
     sys.stderr.write(out.stderr)
     found = STARTED.findall(out.stderr)
@@ -223,7 +261,8 @@ def cmd_move(
     Args:
         lease_id: The lease the run holds (its id, or ``lease:<id>``).
         holder: The caller, who must hold it.
-        to: ``same`` (the run's own card), ``lease:<id>`` (a card the holder holds) or a card to claim.
+        to: ``same`` (the run's own card or cards), ``lease:<id>`` (a card the holder holds) or a card to claim; for
+            a ``--gpus`` run, ``same`` or a held node (``host:job``) whose cards are claimed.
         wait_s: How long to wait for the next checkpoint before giving up (the run keeps going).
         verify_s: How long the relaunch has to train past that checkpoint.
         pools: Configured pools.
@@ -237,10 +276,12 @@ def cmd_move(
     pool, host, gpu, job, uuid_ = ev._lease_card(lease_id, holder, pools)
     with ls.locked_store() as leases:
         lease = next(x for x in leases if x.id == lease_id)
-        stages = list(lease.stages) or ([lease.stage] if lease.stage else [])
-        shared = [x.id for x in leases if x.id != lease_id and set(x.stages) & set(stages)]
-    if len(stages) != 1 or shared or ls.is_cpu(lease):
-        sys.exit("[move] --move takes a lease with one detached single-card run (not --gpus, --cpus or several runs)")
+        recorded = {x.id: list(x.stages) or ([x.stage] if x.stage else []) for x in leases}
+        stages = recorded[lease_id]
+        group = [i for i, s in recorded.items() if s == stages]  # a --gpus run's cards all record its one stage
+        others = [i for i, s in recorded.items() if i not in group and set(s) & set(stages)]
+    if len(stages) != 1 or others or ls.is_cpu(lease):
+        sys.exit("[move] --move takes a lease with one detached run (not --cpus, or several runs on its cards)")
     stage = ev.Stage(ev.make_target(pool, host, gpu, job, uuid_))
     stage.dir = stages[0]
     raw = read_stage(stage, "pls_argv.json")
@@ -249,13 +290,17 @@ def cmd_move(
     opts, script, args = split_launch(json.loads(raw))
     if not script.replace(":", "/").endswith(TRAIN):
         sys.exit(f"[move] --move moves hcrl_isaaclab's train.py runs; this run is {script}")
+    gpus = int(launch_value(opts, "--gpus") or 1)
+    if gpus != len(group):
+        sys.exit(f"[move] the run was launched with --gpus {gpus}, but {len(group)} lease(s) record it")
+    node = launch_value(opts, "--on") if gpus > 1 else ""
     state = progress(read_stage(stage, "log") or "")
     if state is None:
         sys.exit("[move] the run has not logged a W&B run and a learning iteration yet; let it start first")
     url, _, total = state
     wt, made = pin_code(stage, f"move-{lease_id}-{int(time.time())}")
     try:
-        new = _move(lease_id, holder, to, wait_s, verify_s, pools, opts, script, args, url, total, wt)
+        new = _move(lease_id, holder, to, wait_s, verify_s, pools, opts, script, args, url, total, wt, node, gpus)
     finally:
         unpin(made)
     if new is None:
@@ -270,7 +315,7 @@ def cmd_move(
 
 def _move(
     lease_id: str, holder: str, to: str, wait_s: float, verify_s: float, pools: list[Pool],
-    opts: list[str], script: str, args: list[str], url: str, total: int, wt: str,
+    opts: list[str], script: str, args: list[str], url: str, total: int, wt: str, node: str = "", gpus: int = 1,
 ) -> ev.Stage | None:  # fmt: skip
     """The move once the run is known movable and its code pinned: claim, wait, stop, relaunch, confirm, recorder.
 
@@ -278,12 +323,16 @@ def _move(
         The relaunched run's stage once it trains past the checkpoint, else None.
     """
     have = wandb_checkpoints(url)
-    target = target_lease(to, lease_id, holder, pools)
+    # a --gpus run relaunches on a node's cards (claimed, or its own kept); a one-card run on one lease
+    on = target_node(to, node, gpus, lease_id, holder, pools) if gpus > 1 else ""
+    target = "" if on else target_lease(to, lease_id, holder, pools)
+    keep = to == "same" if on else target == lease_id
+    where = f"node {on}" if on else f"lease {target}"
     print(f"[move] waiting up to {wait_s / 60:g} min for a checkpoint past {max(have, default=-1)} on {url}",
           file=sys.stderr)  # fmt: skip
     ckpt = wait_checkpoint(url, max(have, default=-1), time.monotonic() + wait_s)
     if ckpt is None:
-        sys.exit(f"[move] no new checkpoint in {wait_s / 60:g} min; the run keeps going and lease {target} stays held")
+        sys.exit(f"[move] no new checkpoint in {wait_s / 60:g} min; the run keeps going and {where} stays held")
     if ckpt >= total:
         sys.exit(f"[move] the run reached its last checkpoint ({ckpt}/{total}); nothing left to move")
     # an off-policy resume refills its replay buffer for `warmup` iterations on top of --max_iterations, so the run
@@ -291,20 +340,20 @@ def _move(
     warmup = resume_warmup(url)
     left = total - ckpt
     print(f"[move] checkpoint model_{ckpt}.pt is on W&B; stopping the run", file=sys.stderr)
-    if ev.cmd_stop(lease_id, holder, pools, keep_lease=target == lease_id) != 0:
-        sys.exit(f"[move] the run did not stop cleanly; nothing relaunched (lease {target} stays held)")
+    if ev.cmd_stop(lease_id, holder, pools, keep_lease=keep) != 0:
+        sys.exit(f"[move] the run did not stop cleanly; nothing relaunched ({where} stays held)")
     resume = ["--load_run", url, "--checkpoint", f"model_{ckpt}.pt", "--max_iterations", str(left)]
-    rc, new_dir = relaunch(opts, script, [*drop_resume(args), *resume], target, wt)
+    rc, new_dir = relaunch(opts, script, [*drop_resume(args), *resume], target, wt, on=on, gpus=gpus)
     if rc != 0 or not new_dir:
         sys.exit(f"[move] the relaunch failed (status {rc}); resume by hand from model_{ckpt}.pt of {url}")
-    t_pool, t_host, t_gpu, t_job, t_uuid = ev._lease_card(target, holder, pools)
+    t_pool, t_host, t_gpu, t_job, t_uuid = ev._lease_card(target or recording_lease(new_dir), holder, pools)
     new = ev.Stage(ev.make_target(t_pool, t_host, t_gpu, t_job, t_uuid))
     new.dir = new_dir
     verdict = confirm(new, ckpt, time.monotonic() + verify_s)
     if verdict != "ok":
         print(f"[move] the relaunch has not trained past {ckpt} ({verdict}); check {new_dir}/log", file=sys.stderr)
         return None
-    print(f"[move] moved: training past iteration {ckpt} on lease {target} (stage {new_dir})", file=sys.stderr)
+    print(f"[move] moved: training past iteration {ckpt} on {where} (stage {new_dir})", file=sys.stderr)
     if warmup:
         end = total + warmup
         print(
@@ -337,7 +386,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--to",
         required=True,
-        help="same (its own card), lease:<id> (a card you hold) or a card (host:gpu, host:job:gpu)",
+        help="same (its own card or cards), lease:<id> (a card you hold), a card (host:gpu, host:job:gpu), or for a"
+        " --gpus run another held node (host:job)",
     )
     p.add_argument("--wait", type=ev._duration, default=1800.0, help="how long to wait for the next checkpoint")
     p.add_argument("--verify", type=ev._duration, default=1800.0, help="how long the relaunch has to train past it")

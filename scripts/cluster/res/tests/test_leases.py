@@ -464,6 +464,19 @@ class CommandTest(CommandBase):
         self.assertEqual(args.reused, before)
         self.assertEqual(len(self.leases()), 3)
 
+    def test_a_multi_gpu_claim_takes_the_holders_idle_leases_before_lower_free_cards(self) -> None:
+        self.cards = [card(host="gpub2", index=i, job="8") for i in range(4)]
+        for i in (1, 2):  # e.g. a move's target cards, claimed before the run there stopped
+            self.claim(f"gpub2:8:{i}", holder="s")
+        mine = {x.id for x in self.leases()}
+        args = argparse.Namespace(
+            cards=[], any=True, count=2, within="gpub2:8", one_host=True, min_free_gb=0, pool=None,
+            holder="s", note="", for_=0.0,
+        )  # fmt: skip
+        taken, _ = res.claim(args, self.pools)
+        self.assertEqual({lease.id for lease, _, _ in taken}, mine, "cards 1-2, not free card 0 plus one of them")
+        self.assertEqual(len(self.leases()), 2, "no idle lease is left behind")
+
     def test_a_multi_gpu_claim_skips_own_leases_whose_run_is_still_booting(self) -> None:
         self.cards = [card(host="gpub2", index=i, job="8") for i in range(2)]  # free: the run has not shown yet
         for i in range(2):
