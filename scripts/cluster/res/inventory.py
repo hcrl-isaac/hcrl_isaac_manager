@@ -254,7 +254,7 @@ def write_pool(path: Path, name: str, settings: dict, update: bool = False) -> N
 
 
 ADD_USAGE = """pls setup --add <name> --kind ssh --hosts <a,b> --user <login> [--domain <d>] [--pin device] [--render]
-                       [--min-free-disk-gb N] [--max-hours H] [--desktop] [--update]
+                       [--recorder-root DIR] [--min-free-disk-gb N] [--max-hours H] [--desktop] [--update]
        pls setup --add <name> --kind ray --address http://<head>:8265 [--update]"""
 
 

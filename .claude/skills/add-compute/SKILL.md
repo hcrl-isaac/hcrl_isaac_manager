@@ -37,9 +37,10 @@ pls setup --add <pool-name> --kind ssh --hosts <host1>,<host2> --user <login> [-
 `--domain` is appended to each short host name (omit it if the short name resolves); `--pin device` only if Kit
 refuses a masked CUDA_VISIBLE_DEVICES on these boxes; `--render` for RT-core cards (A40, RTX PRO, 5090), whose
 `scripts/larg/train.sh` runs record video in-process (`--recorder-root <root>` with it names an Isaac Lab install
-root on every host, and `pls run --detach -- train ... --video async` then arms its run's recorder there); on a box its owner also uses (a desktop), `--min-free-disk-gb`,
-`--max-hours` and `--desktop` set the guardrails in `scripts/cluster/res/README.md`; `--update` replaces an
-existing pool. It writes the pool into
+root on every host, and `pls run --detach -- train ... --video async` then arms its run's recorder there); on a box
+its owner also uses (a desktop), `--min-free-disk-gb`, `--max-hours` and `--desktop` set the guardrails in
+`scripts/cluster/res/README.md`; `--update` replaces an existing pool, comments inside its table included. It writes
+the pool into
 `scripts/cluster/res/compute.local.toml` (gitignored, merged over `compute.toml`; the main checkout's serves every
 worktree), and editing that file by hand is equivalent:
 
