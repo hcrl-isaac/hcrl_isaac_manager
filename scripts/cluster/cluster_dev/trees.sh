@@ -41,8 +41,8 @@ _check_inodes() {  # _check_inodes DIR
 }
 
 # The data repos' training files (the allowlist sync used), added to the shared copy: never deleted, never a tree.
-_push_data() {  # _push_data [SET] : from the SET's worktree of a data repo where it has one, adding files only
-    local repo src skip set="${1:-}" only=()
+_push_data() {  # _push_data [SET [keep]] : from the SET's worktree of a data repo where it has one, adding files only
+    local repo src skip set="${1:-}" keep="${2:-}" only=() changed
     for repo in "${TREE_DATA_REPOS[@]}"; do
         src="${LOCAL_ISAACLAB_DIR}/resources/${repo}"
         only=()
@@ -53,13 +53,31 @@ _push_data() {  # _push_data [SET] : from the SET's worktree of a data repo wher
         [ -d "$src" ] || continue
         # a file left as its Git LFS pointer (not fetched here) would overwrite the cluster's real copy
         skip="$(_lfs_pointers "$src")"
+        if [ ${#only[@]} -gt 0 ]; then
+            # a branch's changed file under an existing name stays the cluster's old copy: its run would load that
+            changed="$(_data_rsync "$repo" "$src" "$skip" -n -i --size-only | awk '/^<f/ && !/^<f\+/ { print $2 }')"
+            if [ -n "$changed" ] && [ -z "$keep" ]; then
+                err "${repo}: these files of ${set} differ from the cluster's copy, which a push never replaces:"
+                printf '  %s\n' $changed >&2
+                err "give the changed files new names (or replace main's deliberately), or pass --keep-existing"
+                return 2
+            fi
+            [ -n "$changed" ] && printf '%s\n' $changed | while read -r f; do
+                log "WARN: ${repo}/${f} differs on the cluster; it keeps its copy (--keep-existing)"; done
+        fi
         log "Adding new ${repo} files from ${src} -> ${REMOTE_ISAACLAB_DIR}/resources/${repo} (shared, never deleted)"
-        rsync -rlpt "${only[@]}" --info=progress2 --exclude-from=<(printf '%s' "$skip") --exclude='/worktrees/' \
-            --include='*/' --include='*.pt' --include='*.arena.json' --include='*.courts.json' \
-            --include='*.manifest.json' --exclude='*' --prune-empty-dirs -e "ssh ${SSH_OPTS[*]}" \
-            --rsync-path="mkdir -p $(printf %q "${REMOTE_ISAACLAB_DIR}/resources/${repo}") && rsync" \
-            "${src}/" "${CLUSTER_LOGIN}:${REMOTE_ISAACLAB_DIR}/resources/${repo}/" || return 1
+        _data_rsync "$repo" "$src" "$skip" "${only[@]}" --info=progress2 || return 1
     done
+}
+
+_data_rsync() {  # _data_rsync REPO SRC SKIP [RSYNC_OPTS...] : the training files of SRC onto the cluster's shared copy
+    local repo="$1" src="$2" skip="$3"
+    shift 3
+    rsync -rlpt "$@" --exclude-from=<(printf '%s' "$skip") --exclude='/worktrees/' \
+        --include='*/' --include='*.pt' --include='*.arena.json' --include='*.courts.json' \
+        --include='*.manifest.json' --exclude='*' --prune-empty-dirs -e "ssh ${SSH_OPTS[*]}" \
+        --rsync-path="mkdir -p $(printf %q "${REMOTE_ISAACLAB_DIR}/resources/${repo}") && rsync" \
+        "${src}/" "${CLUSTER_LOGIN}:${REMOTE_ISAACLAB_DIR}/resources/${repo}/"
 }
 
 _lfs_pointers() {  # _lfs_pointers DIR -> rsync patterns (one per line) for the small files that are Git LFS pointers
@@ -76,18 +94,25 @@ _set_has_data() {  # _set_has_data SET : whether any data repo has a worktree of
     return 1
 }
 
-cmd_data() {  # data [--wt SET] : add the data repos' new files to the cluster's shared copy, without staging a tree
-    local set=""
+cmd_data() {  # data [--wt SET [--keep-existing]] : add the data repos' new files to the cluster's shared copy
+    local set="" keep=""
     case "${1:-}" in
         "") ;;
-        --wt) [ -n "${2:-}" ] && [ $# -eq 2 ] || { err "data --wt takes one worktree-set name"; exit 1; }; set="$2" ;;
-        *) err "data takes no arguments but --wt SET"; exit 1 ;;
+        --wt)
+            [ -n "${2:-}" ] || { err "data --wt takes one worktree-set name"; exit 1; }
+            set="$2"
+            case "${3:-}" in "") ;; --keep-existing) keep=1 ;; *) err "data --wt SET takes only --keep-existing"; exit 1 ;; esac
+            [ $# -le 3 ] || { err "data --wt SET takes only --keep-existing"; exit 1; } ;;
+        *) err "data takes no arguments but --wt SET [--keep-existing]"; exit 1 ;;
     esac
     if [ -n "$set" ] && ! _set_has_data "$set"; then
         err "no data repo has worktrees/${set}: nothing of the set to add"; exit 1
     fi
     ensure_master
-    _push_data "$set" || { err "could not add the data repos' new files"; exit 1; }
+    local rc=0
+    _push_data "$set" "$keep" || rc=$?
+    [ "$rc" -eq 2 ] && exit 1  # refused, and said why
+    [ "$rc" -eq 0 ] || { err "could not add the data repos' new files"; exit 1; }
 }
 
 # Keep the newest TREE_KEEP complete trees of NAME; an older one goes unless a run still uses it.
