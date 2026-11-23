@@ -672,6 +672,7 @@ class CommandTest(CommandBase):
             self.claim("mckennie:2", holder="b")  # an open card still needs --share
         self.claim("mckennie:2", share=True, min_free_gb=10, holder="b")
         self.assertEqual(sorted(x.holder for x in self.leases()), ["b", "s"])
+        self.assertTrue(all(x.shared for x in self.leases()), "each sharer's activity is its own processes only")
         with self.assertRaises(SystemExit) as ctx:
             self.claim("mckennie:2", share=True, min_free_gb=10, holder="c")
         self.assertIn("is leased", str(ctx.exception.code), "b's lease is not open: a third session waits")
@@ -679,6 +680,13 @@ class CommandTest(CommandBase):
         with contextlib.redirect_stdout(io.StringIO()):
             res.cmd_release(argparse.Namespace(**release), self.pools)
         self.assertEqual([x.holder for x in self.leases()], ["b"], "the card named s's own lease only")
+
+    def test_a_sharer_on_a_free_reading_open_card_ignores_the_owners_processes(self) -> None:
+        self.claim("mckennie:0")
+        res.cmd_open(argparse.Namespace(targets=["mckennie:0"], holder="s", close=False), self.pools)
+        self.claim("mckennie:0", share=True, min_free_gb=1, holder="b")
+        [theirs] = [x for x in self.leases() if x.holder == "b"]
+        self.assertTrue(theirs.shared, "the owner's later same-login run is not b's activity")
 
     def test_only_the_holder_opens_a_card(self) -> None:
         self.claim("mckennie:0")

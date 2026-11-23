@@ -536,7 +536,8 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
                         lease.created, lease.idle_since = now, 0.0
                         lease.expires = now + args.for_ if args.for_ else 0.0
                     else:
-                        shared = getattr(args, "share", False) and c.state != "free"
+                        # beside another session's lease the card's current processes are its, even on a free-reading card
+                        shared = getattr(args, "share", False) and (c.state != "free" or key in by_key)
                         lease = ls.new_lease(c, r, args.holder, args.note, args.for_, run=run, shared=shared)
                         if stage := getattr(args, "stage", ""):
                             lease.stage, lease.stages = stage, [stage]
