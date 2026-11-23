@@ -243,6 +243,21 @@ class MoveTest(unittest.TestCase):
         self.assertEqual(len(self.watched), 1)
         self.assertEqual(self.armed, [], "an in-process video run needs no recorder")
 
+    def test_a_run_from_before_move_gets_its_by_hand_steps(self) -> None:
+        self.files.pop("pls_argv.json")
+        with self.assertRaises(SystemExit) as ctx:
+            move.cmd_move("old", "s", "same", 60, 60, [], watch=False)
+        steps = str(ctx.exception.code)
+        for want in (
+            "pls run --stop old --holder s --keep-lease",
+            "--on lease:old --detach",
+            "--load_run https://wandb.ai/ent/proj/runs/ab12cd34",
+            "--max_iterations 3000-<k>",
+            "background",
+        ):
+            self.assertIn(want, steps)  # fmt: skip
+        self.assertEqual((self.stops, self.launches), ([], []))
+
     def test_a_moved_async_run_gets_a_recorder_for_its_new_wandb_run(self) -> None:
         self.files["pls_argv.json"] = json.dumps([*LAUNCH, "--video", "async"])
         move.cmd_move("old", "s", "same", 60, 60, [], watch=False)
