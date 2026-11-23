@@ -79,6 +79,17 @@ class AddPoolTest(unittest.TestCase):
         self.assertEqual(inv.resolve_ssh_target("a", list(pools.values())), "u@a.x.org")
         self.assertEqual(inv.resolve_ssh_target("b.x.org", list(pools.values())), "u@b.x.org")
 
+    def test_a_render_pool_names_its_recorder_root(self) -> None:
+        self.add("a40", "--kind", "ssh", "--hosts", "h", "--user", "u", "--render", "--recorder-root", "/r/isaac3")
+        settings = {p.name: p for p in inv.load_pools()}["a40"].settings
+        self.assertEqual((settings["render"], settings["recorder_root"]), (True, "/r/isaac3"))
+        for argv in (
+            ["b", "--kind", "ssh", "--hosts", "h", "--user", "u", "--recorder-root", "/r"],  # films nothing there
+            ["c", "--kind", "ray", "--address", "http://h", "--recorder-root", "/r"],
+        ):
+            with self.subTest(argv=argv), mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+                self.add(*argv)
+
     def test_guardrail_settings_are_written_as_numbers_and_a_flag(self) -> None:
         self.add(
             "desk", "--kind", "ssh", "--hosts", "box", "--user", "u", "--min-free-disk-gb", "25", "--max-hours", "1.5",

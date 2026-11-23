@@ -46,6 +46,7 @@ SETUP_HELP = """usage: pls setup                                  this machine: 
                                                   (--on ray: set up the Ray cluster's credentials and venv)
        pls setup --add <name> [--update]          create (or regenerate) a SLURM cluster profile
        pls setup --add <name> --kind ssh --hosts <a,b> --user <login> [--domain <d>] [--pin device] [--render]
+                 [--recorder-root <dir>] [--update]
                                                   add ssh GPU boxes as a pool (in compute.local.toml, gitignored)
        pls setup --add ray --kind ray --address http://<head>:8265   add your Ray cluster's dashboard as the ray pool"""
 

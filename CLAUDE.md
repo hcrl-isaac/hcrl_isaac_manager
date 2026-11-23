@@ -30,6 +30,8 @@ Project skills live in `.claude/skills/`. Use them rather than re-deriving the s
 - **`resources/<project>_tasks/`**: per-project task repos (e.g. `hhlm_tasks`, `ssti_tasks`).
 - **`resources/<name>_robots/`, `hcrl_robots`, `motion_datasets`**: asset and data repos. Configs reach them through
   `hcrl_isaaclab/utils/paths.py:RESOURCES_DIR` (this workspace's `resources/`), never through symlinks.
+- **`resources/hcrl_vlm/`**: VLM and video-model inference with no Isaac Lab import (text-to-video, frame
+  embedders, video judges), present when a project depends on it (e.g. `rlzero`).
 - **`resources/IsaacLab/`**: the Isaac Lab 3 source clone, at the ref in `workspace.defaults.yaml`.
 - Which repos are present: `workspace.defaults.yaml` (`always`, `available_projects`, `refs`) merged with the
   gitignored per-user `workspace.yaml`; `pls resolve` turns that into a flat `gitman.yaml` and fetches every repo.

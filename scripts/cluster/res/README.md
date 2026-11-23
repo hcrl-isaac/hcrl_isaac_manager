@@ -155,9 +155,12 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   async (`--eval`/`--video async`), then stays on `scripts/tools/watch_run.sh` until the run ends. Its exit is the
   watch's verdict (0 only once the run finished), which wakes the session that launched it; stopping the watch leaves
   the run. The recorder (`video_recorder.py --mode async --follow --only_run <id>`) takes a shared card
-  (`--share --min-free-gb 12`) of the first pool that sets `recorder_root` (an Isaac Lab install root on its hosts)
-  and can start one, with the run's `--wt`, and ends when the run does. `--no-watch` returns at launch;
-  `--no-recorder` arms none.
+  (`--share --min-free-gb 12`) of the first pool that sets `render = true` and `recorder_root` (an Isaac Lab install
+  root on its hosts) and can start one, with the run's `--wt`, and ends when the run does. `--no-watch` returns at
+  launch; `--no-recorder` arms none.
+- `video_recorder.py` and `video_logger.py` film Kit's RTX viewport, which draws an empty scene on a GB200, so their
+  evals never upload: `pls run` refuses them there, before anything is staged, unless the pool sets `render = true`.
+  A pool's `render = false` refuses them on any card; a `--video_format viser` pass records states and runs anywhere.
 - `pls run --stop <lease> --holder <you>` stops a detached run: the process group (a SLURM run's `stop` file), then,
   once it is gone, removes the stage but its log and releases the lease. A run that may still be alive keeps the
   lease. A lease that records no run (one taken before `--stop` existed) is just released.

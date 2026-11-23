@@ -81,7 +81,8 @@ class RecorderTest(unittest.TestCase):
     POOLS = [
         Pool("larg-a100", "ssh", {}),
         Pool("larg-a40", "ssh", {"recorder_root": "/var/local/u/isaac3", "render": True}),
-        Pool("ebuntu", "ssh", {"recorder_root": "/home/e/isaac3"}),
+        Pool("ebuntu", "ssh", {"recorder_root": "/home/e/isaac3", "render": True}),
+        Pool("horizon-like", "ssh", {"recorder_root": "/r"}),  # a root, but no RTX render: never picked
     ]
 
     def test_it_follows_the_run_on_a_shared_card_of_a_recorder_pool(self) -> None:
@@ -102,6 +103,11 @@ class RecorderTest(unittest.TestCase):
         on = follow.arm_recorder("e/p/r", "S", "lift", self.POOLS, lambda c: calls.append(c) or _rc(next(codes)))
         self.assertEqual(on, "ebuntu")
         self.assertEqual(calls[1][calls[1].index("--wt") + 1], "lift", "the recorder renders the run's own code")
+
+    def test_only_render_pools_are_tried(self) -> None:
+        calls = []
+        follow.arm_recorder("e/p/r", "S", "", self.POOLS, lambda c: calls.append(c[c.index("--pool") + 1]) or _rc(1))
+        self.assertEqual(calls, ["larg-a40", "ebuntu"])
 
     def test_no_pool_starts_one(self) -> None:
         self.assertEqual(follow.arm_recorder("e/p/r", "S", "", self.POOLS, lambda c: _rc(1)), "")
