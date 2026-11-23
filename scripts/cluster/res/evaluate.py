@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import itertools
 import json
 import os
 import posixpath
@@ -271,6 +272,32 @@ def fill_device(script_args: list[str], t: Target, launcher: bool = False) -> li
             " write {DEVICE} instead (e.g. --device {DEVICE}) and pls run fills it in"
         )
     return filled
+
+
+RTX_RECORDERS = ("video_recorder.py", "video_logger.py")
+# cards whose Kit RTX viewport films an empty scene ("RTX drew N frames without the scene"); A100s do render here
+NO_RTX_MODELS = ("GB200",)
+
+
+def refuse_unrenderable(script: str, script_args: list[str], pool: Pool, model: str) -> None:
+    """Exit before anything is staged when an RTX recording pass would run on a card Kit cannot film on.
+
+    A pool's ``render`` setting decides when it is set; otherwise the card's model does (``NO_RTX_MODELS``). A
+    ``--video_format viser`` pass records states, not frames, and runs anywhere.
+    """
+    if os.path.basename(script) not in RTX_RECORDERS:
+        return
+    if ["--video_format", "viser"] in map(
+        list, itertools.pairwise(script_args)
+    ) or "--video_format=viser" in script_args:
+        return
+    render = pool.settings.get("render")
+    if render is False or (render is not True and any(m in model for m in NO_RTX_MODELS)):
+        sys.exit(
+            f"[res] {os.path.basename(script)} films Kit's RTX viewport, which draws an empty scene on"
+            f" {model or pool.name}, so its evals and videos would never upload: run it on a pool with"
+            " render = true (`pls res pools`), or record states with --video_format viser"
+        )
 
 
 def refuse_device(script_args: list[str]) -> None:
@@ -2100,6 +2127,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             )
         refuse_device(run_args)  # before anything is claimed
     taken, job, uuid, extra, reused = None, "", "", [], set()
+    model = ""  # the claimed card's, for the render check
     if args.cpus:
         pool, host, taken = claim_cpus(args, pools)
         gpu = -1
@@ -2134,6 +2162,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         claimed = claim(ns, usable)[0]
         reused = getattr(ns, "reused", set())  # the holder's own leases the run used: they stay held afterwards
         (taken, card, rep), extra = claimed[0], [x[0] for x in claimed[1:]]
+        model = card.model
         host, gpu = card.host, card.index
         for lease, _, _ in claimed:
             verb = "using your lease" if lease.id in reused else "leased"
@@ -2151,6 +2180,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
     try:
         if pool is None:  # inside the try, so a refusal still releases the lease
             pool = slurm_profile(rep.pool, job, pools)
+        refuse_unrenderable(script, run_args, pool, model)
         t = make_target(pool, host, gpu, job, uuid)
         t.extra_uuids = tuple(c.uuid for _, c, _ in claimed[1:]) if extra else ()
         t.cores = taken.cores if args.cpus else ""

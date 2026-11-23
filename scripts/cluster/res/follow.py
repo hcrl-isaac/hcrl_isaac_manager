@@ -90,13 +90,13 @@ def eval_mode(script_args: list[str]) -> str:
 
 
 def arm_recorder(run: str, holder: str, wt: str, pools: list, launch: Callable = subprocess.run) -> str:
-    """Start an async recorder that follows ``run`` into W&B on a shared card of a pool with ``recorder_root``.
+    """Start an async recorder that follows ``run`` into W&B on a shared card of a render pool with ``recorder_root``.
 
     Returns:
         The pool it started on, or "" when no pool could start one.
     """
     entity, project, run_id = run.split("/")
-    for pool in (p for p in pools if p.settings.get("recorder_root")):
+    for pool in (p for p in pools if p.settings.get("recorder_root") and p.settings.get("render")):
         cmd = [sys.executable, str(HERE / "evaluate.py"), "--any", "--pool", pool.name, "--share", "--min-free-gb"]
         cmd += [str(RECORDER_GB), "--root", pool.settings["recorder_root"], "--holder", holder, "--detach"]
         cmd += [*(["--wt", wt] if wt else []), RECORDER, "--", "--mode", "async", "--follow", "--only_run", run_id]
@@ -150,7 +150,7 @@ def after_launch(stage: Stage, args: argparse.Namespace, script_args: list[str],
         if on:
             print(f"[res] armed an async recorder for {run} on {on}", file=sys.stderr)
         else:
-            why = "the run logs to no W&B run" if not run else "no pool with recorder_root could start one"
+            why = "the run logs to no W&B run" if not run else "no render pool with recorder_root could start one"
             print(f"[res] NO RECORDER: {why}; its evals and videos stay unrecorded until one runs", file=sys.stderr)
     print("[res] watching it to its end (stopping this watch leaves the run running)", file=sys.stderr)
     return watch(stage, run, target, _run_name(script_args, os.path.basename(stage.dir)))
