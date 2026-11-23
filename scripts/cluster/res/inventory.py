@@ -254,7 +254,7 @@ def write_pool(path: Path, name: str, settings: dict, update: bool = False) -> N
 
 
 ADD_USAGE = """pls setup --add <name> --kind ssh --hosts <a,b> --user <login> [--domain <d>] [--pin device] [--render]
-                       [--min-free-disk-gb N] [--max-hours H] [--desktop] [--update]
+                       [--recorder-root DIR] [--min-free-disk-gb N] [--max-hours H] [--desktop] [--update]
        pls setup --add <name> --kind ray --address http://<head>:8265 [--update]"""
 
 
@@ -271,6 +271,12 @@ def cmd_add(argv: list[str]) -> None:
     ap.add_argument("--pin", choices=["cvd", "device"], help="ssh: how card runs pick their GPU (default cvd)")
     ap.add_argument(
         "--render", action="store_true", help="ssh: RT-core cards; scripts/larg/train.sh records in-process"
+    )
+    ap.add_argument(
+        "--recorder-root",
+        metavar="DIR",
+        help="ssh, with --render: the Isaac Lab install root on every host that `pls run --detach -- train ... --video"
+        " async` starts its run's recorder from",
     )
     ap.add_argument("--min-free-disk-gb", type=float, help="ssh: refuse to stage when scratch has less disk free (GB)")
     ap.add_argument("--max-hours", type=float, help="ssh: the longest a run may last; runs without --timeout get it")
@@ -292,6 +298,10 @@ def cmd_add(argv: list[str]) -> None:
         settings.update({k: v for k, v in (("domain", args.domain), ("pin", args.pin)) if v})
         if args.render:
             settings["render"] = True
+        if args.recorder_root:
+            if not args.render:
+                ap.error("--recorder-root needs --render: a recorder films Kit's RTX viewport")
+            settings["recorder_root"] = args.recorder_root
         for key, val in (("min_free_disk_gb", args.min_free_disk_gb), ("max_hours", args.max_hours)):
             if val is not None:
                 if val <= 0:
@@ -303,10 +313,11 @@ def cmd_add(argv: list[str]) -> None:
         if not args.address:
             ap.error("--kind ray needs --address")
         numbers = (args.min_free_disk_gb, args.max_hours)
-        if any((args.hosts, args.user, args.domain, args.pin, args.render, args.desktop)) or numbers != (None, None):
+        ssh_only = (args.hosts, args.user, args.domain, args.pin, args.render, args.recorder_root, args.desktop)
+        if any(ssh_only) or numbers != (None, None):
             ap.error(
-                "--hosts, --user, --domain, --pin, --render, --min-free-disk-gb, --max-hours and --desktop are for"
-                " --kind ssh"
+                "--hosts, --user, --domain, --pin, --render, --recorder-root, --min-free-disk-gb, --max-hours and"
+                " --desktop are for --kind ssh"
             )
         settings = {"kind": "ray", "address": args.address}
     path = local_config_path()
