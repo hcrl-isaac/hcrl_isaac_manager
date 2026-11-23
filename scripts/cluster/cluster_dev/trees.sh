@@ -41,15 +41,20 @@ _check_inodes() {  # _check_inodes DIR
 }
 
 # The data repos' training files (the allowlist sync used), added to the shared copy: never deleted, never a tree.
-_push_data() {
-    local repo src skip
+_push_data() {  # _push_data [SET] : from the SET's worktree of a data repo where it has one, adding files only
+    local repo src skip set="${1:-}" only=()
     for repo in "${TREE_DATA_REPOS[@]}"; do
         src="${LOCAL_ISAACLAB_DIR}/resources/${repo}"
+        only=()
+        if [ -n "$set" ] && [ -d "${src}/worktrees/${set}" ]; then
+            # a branch's files join the shared copy other runs read: never replace one already there
+            src="${src}/worktrees/${set}"; only=(--ignore-existing)
+        fi
         [ -d "$src" ] || continue
         # a file left as its Git LFS pointer (not fetched here) would overwrite the cluster's real copy
         skip="$(_lfs_pointers "$src")"
-        log "Adding new ${repo} files -> ${REMOTE_ISAACLAB_DIR}/resources/${repo} (shared, never deleted)"
-        rsync -rlpt --info=progress2 --exclude-from=<(printf '%s' "$skip") --exclude='/worktrees/' \
+        log "Adding new ${repo} files from ${src} -> ${REMOTE_ISAACLAB_DIR}/resources/${repo} (shared, never deleted)"
+        rsync -rlpt "${only[@]}" --info=progress2 --exclude-from=<(printf '%s' "$skip") --exclude='/worktrees/' \
             --include='*/' --include='*.pt' --include='*.arena.json' --include='*.courts.json' \
             --include='*.manifest.json' --exclude='*' --prune-empty-dirs -e "ssh ${SSH_OPTS[*]}" \
             --rsync-path="mkdir -p $(printf %q "${REMOTE_ISAACLAB_DIR}/resources/${repo}") && rsync" \
@@ -65,10 +70,24 @@ _lfs_pointers() {  # _lfs_pointers DIR -> rsync patterns (one per line) for the 
     return 0  # the last file checked not being a pointer is no failure
 }
 
-cmd_data() {  # data : add the data repos' new files to the cluster's shared copy, without staging a tree
-    [ $# -eq 0 ] || { err "data takes no arguments"; exit 1; }
+_set_has_data() {  # _set_has_data SET : whether any data repo has a worktree of SET
+    local r
+    for r in "${TREE_DATA_REPOS[@]}"; do [ -d "${LOCAL_ISAACLAB_DIR}/resources/${r}/worktrees/$1" ] && return 0; done
+    return 1
+}
+
+cmd_data() {  # data [--wt SET] : add the data repos' new files to the cluster's shared copy, without staging a tree
+    local set=""
+    case "${1:-}" in
+        "") ;;
+        --wt) [ -n "${2:-}" ] && [ $# -eq 2 ] || { err "data --wt takes one worktree-set name"; exit 1; }; set="$2" ;;
+        *) err "data takes no arguments but --wt SET"; exit 1 ;;
+    esac
+    if [ -n "$set" ] && ! _set_has_data "$set"; then
+        err "no data repo has worktrees/${set}: nothing of the set to add"; exit 1
+    fi
     ensure_master
-    _push_data || { err "could not add the data repos' new files"; exit 1; }
+    _push_data "$set" || { err "could not add the data repos' new files"; exit 1; }
 }
 
 # Keep the newest TREE_KEEP complete trees of NAME; an older one goes unless a run still uses it.
