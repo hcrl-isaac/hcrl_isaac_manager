@@ -92,7 +92,7 @@ class RecorderTest(unittest.TestCase):
         cmd = calls[0]
         for want in (["--pool", "larg-a40"], ["--root", "/var/local/u/isaac3"], ["--only_run", "ab12cd34"]):
             self.assertIn(want, [cmd[i : i + 2] for i in range(len(cmd) - 1)])
-        self.assertIn("--share", cmd)
+        self.assertIn("--share-mine", cmd)
         self.assertIn("--follow", cmd)
         self.assertEqual(cmd[cmd.index("--wandb_project") + 1], "hcrl/kick")
         self.assertNotIn("--wt", cmd)

@@ -263,9 +263,14 @@ def settle(
     return ended
 
 
+def my_logins(pools: list) -> set[str]:
+    """This user's logins: this machine's and every pool's."""
+    return {getpass.getuser(), *(str(p.settings["user"]) for p in pools if p.settings.get("user"))}
+
+
 def check_holder(holder: str, pools: list) -> None:
     """Exit when ``holder`` is a login (this machine's, or a pool's) rather than a session name."""
-    logins = {getpass.getuser(), *(str(p.settings["user"]) for p in pools if p.settings.get("user"))}
+    logins = my_logins(pools)
     if holder.strip().lower() in {x.lower() for x in logins}:
         sys.exit(f"[res] --holder {holder!r} is a login, not a session: name the session that holds the card")
 

@@ -2152,6 +2152,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             one_host=args.gpus > 1,
             min_free_gb=args.min_free_gb,
             share=args.share,
+            share_mine=args.share_mine,
             pool=args.pool,
             holder=args.holder,
             note=args.note or f"pls run {os.path.basename(script)}",
@@ -2380,6 +2381,11 @@ def parser() -> argparse.ArgumentParser:
         "--share",
         action="store_true",
         help="run on a card other processes use when it has --min-free-gb free (a small job beside someone's run)",
+    )
+    ev.add_argument(
+        "--share-mine",
+        action="store_true",
+        help="like --share, but only beside your own processes (another of your sessions' runs), never another user's",
     )
     ev.add_argument("--holder", required=True, help="your session name")
     ev.add_argument(

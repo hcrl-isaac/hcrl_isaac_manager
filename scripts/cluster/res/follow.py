@@ -97,7 +97,7 @@ def arm_recorder(run: str, holder: str, wt: str, pools: list, launch: Callable =
     """
     entity, project, run_id = run.split("/")
     for pool in (p for p in pools if p.settings.get("recorder_root") and p.settings.get("render")):
-        cmd = [sys.executable, str(HERE / "evaluate.py"), "--any", "--pool", pool.name, "--share", "--min-free-gb"]
+        cmd = [sys.executable, str(HERE / "evaluate.py"), "--any", "--pool", pool.name, "--share-mine", "--min-free-gb"]
         cmd += [str(RECORDER_GB), "--root", pool.settings["recorder_root"], "--holder", holder, "--detach"]
         cmd += [*(["--wt", wt] if wt else []), RECORDER, "--", "--mode", "async", "--follow", "--only_run", run_id]
         cmd += ["--wandb_project", f"{entity}/{project}", "--device", "{DEVICE}", RECORDER_KIT]
