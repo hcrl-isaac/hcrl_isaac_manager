@@ -15,7 +15,7 @@ Ask for these; never guess or create them:
 
 - **Repos:** read access to `hcrl_isaac_manager` (public), `hcrl_isaaclab` (private, ask its owners), `robot_rl` and
   `hcrl_robots` (public). Clones use `git@github.com:hcrl-isaac/<repo>.git`, so GitHub needs the user's SSH key.
-  The catalog projects (`ssti`, `hhlm`, `mbrl`) are private and are not needed.
+  The catalog projects (`ssti`, `hhlm`, `mbrl`, `rlzero`) are private and are not needed.
 - **W&B:** an account and API key in `scripts/.env.wandb` (`pls deps` asks).
 - **SLURM (e.g. TACC):** the user's own allocation and account, a login that reaches the cluster, and their own
   cluster profile (`pls setup --add <name>`). Profiles are per user; nobody else's works for them.

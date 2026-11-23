@@ -121,6 +121,64 @@ class RelaunchTest(unittest.TestCase):
         i = self.cmd.index("train.py")
         self.assertIn("--no-watch", self.cmd[:i])
 
+    def test_a_gpus_relaunch_claims_the_nodes_cards_and_waits_for_them_to_drain(self) -> None:
+        out = subprocess.CompletedProcess([], 0, "", "[res] started detached on h:gpu0 (stage /s/b2)\n")
+        opts = ["--holder", "s", "--on", "c102-015:1", "--gpus", "4"]
+        with mock.patch.object(move.subprocess, "run", lambda cmd, **kw: self.__dict__.update(cmd=cmd) or out):
+            move.relaunch(opts, "train.py", [], "", "", on="c115-003:2", gpus=4)
+        head = self.cmd[: self.cmd.index("train.py")]
+        self.assertEqual(head[-8:], ["--on", "c115-003:2", "--gpus", "4", "--wait", "10m", "--detach", "--no-watch"])
+        self.assertNotIn("--lease", head)
+        self.assertEqual(head.count("--on"), 1, "the launch's own --on is replaced")
+
+
+class MultiCardMoveTest(unittest.TestCase):
+    """A --gpus run: every card's lease records its one stage, and the move carries all of them."""
+
+    def setUp(self) -> None:
+        self.base = MoveTest(methodName="run")
+        self.base.setUp()
+        self.addCleanup(self.base.doCleanups)
+        b = self.base
+        b.lease.stages = ["/s/a1"]
+        b.leases.append(SimpleNamespace(id="old2", stages=["/s/a1"], stage="/s/a1", cpus=0))
+        b.files["pls_argv.json"] = json.dumps(["--on", "c102-015:100695", "--gpus", "2", *LAUNCH[2:]])
+        self.claims = []
+        for p in (
+            mock.patch.object(move.ev, "resolve_on", lambda spec, pools: spec, create=True),
+            mock.patch("res.claim", lambda ns, pools: self.claims.append(ns) or ([], [])),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_a_same_node_move_keeps_every_cards_lease_and_relaunches_on_the_node(self) -> None:
+        self.assertEqual(move.cmd_move("old", "s", "same", 60, 60, [], watch=False), 0)
+        self.assertEqual(self.base.stops, [True])
+        self.assertEqual(self.base.places, [("", "c102-015:100695", 2)])
+        self.assertEqual(self.claims, [], "its own cards, kept: nothing to claim")
+
+    def test_a_move_to_another_node_claims_its_cards_first(self) -> None:
+        self.assertEqual(move.cmd_move("old", "s", "c115-003:102476", 60, 60, [], watch=False), 0)
+        [ns] = self.claims
+        self.assertEqual((ns.count, ns.within, ns.one_host), (2, "c115-003:102476", True))
+        self.assertEqual(self.base.stops, [False], "the old node's cards are released")
+        self.assertEqual(self.base.places, [("", "c115-003:102476", 2)])
+
+    def test_refusals_leave_the_run_alone(self) -> None:
+        for name, setup, to, why in (
+            ("a lease target", lambda: None, "lease:abc", "not to one lease"),
+            ("a card count the leases do not match", lambda: self.base.leases.pop(), "same", "--gpus 2"),
+            ("a card that also records another run",
+             lambda: setattr(self.base.leases[-1], "stages", ["/s/a1", "/s/x"]), "same", "several runs"),
+        ):  # fmt: skip
+            with self.subTest(name):
+                setup()
+                with self.assertRaises(SystemExit) as ctx:
+                    move.cmd_move("old", "s", to, 60, 60, [], watch=False)
+                self.assertIn(why, str(ctx.exception.code))
+                self.assertEqual((self.base.stops, self.base.launches), ([], []))
+                self.setUp()
+
 
 class MoveTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -143,16 +201,21 @@ class MoveTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         store = mock.MagicMock()
-        store.__enter__.return_value = [self.lease]
+        self.leases = [self.lease]
+        store.__enter__.return_value = self.leases
         lock = mock.patch.object(move.ls, "locked_store", lambda: store)
         lock.start()
         self.addCleanup(lock.stop)
-        self.stops, self.launches = [], []
+        self.stops, self.launches, self.places = [], [], []
         stop = mock.patch.object(
             move.ev, "cmd_stop", lambda i, h, p, keep_lease=False: self.stops.append(keep_lease) or 0
         )
         go = mock.patch.object(
-            move, "relaunch", lambda o, s, a, lid, wt: self.launches.append((o, s, a, lid, wt)) or (0, "/s/b2")
+            move,
+            "relaunch",
+            lambda o, s, a, lid, wt, on="", gpus=1: (
+                self.launches.append((o, s, a, lid, wt)) or self.places.append((lid, on, gpus)) or (0, "/s/b2")
+            ),
         )
         self.watched, self.armed, self.verdict = [], [], 0
         watch = mock.patch.object(
@@ -179,6 +242,21 @@ class MoveTest(unittest.TestCase):
         self.assertEqual(move.cmd_move("old", "s", "same", 60, 60, [], watch=False), 0)
         self.assertEqual(len(self.watched), 1)
         self.assertEqual(self.armed, [], "an in-process video run needs no recorder")
+
+    def test_a_run_from_before_move_gets_its_by_hand_steps(self) -> None:
+        self.files.pop("pls_argv.json")
+        with self.assertRaises(SystemExit) as ctx:
+            move.cmd_move("old", "s", "same", 60, 60, [], watch=False)
+        steps = str(ctx.exception.code)
+        for want in (
+            "pls run --stop old --holder s --keep-lease",
+            "--on lease:old --detach",
+            "--load_run https://wandb.ai/ent/proj/runs/ab12cd34",
+            "--max_iterations 3000-<k>",
+            "background",
+        ):
+            self.assertIn(want, steps)  # fmt: skip
+        self.assertEqual((self.stops, self.launches), ([], []))
 
     def test_a_moved_async_run_gets_a_recorder_for_its_new_wandb_run(self) -> None:
         self.files["pls_argv.json"] = json.dumps([*LAUNCH, "--video", "async"])
