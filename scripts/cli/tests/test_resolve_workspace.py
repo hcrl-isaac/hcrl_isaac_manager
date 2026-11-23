@@ -81,12 +81,13 @@ class OptionalDepsTest(unittest.TestCase):
             kept = rw.drop_unreachable(self._hf(), set(), interactive=True)
         self.assertNotIn("motion_datasets", kept)
         self.assertIn(
-            "has no access to https://huggingface.co/datasets/o/motion_datasets. Request access", out.getvalue()
+            "no access to https://huggingface.co/datasets/o/motion_datasets (or its stored token is no longer valid",
+            out.getvalue(),
         )
 
     def test_an_interactive_hf_login_retries_the_fetch(self) -> None:
         runs = []
-        probes = iter([False, True])
+        probes = iter([False, True, True])
         with (
             mock.patch.object(rw, "reachable", side_effect=lambda *a: next(probes)),
             mock.patch.object(rw, "_git_credential", return_value=False),
@@ -100,9 +101,12 @@ class OptionalDepsTest(unittest.TestCase):
             mock.patch("builtins.input", return_value=""),
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            kept = rw.drop_unreachable(self._hf(), set(), interactive=True)
+            warned: set[str] = set()
+            kept = rw.drop_unreachable(self._hf(), warned, interactive=True)
+            again = rw.drop_unreachable(self._hf(), warned, interactive=True)
         self.assertIn("motion_datasets", kept, "readable after the login")
-        self.assertEqual(runs, [["hf", "auth", "login", "--add-to-git-credential"]])
+        self.assertIn("motion_datasets", again, "the resolve loop's next pass keeps it too")
+        self.assertEqual(runs, [["hf", "auth", "login", "--add-to-git-credential"]], "one login")
 
     def test_the_probe_never_prompts(self) -> None:
         seen = {}

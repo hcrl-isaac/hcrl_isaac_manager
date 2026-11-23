@@ -265,7 +265,8 @@ HF_HOST = "huggingface.co"
 
 def _git_credential(host: str) -> bool:
     """Whether git has a stored credential for ``host`` (asked without prompting)."""
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": ""}
+    # Git Credential Manager opens its own window unless told not to
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": "", "GCM_INTERACTIVE": "never"}
     try:
         r = subprocess.run(
             ["git", "credential", "fill"],
@@ -305,8 +306,9 @@ def hf_access(name: str, info: dict, interactive: bool) -> bool:
     page = url.removesuffix(".git")
     if _git_credential(HF_HOST):
         print(
-            f"[resolve] ERROR {name}: your Hugging Face login has no access to {url}. Request access at {page} (or ask"
-            " its owner), then run `pls resolve` again."
+            f"[resolve] ERROR {name}: your Hugging Face login has no access to {url} (or its stored token is no longer"
+            f" valid: `hf auth login --add-to-git-credential` replaces it). Request access at {page} (or ask its owner),"
+            " then run `pls resolve` again."
         )
         return False
     hint = hf_login_hint()
@@ -355,10 +357,10 @@ def drop_unreachable(resolved: dict[str, dict], warned: set[str], interactive: b
     for name, info in resolved.items():
         if info.get("optional") and (name in warned or not reachable(info["git"], info["ref"])):
             if name not in warned and urlparse(info["git"]).hostname == HF_HOST:
-                warned.add(name)
-                if hf_access(name, info, interactive):
+                if hf_access(name, info, interactive):  # readable now; later passes probe it again and keep it
                     kept[name] = info
                     continue
+                warned.add(name)
                 print(f"[resolve] WARNING {name} is not fetched: tasks that load it stop at load")
                 continue
             if name not in warned:
