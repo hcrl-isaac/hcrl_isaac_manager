@@ -169,8 +169,10 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   `pls run` options and resume arguments (`--load_run <its W&B run> --checkpoint model_<k>.pt --max_iterations
   <total - k>`), and waits (`--verify`, 30 min) for a learning iteration past k. The relaunch trains the code the run
   ran: worktrees at its recorded commits (`move-<lease>-<time>`, removed after staging), however far the checkouts
-  moved since. It refuses runs launched before it existed (no `pls_argv.json` in the stage), runs on several cards or
-  cores, other scripts, and runs that shipped uncommitted changes, whose code cannot be rebuilt.
+  moved since. A `--gpus N` run moves to N cards of a node: `--to same` keeps its own cards' leases, and `--to
+  host:job` claims N cards of that held node before the run stops; the relaunch is `--on <node> --gpus N` with the same
+  per-rank resume. It refuses runs launched before it existed (no `pls_argv.json` in the stage), CPU runs, cards that
+  also run another job, other scripts, and runs that shipped uncommitted changes, whose code cannot be rebuilt.
   What a move costs: the run continues as a new W&B run from the checkpoint, so its history, evals and videos split
   across two W&B runs (the move prints both); an off-policy run (SAC, FB-CPR) restarts with an empty replay buffer and
   first runs its cfg's `resume_warmup_steps_per_env` iterations of collection on top of its remaining iterations: it
