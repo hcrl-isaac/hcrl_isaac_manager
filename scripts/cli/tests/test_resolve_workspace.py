@@ -81,6 +81,44 @@ OWN = {"name": "foo", "git": "https://github.com/someone/foo_tasks.git", "ref": 
 OWN_DEPS = {"foo_tasks": [{"name": "hcrl_isaaclab", "ref": "main"}, {"name": "hcrl_robots", "ref": "main"}]}
 
 
+class DivergedTest(unittest.TestCase):
+    """A rewritten upstream is named, not passed over: gitman's fast-forward-only pull skips it silently."""
+
+    def setUp(self) -> None:
+        import subprocess
+        import tempfile
+
+        self.root = Path(tempfile.mkdtemp())
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+               "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin", "HOME": str(self.root)}  # fmt: skip
+        self.git = lambda repo, *a: subprocess.run(
+            ["git", "-C", str(repo), *a], check=True, capture_output=True, env=env
+        )
+        self.upstream = self.root / "upstream"
+        self.upstream.mkdir()
+        self.git(self.upstream, "init", "-q", "-b", "main")
+        (self.upstream / "f").write_text("old")
+        self.git(self.upstream, "add", "f")
+        self.git(self.upstream, "commit", "-qm", "old")
+        self.git(self.root, "clone", "-q", str(self.upstream), str(self.root / "resources" / "data"))
+        self.clone = self.root / "resources" / "data"
+
+    def test_a_squashed_upstream_is_reported(self) -> None:
+        (self.upstream / "f").write_text("new")
+        self.git(self.upstream, "commit", "-qa", "--amend", "-m", "squashed")
+        self.git(self.clone, "fetch", "-q", "--force", "origin")
+        self.assertEqual(rw.diverged({"data": {"ref": "main"}}, self.root / "resources"), [("data", "main")])
+
+    def test_a_clone_behind_or_on_another_branch_is_not(self) -> None:
+        (self.upstream / "f").write_text("next")
+        self.git(self.upstream, "commit", "-qam", "next")
+        self.git(self.clone, "fetch", "-q", "origin")
+        self.assertEqual(rw.diverged({"data": {"ref": "main"}}, self.root / "resources"), [], "fast-forwardable")
+        self.git(self.clone, "checkout", "-q", "-b", "mine")
+        self.git(self.clone, "commit", "-q", "--allow-empty", "-m", "mine")
+        self.assertEqual(rw.diverged({"data": {"ref": "main"}}, self.root / "resources"), [], "not on its ref")
+
+
 class OwnProjectTest(unittest.TestCase):
     def _manifest(self, user: dict) -> dict:
         """``load_manifest`` over ``CATALOG`` and the per-user selection ``user`` (YAML parsing stubbed)."""

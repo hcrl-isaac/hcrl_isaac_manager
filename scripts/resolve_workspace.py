@@ -170,6 +170,33 @@ def _read_deps(repo_dir: Path) -> list[dict]:
     return data.get("deps", []) or []
 
 
+def _git_ok(repo: Path, *args: str) -> bool:
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True).returncode == 0
+
+
+def diverged(resolved: dict[str, dict], resources: Path = RESOURCES) -> list[tuple[str, str]]:
+    """``(repo, ref)`` of each repo on its resolved branch that has diverged from ``origin/<ref>``.
+
+    gitman's update pulls fast-forward only and ignores a failure, so a repo whose upstream history was rewritten
+    (a squash, a force-push) stays on its old commits, reported as updated.
+    """
+    out = []
+    for name, spec in sorted(resolved.items()):
+        repo, ref = resources / name, spec.get("ref", "main")
+        if not (repo / ".git").exists():
+            continue
+        branch = subprocess.run(
+            ["git", "symbolic-ref", "--short", "-q", "HEAD"], cwd=repo, capture_output=True, text=True
+        ).stdout.strip()
+        if branch != ref or not _git_ok(repo, "rev-parse", "--verify", "-q", f"origin/{ref}"):
+            continue
+        ahead = _git_ok(repo, "merge-base", "--is-ancestor", f"origin/{ref}", ref)
+        behind = _git_ok(repo, "merge-base", "--is-ancestor", ref, f"origin/{ref}")
+        if not ahead and not behind:
+            out.append((name, ref))
+    return out
+
+
 def resolve(manifest: dict) -> dict[str, dict]:
     """Resolve the workspace manifest to a flat ``{name: {git, ref}}`` map (deduped, conflict-checked).
 
@@ -429,6 +456,14 @@ def main() -> None:
                     f"[resolve] MERGE CONFLICTS in {repo.name}: resolve them, then `git stash drop` "
                     "(the stash is preserved)."
                 )
+
+    for name, ref in diverged(resolved) if args.update else []:
+        print(
+            f"[resolve][WARN] {name}: {ref} has diverged from origin/{ref} (its upstream history was rewritten, or it"
+            f" holds commits of its own), so it was NOT updated. Once it holds no work of yours:\n"
+            f"          git -C resources/{name} reset --hard origin/{ref}",
+            file=sys.stderr,
+        )
 
     mode = manifest.get("isaaclab", {}).get("mode", "source")
     if mode == "source":
