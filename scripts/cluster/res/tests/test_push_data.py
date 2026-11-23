@@ -102,6 +102,26 @@ class PushDataTest(unittest.TestCase):
         self.assertEqual(pd.source(resources, "motion_datasets", "wt"), str(self.src / "worktrees" / "wt"))
         self.assertEqual(pd.source(resources, "motion_datasets", "nope"), "")
 
+    def test_a_refusal_on_any_host_pushes_to_none(self) -> None:
+        """A changed file on the pool's second host stops the push before the first host gets anything."""
+        dests = {h: self.tmp / h / "motion_datasets" for h in ("pepi", "salah")}
+        for d in dests.values():
+            (d / "lafan1").mkdir(parents=True)
+        (dests["salah"] / "lafan1" / "wt.pt").write_bytes(b"other")
+        (self.tmp / "ws").mkdir()
+        (self.tmp / "ws" / "resources").symlink_to(self.src.parent)
+        argv = ["push_data.py", "--on", "larg-a40", "--wt", "wt"]
+        with (
+            mock.patch.object(pd, "load_pools", return_value=[self.pool]),
+            mock.patch.object(pd, "local_workspace", return_value=str(self.tmp / "ws")),
+            mock.patch.object(pd, "destination", side_effect=lambda t, repo, root: str(dests[t.host])),
+            mock.patch.object(sys, "argv", argv),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            pd.main()
+        self.assertIn("nothing pushed", str(ctx.exception.code))
+        self.assertFalse((dests["pepi"] / "lafan1" / "wt.pt").exists(), "the first host got nothing")
+
 
 if __name__ == "__main__":
     unittest.main()

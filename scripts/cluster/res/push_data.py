@@ -125,26 +125,26 @@ def main() -> None:
     srcs = {repo: source(resources, repo, args.wt) for repo in DATA_REPOS}
     if args.wt and not any(srcs.values()):
         sys.exit(f"[stage] no data repo has worktrees/{args.wt} ({', '.join(DATA_REPOS)})")
-    failed = []
+    plan = []
     for pool, host in hosts_of(args.on, load_pools()):
         t = make_target(pool, host, 0)
-        for repo, src in srcs.items():
-            if not src:
-                continue
-            dest = destination(t, repo, args.root)
-            if args.wt and (diff := changed(t, src, dest)):
-                if not args.keep_existing:
-                    sys.exit(
-                        f"[stage] {repo}: these files of {args.wt} differ from {host}'s copy, which --wt never"
-                        f" replaces: {', '.join(diff)}. Give them new names, or pass --keep-existing"
-                    )
-                for f in diff:
-                    print(
-                        f"[stage] WARN: {host}:{repo}/{f} differs; it keeps its copy (--keep-existing)", file=sys.stderr
-                    )
-            print(f"[stage] adding new {repo} files from {src} -> {host}:{dest} (never deleted)", file=sys.stderr)
-            if push(t, src, dest, only_new=bool(args.wt)) != 0:
-                failed.append(f"{host}:{repo}")
+        plan += [(host, t, repo, src, destination(t, repo, args.root)) for repo, src in srcs.items() if src]
+    # every host is checked before any is pushed, so a refusal leaves the pool as it was
+    diffs = {(host, repo): changed(t, src, dest) for host, t, repo, src, dest in plan} if args.wt else {}
+    if (bad := {k: v for k, v in diffs.items() if v}) and not args.keep_existing:
+        lines = "; ".join(f"{h}:{r} {', '.join(v)}" for (h, r), v in bad.items())
+        sys.exit(
+            f"[stage] files of {args.wt} differ from the box's copy, which --wt never replaces ({lines}); nothing"
+            " pushed. Give them new names, or pass --keep-existing"
+        )
+    for (h, r), v in bad.items():
+        for f in v:
+            print(f"[stage] WARN: {h}:{r}/{f} differs; it keeps its copy (--keep-existing)", file=sys.stderr)
+    failed = []
+    for host, t, repo, src, dest in plan:
+        print(f"[stage] adding new {repo} files from {src} -> {host}:{dest} (never deleted)", file=sys.stderr)
+        if push(t, src, dest, only_new=bool(args.wt)) != 0:
+            failed.append(f"{host}:{repo}")
     if failed:
         sys.exit(f"[stage] could not add the data repos' new files on {', '.join(failed)}")
 
