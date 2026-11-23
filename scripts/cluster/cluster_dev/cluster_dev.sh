@@ -202,8 +202,9 @@ cmd_start() {
     done
     ensure_master
     push_env_cluster || err "could not push ${ENV_FILE} (exec falls back to scripts/cluster/.env.cluster)."
-    # 1) render + submit the sentinel sbatch from the template, before any slow step, so its job id is known at once. Only $SBATCH_DIRECTIVES is substituted;
-    # runtime refs ($SLURM_JOB_ID, $HOME, $(hostname)) are left for the job to evaluate on the node.
+    # 1) render + submit the sentinel sbatch from the template, before any slow step, so its job id is known at once.
+    # Only $SBATCH_DIRECTIVES is substituted; runtime refs ($SLURM_JOB_ID, $HOME, $(hostname)) are left for the job to
+    # evaluate on the node.
     local sbatch_remote=".cluster_dev_sentinel.sbatch"
     export SBATCH_DIRECTIVES
     envsubst '$SBATCH_DIRECTIVES' < "${SCRIPT_DIR}/sentinel.sbatch" | on_login "cat > ${sbatch_remote}"
