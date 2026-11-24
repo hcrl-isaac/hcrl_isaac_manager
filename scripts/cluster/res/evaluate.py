@@ -128,8 +128,8 @@ class LaunchSlot:
                 return self
             if not said:
                 print(
-                    f"[res] {self.slots} launches are using {self.login}'s SSH connection, which takes few sessions at"
-                    " once; waiting for one to finish",
+                    f"[res] {self.slots} launches (or attached runs, which keep theirs while they run) are using"
+                    f" {self.login}'s SSH connection, which takes few sessions at once; waiting for one to finish",
                     file=sys.stderr,
                 )
                 said = True
