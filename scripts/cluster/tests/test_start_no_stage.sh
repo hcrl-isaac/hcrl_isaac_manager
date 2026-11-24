@@ -22,7 +22,7 @@ while [ $# -gt 0 ]; do
 done
 cd "$HOME" && exec bash -c "$*"  # remote commands run from the remote home
 EOF
-printf '#!/usr/bin/env bash\necho 4242\n' > "$T/bin/sbatch"
+printf '#!/usr/bin/env bash\necho "$*" >> "$HOME/sbatch_args"\necho 4242\n' > "$T/bin/sbatch"
 printf '#!/usr/bin/env bash\necho PENDING\n' > "$T/bin/squeue"
 chmod +x "$T/bin/"*
 (
@@ -49,6 +49,13 @@ dev start --no-sync > "$T/out3" 2>&1
 check "a retired or misspelled flag is refused before anything runs" \
     "[ $? -ne 0 ] && grep -q \"unknown argument '--no-sync'\" '$T/out3' && [ ! -e '$T/remote/trees' ]"
 check "nothing lands in the caller's directory" "[ ! -e '$REPO/.cluster_dev_sentinel.sbatch' ] && [ -e '$T/.cluster_dev_sentinel.sbatch' ]"
+
+dev start --no-stage --partition gpu-dev --time 2:00:00 > "$T/out4" 2>&1
+stop_watcher
+check "--partition and --time reach sbatch, over the config's #SBATCH lines" \
+    "tail -1 '$T/sbatch_args' | grep -q -- '--partition=gpu-dev --time=2:00:00' && grep -q 'partition=gpu-dev' '$T/out4'"
+dev start --no-stage --partition > "$T/out5" 2>&1
+check "a --partition with no value is refused" "[ $? -ne 0 ] && grep -q 'needs a value' '$T/out5'"
 
 dev start > "$T/out2" 2>&1
 stop_watcher
