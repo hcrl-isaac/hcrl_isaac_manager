@@ -378,9 +378,14 @@ require_running() {
     if [ "$DD_MODE" = "auto" ]; then
         [ "$(state_get SSH_NODE_OK)" = "yes" ] && [ -n "$DD_NODE" ] && DD_MODE="ssh" || DD_MODE="srun"
     fi
-    if [ "$DD_MODE" = "srun" ]; then  # the job may have been moved to another account since it was submitted
-        local acct; acct="$(on_login "squeue -j ${DD_JOBID} -h -o %a 2>/dev/null")"
-        [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A $(_acct_spelling "$acct")" && _srun_opts
+    if [ "$DD_MODE" = "srun" ]; then  # the job's own account, queue and limit: it may differ from the config's
+        local row acct part limit; row="$(on_login "squeue -j ${DD_JOBID} -h -o '%a %P %l' 2>/dev/null")"
+        acct="$(echo "$row" | awk '{print $1}')"; part="$(echo "$row" | awk '{print $2}')"
+        limit="$(echo "$row" | awk '{print $3}')"
+        [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A $(_acct_spelling "$acct")"
+        [ -n "$part" ] && SRUN_PART_OPT="-p ${part}"
+        [ -n "$limit" ] && [ "$limit" != UNLIMITED ] && DEV_TIME="$limit"
+        _srun_opts
     fi
 }
 
