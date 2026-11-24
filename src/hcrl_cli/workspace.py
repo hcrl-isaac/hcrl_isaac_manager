@@ -259,5 +259,8 @@ def test(repo: str, args: list[str]) -> None:
     if not where.is_dir():
         sys.exit(f"[pls] test: no repo {repo} under resources/ (see `pls test --help`)")
     os.chdir(where)
-    cmd = [str(ROOT / VENV_PY), "-m", "pytest", "-m", "not gpu", *rest]
+    # pls_exit_status keeps pytest's exit status when the repo's conftest has launched Kit (which exits 0)
+    plugins = str(Path(__file__).resolve().parent / "pytest_plugins")
+    pythonpath = os.pathsep.join(p for p in (plugins, pythonpath) if p)
+    cmd = [str(ROOT / VENV_PY), "-m", "pytest", "-p", "pls_exit_status", "-m", "not gpu", *rest]
     handoff(cmd, echo=True, env={"OMNI_KIT_ACCEPT_EULA": "YES", "PYTHONPATH": pythonpath})
