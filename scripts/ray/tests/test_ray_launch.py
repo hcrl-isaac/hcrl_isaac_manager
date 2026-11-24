@@ -79,6 +79,18 @@ class FileMountsTest(unittest.TestCase):
         self.assertIn('/resources/IsaacLab/apps": "/workspace/IsaacLab/apps"', out)
         self.assertIn('/resources/robot_rl": "/workspace/ext/robot_rl"', out)
         self.assertNotIn("/workspace/ext/isaaclab", out)
+class SubmitConfigTest(unittest.TestCase):
+    def test_each_submit_reads_its_own_rendered_config(self) -> None:
+        """A shared rendered config can be re-rendered by a concurrent submit (another WT) before it is read."""
+        import re
+
+        sh = (Path(__file__).resolve().parents[1] / "ray_interface.sh").read_text()
+        self.assertIn('CONFIG_DIR="$(mktemp -d', sh)
+        reads = re.findall(r"job_config=([^\s]+)|--job_config (\S+)", sh)
+        paths = [a or b for a, b in reads if (a or b) != "$job_config"]
+        self.assertTrue(paths)
+        for path in paths:
+            self.assertIn("CONFIG_DIR", path, f"{path} reads the shared rendered config")
 
 
 class TemplateExcludesTest(unittest.TestCase):
