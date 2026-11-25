@@ -36,6 +36,7 @@ import follow
 import leases as ls
 from inventory import MANAGER_DIR, RES_DIR, Pool, profile_value, ssh_pool_of, ssh_scratch
 from probe import MASTER_OPTS, SSH_OPTS, box_cpu_state
+from sshslot import SSH
 
 CLUSTER_DEV = MANAGER_DIR / "scripts" / "cluster" / "cluster_dev" / "cluster_dev.sh"
 SUPPORTED = ("local", "ssh", "slurm")
@@ -149,7 +150,7 @@ def explain_ssh_failure(t: Target) -> None:
     if t.ssh in _EXPLAINED:
         return
     _EXPLAINED.add(t.ssh)
-    up = subprocess.run(["ssh", *t.ssh_opts, "-O", "check", t.ssh], capture_output=True).returncode == 0
+    up = subprocess.run([SSH, *t.ssh_opts, "-O", "check", t.ssh], capture_output=True).returncode == 0
     if up:
         print(
             f"[res] {t.ssh}'s SSH connection is up but had no free session (its sshd's MaxSessions), so ssh tried a"
@@ -256,7 +257,7 @@ def check_free_disk(t: Target, pool: Pool) -> None:
     df = (
         f'd={q(t.scratch)}; while [ ! -e "$d" ]; do d=$(dirname "$d"); done; df -Pk "$d" | awk \'NR == 2 {{print $4}}\''
     )
-    cmd = ["bash", "-c", df] if t.kind == "local" else ["ssh", *t.ssh_opts, t.ssh, df]
+    cmd = ["bash", "-c", df] if t.kind == "local" else [SSH, *t.ssh_opts, t.ssh, df]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=60).stdout.strip()
     except subprocess.TimeoutExpired:
@@ -988,7 +989,7 @@ def use_tree(t: Target, tree: str) -> str:
     q = shlex.quote
     path = f"{profile_value(t.pool, 'CLUSTER_TREES_DIR') or f'{t.workspace}/trees'}/{tree}"
     # touched as a reused tree is (its mtime is its last use), so a concurrent prune keeps it
-    check = subprocess.run(["ssh", *t.ssh_opts, t.ssh, f"[ -f {q(path)}/.complete ] && touch {q(path)}"],
+    check = subprocess.run([SSH, *t.ssh_opts, t.ssh, f"[ -f {q(path)}/.complete ] && touch {q(path)}"],
                            capture_output=True, text=True)  # fmt: skip
     if check.returncode == 255:
         sys.exit(f"[res] could not reach {t.pool} to check the code tree: {check.stderr.strip()[:200]}")
@@ -1028,7 +1029,7 @@ def stage_tree(t: Target, code: dict[str, str], data: dict[str, str] | None = No
             f"[ -d {trees}/{q(tree)} ] && touch {trees}/{q(tree)}; "  # never a file in its place, if a prune won
             f"[ -f {trees}/{q(tree)}/.complete ]"
         )
-        check = subprocess.run(["ssh", *t.ssh_opts, t.ssh, check_tree], capture_output=True, text=True)
+        check = subprocess.run([SSH, *t.ssh_opts, t.ssh, check_tree], capture_output=True, text=True)
         if check.returncode == 0:
             prune_old_trees(t, trees, tree)
             return tree
@@ -1057,7 +1058,7 @@ def prune_old_trees(t: Target, trees: str, keep: str) -> None:
         'echo "$(date -u +%FT%TZ) removing $d"; chmod -R u+w "$d" && rm -rf "$d"; done'
     )
     detached = f"nohup setsid flock -n {trees}/.prune.lock bash -c {q(sweep)} >> {trees}/.prune.log 2>&1 < /dev/null &"
-    if subprocess.run(["ssh", *t.ssh_opts, t.ssh, detached], capture_output=True).returncode == 0:
+    if subprocess.run([SSH, *t.ssh_opts, t.ssh, detached], capture_output=True).returncode == 0:
         print(
             f"[res] started a background prune of res-eval trees older than {TREE_KEEP_DAYS} days on {t.pool}"
             f" (a no-op if one is already running; log: {trees}/.prune.log)",
@@ -1228,13 +1229,13 @@ class Stage:
         self.root = ""  # an Isaac Lab install root a SLURM run's step uses instead of the cluster's image (--root)
 
     def _ssh(self, cmd: str, **kw: object) -> subprocess.CompletedProcess:
-        r = subprocess.run(["ssh", *self.t.ssh_opts, self.t.ssh, cmd], **kw)
+        r = subprocess.run([SSH, *self.t.ssh_opts, self.t.ssh, cmd], **kw)
         if r.returncode == 255 and self.t.kind == "slurm":  # ssh's own failure, not the command's
             explain_ssh_failure(self.t)
         return r
 
     def _rsync_ssh(self) -> str:
-        return "ssh " + " ".join(shlex.quote(o) for o in self.t.ssh_opts)
+        return SSH + " " + " ".join(shlex.quote(o) for o in self.t.ssh_opts)
 
     def sh(self, cmd: str) -> int:
         """Run a shell command on the target (here, for a local pool) and return its status."""
@@ -1547,7 +1548,7 @@ class Stage:
             args = " ".join(q(a) for a in argv)
             remote = f"cd {q(self.dir)} && {{ setsid bash run.sh {args} < /dev/null & echo $! > pid; wait $!; }}"
             self.proc = subprocess.Popen(
-                ["ssh", *SSH_OPTS, self.t.ssh, remote],
+                [SSH, *SSH_OPTS, self.t.ssh, remote],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -1751,7 +1752,7 @@ def slurm_profile(report_pool: str, job: str, pools: list[Pool]) -> Pool:
         sys.exit(f"[res] no cluster profile for {report_pool}")
     login = profiles[0].settings.get("login", "")
     res = subprocess.run(
-        ["ssh", *MASTER_OPTS, *SSH_OPTS, login, f"squeue -h -j {shlex.quote(job)} -o %P"],
+        [SSH, *MASTER_OPTS, *SSH_OPTS, login, f"squeue -h -j {shlex.quote(job)} -o %P"],
         capture_output=True,
         text=True,
     )

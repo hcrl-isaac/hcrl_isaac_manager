@@ -16,6 +16,7 @@ import sys
 
 from evaluate import Target, local_workspace, make_target
 from inventory import Pool, load_pools
+from sshslot import SSH
 
 DATA_REPOS = ("motion_datasets",)  # the cluster push's TREE_DATA_REPOS (cluster_dev/trees.sh)
 # the training files a task loads (the cluster push's allowlist)
@@ -71,7 +72,7 @@ def destination(t: Target, repo: str, root: str) -> str:
     q = shlex.quote
     homes = [t.workspace, *([root] if root else [])]
     probe = "; ".join(f"[ -d {q(h)}/resources/{q(repo)} ] && {{ echo {q(h)}; exit 0; }}" for h in homes)
-    out = subprocess.run(["ssh", *t.ssh_opts, t.ssh, f"{probe}; exit 0"], capture_output=True, text=True)
+    out = subprocess.run([SSH, *t.ssh_opts, t.ssh, f"{probe}; exit 0"], capture_output=True, text=True)
     found = [line for line in out.stdout.splitlines() if line in homes]
     return f"{found[0] if found else t.workspace}/resources/{repo}"
 
@@ -82,7 +83,7 @@ def _rsync(t: Target, src: str, dest: str, opts: list[str], capture: bool = Fals
     rules = [f"--include={p}" for p in INCLUDE]
     cmd = [
         "rsync", "-rlpt", *opts, "--exclude-from=-", "--exclude=/worktrees/", "--include=*/", *rules,
-        "--exclude=*", "--prune-empty-dirs", "-e", "ssh " + " ".join(shlex.quote(o) for o in t.ssh_opts),
+        "--exclude=*", "--prune-empty-dirs", "-e", SSH + " " + " ".join(shlex.quote(o) for o in t.ssh_opts),
         f"--rsync-path=mkdir -p {shlex.quote(dest)} && rsync", f"{src}/", f"{t.ssh}:{dest}/",
     ]  # fmt: skip
     return subprocess.run(cmd, input=skip, text=True, capture_output=capture)

@@ -11,6 +11,7 @@ import urllib.request
 from dataclasses import asdict, dataclass, field
 
 from inventory import CLUSTER_CONFIG_DIR, Pool, ssh_scratch, ssh_target
+from sshslot import SSH
 
 # Idle cards read 0-545 MiB and the smallest card seen in use reads ~2.4 GB, so 1 GiB sits in that gap: at or
 # above this with no visible process a card is held (e.g. Isaac kept its VRAM after exit).
@@ -317,7 +318,7 @@ def probe_ssh_host(pool: Pool, host: str) -> Report:
             label, pool.kind, error=f"no ssh user: set user under [compute.{pool.name}] in compute.local.toml"
         )
     try:
-        res = _run(["ssh", *SSH_OPTS, ssh_target(pool, host), REMOTE_QUERY], timeout=40)
+        res = _run([SSH, *SSH_OPTS, ssh_target(pool, host), REMOTE_QUERY], timeout=40)
     except subprocess.TimeoutExpired:
         return Report(label, pool.kind, error="unreachable (ssh timed out)")
     user = ssh_target(pool, host).split("@")[0]
@@ -364,7 +365,7 @@ def box_cpu_state(target: str, stages: list[str], start_min: int = 60) -> tuple[
     script = f"CPU_START_MIN={int(start_min)}; {CPU_QUERY}"
     remote = " ".join(["bash", "-c", shlex.quote(script), "_", *(shlex.quote(s) for s in stages)])
     try:
-        res = _run(["ssh", *SSH_OPTS, target, remote], timeout=40)
+        res = _run([SSH, *SSH_OPTS, target, remote], timeout=40)
     except subprocess.TimeoutExpired:
         return None
     lines = res.stdout.splitlines()
@@ -456,7 +457,7 @@ def probe_ray(pool: Pool) -> list[Report]:
 
 def _master_alive(login: str) -> bool:
     try:
-        return _run(["ssh", *MASTER_OPTS, "-O", "check", login], timeout=10).returncode == 0
+        return _run([SSH, *MASTER_OPTS, "-O", "check", login], timeout=10).returncode == 0
     except subprocess.TimeoutExpired:
         return False
 
@@ -520,7 +521,7 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
         return [Report(label, "slurm", error=f"SSH master down: state unknown (pls connect --on {pools[0].name})")]
     fmt = "%i|%P|%a|%T|%N|%D|%L|%S|%b|%j"
     try:
-        res = _run(["ssh", *MASTER_OPTS, *SSH_OPTS, login, f"squeue --me -h -o '{fmt}'"], timeout=30)
+        res = _run([SSH, *MASTER_OPTS, *SSH_OPTS, login, f"squeue --me -h -o '{fmt}'"], timeout=30)
     except subprocess.TimeoutExpired:
         return [Report(label, "slurm", error="squeue timed out")]
     if res.returncode != 0:
@@ -563,7 +564,7 @@ def probe_slurm_login(login: str, pools: list[Pool]) -> list[Report]:
             opts += (f" -p {part}" if part else "") + (f" -A {a}" if a and a != "(null)" else "")
             remote = f"timeout 45 srun {opts} {REMOTE_QUERY}"
             try:
-                step = _run(["ssh", *MASTER_OPTS, *SSH_OPTS, login, remote], timeout=60)
+                step = _run([SSH, *MASTER_OPTS, *SSH_OPTS, login, remote], timeout=60)
                 cards = parse_gpu_query(step.stdout, report.pool, node)
                 break
             except subprocess.TimeoutExpired:

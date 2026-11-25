@@ -17,6 +17,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from sshslot import SSH
+
 if TYPE_CHECKING:
     import argparse
 
@@ -38,7 +40,7 @@ def _probe(stage: Stage, cmd: str) -> str:
     if stage.t.kind == "local":
         out = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
     else:
-        out = subprocess.run(["ssh", *stage.t.ssh_opts, stage.t.ssh, cmd], capture_output=True, text=True)
+        out = subprocess.run([SSH, *stage.t.ssh_opts, stage.t.ssh, cmd], capture_output=True, text=True)
     return out.stdout
 
 
