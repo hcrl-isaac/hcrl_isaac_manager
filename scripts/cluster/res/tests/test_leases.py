@@ -658,6 +658,15 @@ class CommandTest(CommandBase):
         self.claim(any=True, share=True, min_free_gb=10, holder="b")
         self.assertIn("mckennie:2", self.stored())
 
+    def test_share_never_takes_a_card_no_run_can_start_on(self) -> None:
+        """A card CUDA hides (or numbers apart) is held; --share must not read it as a busy card with room."""
+        bad = card(index=2, state="held")
+        bad.unusable = True
+        self.cards = [bad]
+        with self.assertRaises(SystemExit):
+            self.claim(any=True, share=True, min_free_gb=10)
+        self.assertEqual(self.stored(), [])
+
     def test_share_never_takes_a_card_another_session_leased(self) -> None:
         self.claim("mckennie:2", share=True, min_free_gb=10)
         with self.assertRaises(SystemExit) as ctx:

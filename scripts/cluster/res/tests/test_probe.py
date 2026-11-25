@@ -73,6 +73,7 @@ class ParseGpuQueryTest(unittest.TestCase):
         cards = parse_gpu_query(output(cuda=hides_b), "larg", "pogba", unmasked=True)
         self.assertEqual([c.state for c in cards], ["busy", "held", "held", "busy", "held"])
         self.assertIn("an unmasked run here fails at CUDA init", cards[0].note)
+        self.assertTrue(all(c.unusable for c in cards), "no run starts on any card of that host, shared or not")
         cards = parse_gpu_query(output(cards="0, GPU-a, A40, 0, 46068, 0\n1, GPU-b, A40, 0, 46068, 0\n", apps="",
                                        ps="", cuda="GPU-a\n"), "larg", "pogba", unmasked=True)  # fmt: skip
         self.assertEqual([c.state for c in cards], ["held", "held"], "a free card beside a hidden one is not claimable")
