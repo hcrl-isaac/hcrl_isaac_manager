@@ -10,6 +10,10 @@ watch() {  # watch <log-file> ; prints the verdict, exits with watch_run's code
     bash "$REPO/scripts/tools/watch_run.sh" probe "$1" 4000 20 0
 }
 
+watch_s() {  # watch_s <log-file> <status-file> <target>
+    bash "$REPO/scripts/tools/watch_run.sh" --status "$2" probe "$1" "$3" 20 0
+}
+
 fails=0
 check() {
     if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
@@ -36,6 +40,22 @@ check "scanner noise on srun's port is not FAILED" '[ "$rc" = 124 ] && case $out
 printf 'Learning iteration 927/4000\n%s\nsrun: error: Node failure on c571-003\n' "$scanner" > "$T/scanner_real.log"
 out="$(watch "$T/scanner_real.log")"; rc=$?
 check "a real srun error next to scanner noise is FAILED" '[ "$rc" = 1 ] && case $out in *FAILED*) true ;; *) false ;; esac'
+
+# a detached run's status file is its end: an iteration-0 eval pause is not one, even with a 2-iteration target
+printf 'Learning iteration 0/2\n[INFO] Evaluating motions...\n' > "$T/short.log"
+out="$(timeout 5 bash "$REPO/scripts/tools/watch_run.sh" --status "$T/short.status" probe "$T/short.log" 2 20 0 2>&1)"; rc=$?
+check "a live 2-iteration run at iter 0 is not finished" '[ "$rc" = 124 ] && case $out in *finished*) false ;; *) true ;; esac'
+out="$(timeout 5 bash "$REPO/scripts/tools/watch_run.sh" probe "$T/short.log" 2 20 0 2>&1)"; rc=$?
+check "nor without a status file" '[ "$rc" = 124 ] && case $out in *finished*) false ;; *) true ;; esac'
+printf 'Learning iteration 1/2\n' >> "$T/short.log"; echo 0 > "$T/short.status"
+out="$(watch_s "$T/short.log" "$T/short.status" 2)"; rc=$?
+check "it is finished once its status says 0 at its last iteration" '[ "$rc" = 0 ] && case $out in *finished*) true ;; *) false ;; esac'
+echo 1 > "$T/short.status"
+out="$(watch_s "$T/short.log" "$T/short.status" 2)"; rc=$?
+check "and FAILED when its status is nonzero" '[ "$rc" = 1 ] && case $out in *"exited 1"*) true ;; *) false ;; esac'
+printf 'Learning iteration 10/4000\n' > "$T/early.log"; echo 0 > "$T/early.status"
+out="$(watch_s "$T/early.log" "$T/early.status" 4000)"; rc=$?
+check "a run that exits 0 short of its target is FAILED" '[ "$rc" = 1 ] && case $out in *short*) true ;; *) false ;; esac'
 
 # Kit's pip-env race at boot prints a chained traceback on every rank of a healthy run (amd-rtx BFM-Zero retrain)
 pipapi='[default3]:Traceback (most recent call last):

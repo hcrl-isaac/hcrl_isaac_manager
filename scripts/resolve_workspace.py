@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 
@@ -259,12 +260,95 @@ def reachable(url: str, ref: str) -> bool:
     return r.returncode == 0
 
 
-def drop_unreachable(resolved: dict[str, dict], warned: set[str]) -> dict[str, dict]:
+HF_HOST = "huggingface.co"
+
+
+def _git_credential(host: str) -> bool:
+    """Whether git has a stored credential for ``host`` (asked without prompting)."""
+    # Git Credential Manager opens its own window unless told not to
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": "", "GCM_INTERACTIVE": "never"}
+    try:
+        r = subprocess.run(
+            ["git", "credential", "fill"],
+            input=f"protocol=https\nhost={host}\n\n",
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return r.returncode == 0 and "password=" in r.stdout
+
+
+def _hf_cli() -> list[str]:
+    """The Hugging Face CLI: on PATH, beside this Python, in the ilab venv, else through uvx."""
+    for cand in (shutil.which("hf"), Path(sys.executable).with_name("hf"), MANAGER_DIR / "ilab" / "bin" / "hf"):
+        if cand and Path(cand).is_file():
+            return [str(cand)]
+    return ["uvx", "--from", "huggingface_hub", "hf"]
+
+
+def hf_login_hint() -> str:
+    """The command that lets git read a Hugging Face repo: a credential helper (when git has none) and an hf login."""
+    helper = subprocess.run(["git", "config", "--get", "credential.helper"], capture_output=True, text=True)
+    pre = "" if helper.stdout.strip() else "git config --global credential.helper store && "
+    return f"{pre}hf auth login --add-to-git-credential"
+
+
+def hf_access(name: str, info: dict, interactive: bool) -> bool:
+    """Try to make an unreachable Hugging Face repo readable: log in (asking first) when git has no credential.
+
+    Returns:
+        Whether the repo is readable now. When it is not, the reason and the fix have been printed.
+    """
+    url = info["git"]
+    page = url.removesuffix(".git")
+    if _git_credential(HF_HOST):
+        print(
+            f"[resolve] ERROR {name}: your Hugging Face login has no access to {url} (or its stored token is no longer"
+            f" valid: `hf auth login --add-to-git-credential` replaces it). Request access at {page} (or ask its owner),"
+            " then run `pls resolve` again."
+        )
+        return False
+    hint = hf_login_hint()
+    if not interactive:
+        print(f"[resolve] ERROR {name}: {url} needs a Hugging Face login. Run `{hint}`, then `pls resolve` again.")
+        return False
+    print(
+        f"[resolve] {name} comes from {url}, which needs a Hugging Face login (a token from huggingface.co/settings/tokens)."
+    )
+    if input("[resolve] log in now? [Y/n] ").strip().lower().startswith("n"):
+        print(f"[resolve] skipped. Later: `{hint}`, then `pls resolve` again.")
+        return False
+    if hint.startswith("git config"):
+        ans = input("[resolve] git has no credential helper; save the token in ~/.git-credentials (store)? [y/N] ")
+        if not ans.strip().lower().startswith("y"):
+            print(f"[resolve] git cannot keep the token without a helper; set one up, then `{hint}`.")
+            return False
+        subprocess.run(["git", "config", "--global", "credential.helper", "store"], check=False)
+    if subprocess.run([*_hf_cli(), "auth", "login", "--add-to-git-credential"], check=False).returncode != 0:
+        print(f"[resolve] ERROR {name}: hf login failed. Run `{hint}` yourself, then `pls resolve` again.")
+        return False
+    if reachable(url, info["ref"]):
+        print(f"[resolve] {name}: {url} is readable now")
+        return True
+    print(
+        f"[resolve] ERROR {name}: logged in, but this account has no access to {url}. Request access at {page} (or"
+        " ask its owner), then run `pls resolve` again."
+    )
+    return False
+
+
+def drop_unreachable(resolved: dict[str, dict], warned: set[str], interactive: bool = False) -> dict[str, dict]:
     """Leave out every optional dep whose remote this user can't read, warning once per dep.
+
+    A Hugging Face repo gets a login first (``hf_access``): asked for when ``interactive``, else the command printed.
 
     Args:
         resolved: The resolved repo map.
         warned: Names already warned about (updated in place).
+        interactive: Whether a person can answer prompts (a terminal on stdin and stdout).
 
     Returns:
         The map without the unreachable optional deps; a required repo is always kept, so its fetch fails loudly.
@@ -272,6 +356,13 @@ def drop_unreachable(resolved: dict[str, dict], warned: set[str]) -> dict[str, d
     kept = {}
     for name, info in resolved.items():
         if info.get("optional") and (name in warned or not reachable(info["git"], info["ref"])):
+            if name not in warned and urlparse(info["git"]).hostname == HF_HOST:
+                if hf_access(name, info, interactive):  # readable now; later passes probe it again and keep it
+                    kept[name] = info
+                    continue
+                warned.add(name)
+                print(f"[resolve] WARNING {name} is not fetched: tasks that load it stop at load")
+                continue
             if name not in warned:
                 note = f"; {info['note']}" if info.get("note") else ""
                 print(f"[resolve] WARNING {name}: no access to {info['git']}; tasks that load it stop at load{note}")
@@ -419,7 +510,7 @@ def main() -> None:
         while True:
             resolved = resolve(manifest)
             if args.update:  # only a fetch needs access; writing gitman.yaml alone lists everything
-                resolved = drop_unreachable(resolved, warned)
+                resolved = drop_unreachable(resolved, warned, sys.stdin.isatty() and sys.stdout.isatty())
             out.write_text(yaml.safe_dump(to_gitman(resolved, manifest), sort_keys=False))
             names = set(resolved)
             print(f"[resolve] wrote {out} with {len(resolved)} repos: {', '.join(sorted(resolved))}")

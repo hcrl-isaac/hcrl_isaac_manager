@@ -15,6 +15,7 @@ persistent **ControlMaster** socket — opened once, kept warm — is what avoid
 ```bash
 # --on selects scripts/cluster/config/<cluster>/
 pls res hold --on rtx-small           # approve ONE 2FA prompt; rest is non-interactive (--no-stage: ship no code)
+pls res hold --on horizon --partition gpu-dev --time 2:00:00   # one hold on another queue than the config's
 ```
 `pls` runs `cluster_dev.sh` with `CLUSTER` set. `res hold` opens the SSH master (the
 only 2FA prompt; `pls connect --on <cluster>` opens it ahead of time), stages the workspace as the code tree `default` (below), submits the sentinel job, and launches a

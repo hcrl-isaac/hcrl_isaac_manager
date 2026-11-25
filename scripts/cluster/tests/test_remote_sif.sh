@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # `setup` on a CLUSTER_ARCH=arm64 profile builds the .sif in a batch job on the cluster. Stubs only: ssh runs here,
 # sbatch runs the job script here, apptainer fakes pull and build. A failed pull or a rejected job never replaces
-# the .sif, and the profile's resources reach sbatch.
+# the .sif, the profile's resources reach sbatch, and --build-only/--push-only build beside the .sif, then swap.
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 T="$(mktemp -d)"
@@ -75,10 +75,15 @@ rm -f "$T/sbatch_args"
 CLUSTER_BUILD_MIN_FREE_GB=99999999 ci setup > "$T/out4" 2>&1; rc=$?
 check "too little free space refuses before submitting" "[ $rc != 0 ] && grep -q 'GB free' '$T/out4' && [ ! -e '$T/sbatch_args' ]"
 
-for flag in --build-only --push-only; do
-    ci setup "$flag" > "$T/out5" 2>&1; rc=$?
-    check "an arm64 profile refuses setup $flag" "[ $rc != 0 ] && grep -q 'built on the cluster' '$T/out5'"
-done
+ci setup --push-only > "$T/out5" 2>&1; rc=$?
+check "--push-only with nothing built refuses" "[ $rc != 0 ] && grep -q 'build it first' '$T/out5' && [ \"\$(cat '$sif')\" = old ]"
+ci setup --build-only > "$T/out7" 2>&1; rc=$?
+check "--build-only parks the new image and leaves the live one" \
+    "[ $rc = 0 ] && [ \"\$(cat '$sif')\" = old ] && [ \"\$(cat '$sif.next')\" = new ]"
+ci setup --push-only > "$T/out8" 2>&1; rc=$?
+check "--push-only swaps it in" "[ $rc = 0 ] && [ \"\$(cat '$sif')\" = new ] && [ ! -e '$sif.next' ]"
+ci setup --bogus > "$T/out9" 2>&1; rc=$?
+check "any other setup flag is refused" "[ $rc != 0 ] && grep -q 'builds its .sif on the cluster' '$T/out9'"
 
 sed -i 's/^CLUSTER_ARCH=.*/CLUSTER_ARCH=aarch64/' "$T/scripts/cluster/config/zz/.env.cluster"
 ci setup > "$T/out6" 2>&1; rc=$?

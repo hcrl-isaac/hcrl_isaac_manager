@@ -82,6 +82,46 @@ class PushDataTest(unittest.TestCase):
         self.assertFalse((dest / "lafan1" / "notes.txt").exists(), "only the training-file allowlist ships")
         self.assertFalse((dest / "worktrees").exists(), "worktrees never ship")
 
+    def test_a_set_adds_only_new_files_and_refuses_a_changed_one(self) -> None:
+        """--wt adds the set's new files, never replaces the box's copy, and names a same-named file that differs."""
+        dest = self.ws / "resources" / "motion_datasets"
+        (dest / "lafan1").mkdir(parents=True)
+        (dest / "lafan1" / "walk.pt").write_bytes(b"main")
+        wt = self.src / "worktrees" / "wt" / "lafan1"
+        (wt / "walk.pt").write_bytes(b"main")
+        self.assertEqual(pd.changed(self.t, str(wt.parent), str(dest)), [], "an identical file is no change")
+        (wt / "walk.pt").write_bytes(b"branch")
+        self.assertEqual(pd.changed(self.t, str(wt.parent), str(dest)), ["lafan1/walk.pt"])
+        self.assertEqual(pd.push(self.t, str(wt.parent), str(dest), only_new=True), 0)
+        self.assertEqual((dest / "lafan1" / "wt.pt").read_bytes(), b"w", "the set's new file is added")
+        self.assertEqual((dest / "lafan1" / "walk.pt").read_bytes(), b"main", "the box's copy is never replaced")
+
+    def test_the_source_is_the_sets_worktree(self) -> None:
+        resources = str(self.src.parent)
+        self.assertEqual(pd.source(resources, "motion_datasets", ""), str(self.src))
+        self.assertEqual(pd.source(resources, "motion_datasets", "wt"), str(self.src / "worktrees" / "wt"))
+        self.assertEqual(pd.source(resources, "motion_datasets", "nope"), "")
+
+    def test_a_refusal_on_any_host_pushes_to_none(self) -> None:
+        """A changed file on the pool's second host stops the push before the first host gets anything."""
+        dests = {h: self.tmp / h / "motion_datasets" for h in ("pepi", "salah")}
+        for d in dests.values():
+            (d / "lafan1").mkdir(parents=True)
+        (dests["salah"] / "lafan1" / "wt.pt").write_bytes(b"other")
+        (self.tmp / "ws").mkdir()
+        (self.tmp / "ws" / "resources").symlink_to(self.src.parent)
+        argv = ["push_data.py", "--on", "larg-a40", "--wt", "wt"]
+        with (
+            mock.patch.object(pd, "load_pools", return_value=[self.pool]),
+            mock.patch.object(pd, "local_workspace", return_value=str(self.tmp / "ws")),
+            mock.patch.object(pd, "destination", side_effect=lambda t, repo, root: str(dests[t.host])),
+            mock.patch.object(sys, "argv", argv),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            pd.main()
+        self.assertIn("nothing pushed", str(ctx.exception.code))
+        self.assertFalse((dests["pepi"] / "lafan1" / "wt.pt").exists(), "the first host got nothing")
+
 
 if __name__ == "__main__":
     unittest.main()

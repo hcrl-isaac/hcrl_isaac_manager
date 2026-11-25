@@ -54,6 +54,60 @@ class OptionalDepsTest(unittest.TestCase):
         with mock.patch.object(rw, "reachable", return_value=True):
             self.assertIn("motion_datasets", rw.drop_unreachable(self._resolve(), set()))
 
+    def _hf(self) -> dict:
+        resolved = self._resolve()
+        resolved["motion_datasets"]["git"] = "https://huggingface.co/datasets/o/motion_datasets"
+        return resolved
+
+    def test_a_hf_repo_without_a_login_prints_the_login_command_when_not_interactive(self) -> None:
+        out = io.StringIO()
+        with (
+            mock.patch.object(rw, "reachable", return_value=False),
+            mock.patch.object(rw, "_git_credential", return_value=False),
+            mock.patch.object(rw, "hf_login_hint", return_value="hf auth login --add-to-git-credential"),
+            contextlib.redirect_stdout(out),
+        ):
+            kept = rw.drop_unreachable(self._hf(), set(), interactive=False)
+        self.assertNotIn("motion_datasets", kept)
+        self.assertIn("needs a Hugging Face login. Run `hf auth login --add-to-git-credential`", out.getvalue())
+
+    def test_a_hf_login_without_access_says_so(self) -> None:
+        out = io.StringIO()
+        with (
+            mock.patch.object(rw, "reachable", return_value=False),
+            mock.patch.object(rw, "_git_credential", return_value=True),
+            contextlib.redirect_stdout(out),
+        ):
+            kept = rw.drop_unreachable(self._hf(), set(), interactive=True)
+        self.assertNotIn("motion_datasets", kept)
+        self.assertIn(
+            "no access to https://huggingface.co/datasets/o/motion_datasets (or its stored token is no longer valid",
+            out.getvalue(),
+        )
+
+    def test_an_interactive_hf_login_retries_the_fetch(self) -> None:
+        runs = []
+        probes = iter([False, True, True])
+        with (
+            mock.patch.object(rw, "reachable", side_effect=lambda *a: next(probes)),
+            mock.patch.object(rw, "_git_credential", return_value=False),
+            mock.patch.object(rw, "hf_login_hint", return_value="hf auth login --add-to-git-credential"),
+            mock.patch.object(rw, "_hf_cli", return_value=["hf"]),
+            mock.patch.object(
+                rw.subprocess,
+                "run",
+                side_effect=lambda cmd, **k: runs.append(cmd) or types.SimpleNamespace(returncode=0),
+            ),
+            mock.patch("builtins.input", return_value=""),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            warned: set[str] = set()
+            kept = rw.drop_unreachable(self._hf(), warned, interactive=True)
+            again = rw.drop_unreachable(self._hf(), warned, interactive=True)
+        self.assertIn("motion_datasets", kept, "readable after the login")
+        self.assertIn("motion_datasets", again, "the resolve loop's next pass keeps it too")
+        self.assertEqual(runs, [["hf", "auth", "login", "--add-to-git-credential"]], "one login")
+
     def test_the_probe_never_prompts(self) -> None:
         seen = {}
 

@@ -168,16 +168,35 @@ def _disk_guard() -> None:
         print(f"[pls] run: only {free:.0f} GB free on this machine's disk; {where}", file=sys.stderr)
 
 
-def _check_data_in_place(wt: str) -> None:
-    """Refuse a ``wt`` set whose data repos (``*_robots``, ``motion_datasets``) differ from the resources/ read in place."""
+VIEWS = Path.home() / ".cache" / "hcrl_res" / "views"
+
+
+def _data_repos(wt: str) -> list[str]:
+    """The data repos (``*_robots``, ``motion_datasets``) the ``wt`` set has worktrees of."""
     if not wt:
-        return
+        return []
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "cluster" / "res"))
     import evaluate
 
-    data = evaluate.local_data(str(ROOT), wt)
-    if data:
-        evaluate.local_data_in_place(data, str(ROOT))
+    return sorted(evaluate.local_data(str(ROOT), wt))
+
+
+def _resources_view(wt: str, resources: str, paths: dict[str, str]) -> str:
+    """A resources/ for the ``wt`` set: a symlink per entry of ``resources``, a set worktree in place of its checkout.
+
+    hcrl_isaaclab reads data repos beside its own checkout (``paths.RESOURCES_DIR``), so importing it through the view
+    makes a local run read the set's data-repo worktrees in place.
+    """
+    view = VIEWS / wt
+    view.mkdir(parents=True, exist_ok=True)
+    targets = {e.name: str(e) for e in Path(resources).iterdir() if e.is_dir() and not e.name.startswith(".")}
+    targets.update(paths)
+    for name, target in targets.items():
+        tmp = view / f".{name}.{os.getpid()}"
+        tmp.unlink(missing_ok=True)
+        tmp.symlink_to(target)
+        os.replace(tmp, view / name)  # one at a time, so a run of the same set reading the view never sees a gap
+    return str(view)
 
 
 def _here(argv: list[str], wt: str, command: bool) -> None:
@@ -188,7 +207,14 @@ def _here(argv: list[str], wt: str, command: bool) -> None:
     pythonpath, core, overridden = select(wt)
     if overridden:
         print(f"[worktree] {wt}: {', '.join(overridden)} (others from main checkouts)", file=sys.stderr)
-    _check_data_in_place(wt)
+    if data := _data_repos(wt):
+        import worktree_env
+
+        view = _resources_view(wt, worktree_env.RESOURCES_DIR, resolve(wt)[0])
+        core = f"{view}/hcrl_isaaclab"
+        pythonpath = ":".join(p for p in (worktree_env.import_root(core, "hcrl_isaaclab"), pythonpath) if p)
+        print(f"[worktree] {wt}: reads {', '.join(data)} from the set's worktrees (resources view {view})",
+              file=sys.stderr)  # fmt: skip
     # The worktree'd roots precede the editable installs of the main checkouts, so only diverging repos change.
     env = {
         "PYTHONPATH": ":".join(p for p in (pythonpath, os.environ.get("PYTHONPATH", "")) if p),
@@ -288,7 +314,7 @@ def _batch(on: str, wt: str, tree: str, run: list[str]) -> None:
 
 
 def main(argv: list[str]) -> None:
-    if {"--stop", "--move"} & set(argv[: argv.index("--")] if "--" in argv else argv):  # a detached run: no script
+    if {"--stop", "--move", "--watch"} & set(argv[: argv.index("--")] if "--" in argv else argv):  # no script
         handoff([*CARD_CMD, *argv])
         return
     opts, run = _split(argv)

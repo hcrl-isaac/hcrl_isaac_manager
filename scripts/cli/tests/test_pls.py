@@ -64,11 +64,14 @@ class PassThroughTest(unittest.TestCase):
                 cli.main(argv)
             self.assertNotEqual(ctx.exception.code, 0)
 
-    def test_test_defaults_to_the_core_repo_and_clears_pythonpath(self) -> None:
+    def test_test_defaults_to_the_core_repo_and_carries_only_the_exit_status_plugin(self) -> None:
+        plugins = str(Path(workspace.__file__).resolve().parent / "pytest_plugins")
+        self.assertTrue(Path(plugins, "pls_exit_status.py").is_file())
         with mock.patch.object(workspace.Path, "is_dir", return_value=True):
             h, chdir = self._pls("test")
-            self.assertEqual(h.cmd[1:], ["-m", "pytest", "-m", "not gpu"])
-            self.assertEqual(h.env["PYTHONPATH"], "")
+            # Kit, launched by a repo's conftest, exits 0: the plugin keeps pytest's own exit status
+            self.assertEqual(h.cmd[1:], ["-m", "pytest", "-p", "pls_exit_status", "-m", "not gpu"])
+            self.assertEqual(h.env["PYTHONPATH"], plugins)
             chdir.assert_called_with(cli.ROOT / "resources" / "hcrl_isaaclab")  # after the CLI's own chdir to ROOT
             h, _ = self._pls("test", "ssti_tasks", "-k", "walk")
             self.assertEqual(h.cmd[-2:], ["-k", "walk"])
@@ -88,7 +91,8 @@ class PassThroughTest(unittest.TestCase):
             h, chdir = self._pls("test", "mbrl_tasks", "--wt", "world-model-rl", "-k", "legible")
         fake.select.assert_called_once_with("world-model-rl")
         chdir.assert_called_with(Path("/w/mbrl"))
-        self.assertEqual((h.env["PYTHONPATH"], h.cmd[-2:]), ("/w/mbrl:/w/core", ["-k", "legible"]))
+        plugins = str(Path(workspace.__file__).resolve().parent / "pytest_plugins")
+        self.assertEqual((h.env["PYTHONPATH"], h.cmd[-2:]), (f"{plugins}:/w/mbrl:/w/core", ["-k", "legible"]))
 
     def test_test_help_prints_usage_and_an_unknown_repo_is_refused(self) -> None:
         with mock.patch("builtins.print") as out:
@@ -419,14 +423,37 @@ class RunTest(unittest.TestCase):
         self.select.assert_called_once_with("feat")
         self.assertEqual((h.env["PYTHONPATH"], h.cmd[1]), ("/w/a:/w/b:/x", "/w/core/scripts/train.py"))
 
-    def test_a_set_whose_data_worktree_differs_from_resources_stops_before_launch(self) -> None:
-        """Data repos are read from resources/ in place, so a differing worktree would be silently ignored."""
+    def test_a_set_with_a_data_worktree_reads_it_through_a_resources_view(self) -> None:
+        """hcrl_isaaclab finds data beside its checkout, so the run imports it from a view with the set's worktree."""
+        resources = Path(self.tmp.name, "resources")
+        for repo in ("hcrl_isaaclab", "hcrl_robots", "motion_datasets"):
+            (resources / repo).mkdir()
+        robots = resources / "hcrl_robots" / "worktrees" / "feat"
+        robots.mkdir(parents=True)
+        sys.modules["worktree_env"].RESOURCES_DIR = str(resources)
+        sys.modules["worktree_env"].import_root = lambda root, repo: root
+        sys.modules["worktree_env"].resolve.return_value = (
+            {"hcrl_isaaclab": str(resources / "hcrl_isaaclab"), "hcrl_robots": str(robots)},
+            ["hcrl_robots"],
+        )
+        self.select.return_value = (str(robots), str(resources / "hcrl_isaaclab"), ["hcrl_robots"])
         fake = mock.Mock()
-        fake.local_data.return_value = {"hcrl_robots": "/m/resources/hcrl_robots/worktrees/feat"}
-        fake.local_data_in_place.side_effect = SystemExit("[res] ... differ: hcrl_robots ...")
+        fake.local_data.return_value = {"hcrl_robots": str(robots)}
+        views = Path(self.tmp.name, "views")
+        with mock.patch.dict(sys.modules, {"evaluate": fake}), mock.patch.object(launch, "VIEWS", views):
+            h = self._pls("--wt", "feat", "--", "train")
+        view = views / "feat"
+        self.assertEqual(os.readlink(view / "hcrl_robots"), str(robots), "the set's worktree, not resources/'s")
+        self.assertEqual(os.readlink(view / "motion_datasets"), str(resources / "motion_datasets"))
+        self.assertEqual(h.env["PYTHONPATH"].split(":")[0], str(view / "hcrl_isaaclab"), "imported through the view")
+        self.assertEqual(h.cmd[1], f"{view}/hcrl_isaaclab/scripts/train.py")
+
+    def test_a_set_without_data_worktrees_runs_as_before(self) -> None:
+        fake = mock.Mock()
+        fake.local_data.return_value = {}
         with mock.patch.dict(sys.modules, {"evaluate": fake}):
-            self._refused("--wt", "feat", "--", "train")
-            fake.local_data.assert_called_once_with(str(launch.ROOT), "feat")
+            h = self._pls("--wt", "feat", "--", "train")
+            self.assertEqual(h.cmd[1], "/m/resources/hcrl_isaaclab/scripts/train.py")
             fake.local_data.reset_mock()
             self._pls("--", "train")
             fake.local_data.assert_not_called()
