@@ -55,7 +55,9 @@ def _locked() -> Iterator[dict]:
 def _login(t: ev.Target, cmd: str, timeout: float = 60) -> str:
     """What ``cmd`` prints on the cluster's login node ("" when it fails)."""
     try:
-        out = subprocess.run([SSH, *MASTER_OPTS, *SSH_OPTS, t.ssh, cmd], capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run(
+            [SSH, *MASTER_OPTS, *SSH_OPTS, t.ssh, cmd], capture_output=True, text=True, timeout=timeout
+        )
     except subprocess.TimeoutExpired:
         return ""
     return out.stdout if out.returncode == 0 else ""
@@ -186,9 +188,8 @@ def after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
         print(f"[resume] {label}: the relaunch failed; by hand: {move.manual_steps('<lease>', holder, state)}",
               file=sys.stderr)  # fmt: skip
         return None
-    new = ev.Stage(ev.make_target(*_card(stage.t, node, new_job)))
+    new = ev.Stage(ev.make_target(*_card(found[-1], holder)))
     new.dir = found[-1]
-    new.t.gpu = stage.t.gpu
     _write(new, "resumes", str(done + 1))
     verdict_new = move.confirm(new, ckpt, time.monotonic() + VERIFY_S)
     moved = move.progress(move.read_stage(new, "log") or "")
@@ -202,11 +203,9 @@ def after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
     return new if verdict_new == "ok" else None
 
 
-def _card(t: ev.Target, node: str, job: str) -> tuple:
-    """The make_target arguments for the same card index on the replacement hold's node."""
-    pools = res.load_pools()
-    pool = next(p for p in pools if p.name == t.pool)
-    return pool, node, t.gpu, job, ""
+def _card(stage_dir: str, holder: str) -> tuple:
+    """The make_target arguments of the card the relaunch leased: (pool, host, gpu, job, uuid)."""
+    return ev._lease_card(move.recording_lease(stage_dir), holder, res.load_pools())
 
 
 def _write(stage: ev.Stage, rel: str, text: str) -> None:

@@ -168,9 +168,7 @@ def _control_path(ssh_opts: list[str]) -> str:
     return next((o.split("=", 1)[1] for o in ssh_opts if o.startswith("ControlPath=")), "")
 
 
-def watch(
-    stage: Stage, run: str, target: int, label: str, launch: Callable = subprocess.run, holder: str = ""
-) -> int:
+def watch(stage: Stage, run: str, target: int, label: str, launch: Callable = subprocess.run, holder: str = "") -> int:
     """Watch the run's log to its end with watch_run.sh and return its exit status (0 only once it finished).
 
     A SLURM run its hold's end cut short (walltime, node failure) is resumed on a replacement hold and watched on.

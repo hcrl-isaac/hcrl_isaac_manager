@@ -219,7 +219,7 @@ class MoveTest(unittest.TestCase):
         )
         self.watched, self.armed, self.verdict = [], [], 0
         watch = mock.patch.object(
-            move.follow, "watch", lambda st, run, tot, lbl: self.watched.append((run, tot)) or self.verdict
+            move.follow, "watch", lambda st, run, tot, lbl, **kw: self.watched.append((run, tot)) or self.verdict
         )
         arm = mock.patch.object(
             move.follow, "arm_recorder", lambda run, h, wt, pools: self.armed.append(run) or ("a40", "/rec")

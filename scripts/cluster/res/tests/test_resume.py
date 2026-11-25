@@ -24,6 +24,7 @@ def _stage(job: str = "100", gpu: int = 2) -> ev.Stage:
     return st
 
 
+NEW_LOG = "https://wandb.ai/e/p/runs/xyz Learning iteration 1460/2000"
 ARGV = ["--wt", "kick", "--on", "horizon", "hcrl_isaaclab:scripts/train.py", "--", "--task", "T", "--seed", "3"]
 
 
@@ -69,8 +70,9 @@ class ReplacementTest(StateTest):
     def test_the_first_cut_run_queues_one_hold_and_the_rest_share_it(self) -> None:
         calls = []
 
-        def run(cmd, **kw):
-            calls.append(cmd)
+        def run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess:
+            if "start" in cmd:  # the hold's sbatch; cluster_dev_cmd's own workspace lookup runs too
+                calls.append(cmd)
             return subprocess.CompletedProcess(cmd, 0, "", "[cluster_dev] Submitted sentinel job 105901.\n")
 
         rec = {"state": "TIMEOUT", "partition": "gpu", "timelimit": "2-00:00:00", "nodes": "c101-001"}
@@ -101,21 +103,25 @@ class AfterCutTest(StateTest):
                  "log": "https://wandb.ai/e/p/runs/abc Learning iteration 1450/2000"}  # fmt: skip
         launched = []
 
-        def run(cmd, **kw):
+        def run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess:
             launched.append(cmd)
             return subprocess.CompletedProcess(cmd, 0, "", "[res] started detached on c102-007:gpu2 (stage /w/new)\n")
 
         written = []
         patches = [
-            mock.patch.object(resume, "hold_end", lambda t: {"state": "TIMEOUT", "partition": "gpu", "timelimit": "2:00:00"}),
-            mock.patch.object(resume.move, "read_stage", lambda st, rel: files.get(rel) if st.dir != "/w/new" else
-                              "https://wandb.ai/e/p/runs/xyz Learning iteration 1460/2000"),  # fmt: skip
+            mock.patch.object(
+                resume, "hold_end", lambda t: {"state": "TIMEOUT", "partition": "gpu", "timelimit": "2:00:00"}
+            ),
+            mock.patch.object(
+                resume.move, "read_stage", lambda st, rel: NEW_LOG if st.dir == "/w/new" else files.get(rel)
+            ),
             mock.patch.object(resume.move, "wandb_checkpoints", lambda url: {1000: 1, 1400: 1}),
             mock.patch.object(resume, "replacement", lambda t, rec, holder: "105901"),
             mock.patch.object(resume, "wait_running", lambda t, job, holder: "c102-007"),
             mock.patch.object(resume.move, "pin_code", lambda st, tag: ("kick", [])),
             mock.patch.object(resume.move, "confirm", lambda st, past, deadline: confirm),
-            mock.patch.object(resume, "_card", lambda t, node, job: (POOL, node, t.gpu, job, "")),
+            mock.patch.object(resume, "_card", lambda stage_dir, holder: (POOL, "c102-007", 2, "105901", "GPU-z")),
+            mock.patch.object(resume.ev, "make_target", lambda *a: _stage(job="105901").t),
             mock.patch.object(resume, "_write", lambda st, rel, text: written.append((rel, text))),
             mock.patch.object(resume.subprocess, "run", run),
             mock.patch("sys.stderr"),
@@ -161,7 +167,7 @@ class WatchTest(unittest.TestCase):
         codes = iter([1, 0])
         watched = []
 
-        def once(stage, run, target, label, launch):
+        def once(stage: ev.Stage, run: str, target: int, label: str, launch: object) -> int:
             watched.append(stage.dir)
             return next(codes)
 

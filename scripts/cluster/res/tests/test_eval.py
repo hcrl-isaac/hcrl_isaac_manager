@@ -1556,7 +1556,7 @@ class EvalRunTest(Isolated):
         watched = []
         with (
             mock.patch.object(follow, "POLL_S", 0.2),
-            mock.patch.object(follow, "watch", lambda st, run, target, label: watched.append(target) or 4),
+            mock.patch.object(follow, "watch", lambda st, run, target, label, **kw: watched.append(target) or 4),
         ):
             rc, out = self._eval("--any", "--detach", "--", "--video", "on")
             self.assertEqual((rc, watched), (4, [40]), out)
