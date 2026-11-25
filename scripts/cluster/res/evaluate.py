@@ -2526,9 +2526,9 @@ def parser() -> argparse.ArgumentParser:
     ev.add_argument(
         "--seeds",
         metavar="S1,S2,...",
-        help="with --detach: one run per seed, all launched at once, each with --seed <s> and its --run_name suffixed"
-        " ' seed=<s>'; --on names one card (or lease:<id>) per seed, or a pool for any free cards. Each launch's"
-        " output streams prefixed with its seed",
+        help="with --detach: one run per seed, all launched at once, each with --seed <s> (its --run_name unchanged);"
+        " --on names one card (or lease:<id>) per seed, or a pool for any free cards. Each launch's output streams"
+        " prefixed with its seed",
     )
     ev.add_argument(
         "--cpus",

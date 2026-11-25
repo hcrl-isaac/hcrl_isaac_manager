@@ -1,8 +1,7 @@
 """`pls run --on A,B,C --seeds 42,43,44 --detach -- train ...`: one detached run per (card, seed), launched at once.
 
-Each run is an ordinary `pls run --on <card> --detach` launch of the same script with ``--seed <n>`` and the run name
-suffixed `` seed=<n>``. Every launch's output streams live, prefixed with its seed and card, so each run's start (or
-failure) is reported as it happens.
+Each run is an ordinary `pls run --on <card> --detach` launch of the same script with ``--seed <n>``. Every launch's
+output streams live, prefixed with its seed and card, so each run's start (or failure) is reported as it happens.
 """
 
 from __future__ import annotations
@@ -32,10 +31,9 @@ def _pop(head: list[str], flag: str) -> tuple[list[str], str]:
 
 
 def seeded(args: list[str], seed: int) -> list[str]:
-    """The script's arguments with ``--seed <seed>`` and its run name suffixed `` seed=<seed>``."""
+    """The script's arguments with ``--seed <seed>``; the run name stays the change, the seed is in the W&B config."""
     args, _ = _pop(args, "--seed")
-    args, name = _pop(args, "--run_name")
-    return [*args, "--seed", str(seed), "--run_name", f"{name} seed={seed}" if name else f"seed={seed}"]
+    return [*args, "--seed", str(seed)]
 
 
 def plan(argv: list[str]) -> list[tuple[str, int, list[str]]]:

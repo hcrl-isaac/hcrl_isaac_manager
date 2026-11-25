@@ -24,7 +24,7 @@ class PlanTest(unittest.TestCase):
         _, _, argv = runs[1]
         head, args = argv[: argv.index("--")], argv[argv.index("--") + 1 :]
         self.assertEqual(head, ["--holder", "Latent", "--detach", "--on", "c102-003:105036:3", SCRIPT])
-        self.assertEqual(args, ["--task", "T", "--seed", "43", "--run_name", "gaze=0.05 seed=43"])
+        self.assertEqual(args, ["--task", "T", "--run_name", "gaze=0.05", "--seed", "43"], "the name stays the change")
 
     def test_leases_and_any_free_card_split_the_same_way(self) -> None:
         by_lease = seeds.plan(_argv("--lease", "a1,b2"))
@@ -33,9 +33,8 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(all(a[:5] == ["--holder", "Latent", "--any", "--pool", "horizon"] for _, _, a in pooled))
         self.assertNotIn("--seeds", pooled[0][2])
 
-    def test_a_run_without_a_name_is_named_by_its_seed(self) -> None:
-        self.assertEqual(seeds.seeded(["--task", "T"], 5), ["--task", "T", "--seed", "5", "--run_name", "seed=5"])
-        self.assertEqual(seeds.seeded(["--run_name=x", "--seed=1"], 5), ["--seed", "5", "--run_name", "x seed=5"])
+    def test_a_given_seed_is_replaced(self) -> None:
+        self.assertEqual(seeds.seeded(["--run_name=x", "--seed=1"], 5), ["--run_name=x", "--seed", "5"])
 
     def test_launches_it_cannot_split_are_refused(self) -> None:
         bad = [
