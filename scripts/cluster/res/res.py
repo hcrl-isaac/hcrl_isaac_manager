@@ -346,7 +346,7 @@ def _choose(
     need = args.min_free_gb * 1024
 
     def shareable(c: Card) -> bool:  # in use by someone else, with room for this run beside them
-        return share and c.state in ("busy", "held") and c.mem_total - c.mem_used >= need
+        return share and not c.unusable and c.state in ("busy", "held") and c.mem_total - c.mem_used >= need
 
     if args.any:
         explicit_ray = {

@@ -104,6 +104,8 @@ class Card:
     uuid: str = ""
     note: str = ""
     procs: list[Proc] = field(default_factory=list)
+    # no run can start here (CUDA hides it, or numbers it apart from nvidia-smi): held, and never shared either
+    unusable: bool = False
 
 
 @dataclass
@@ -270,6 +272,7 @@ def _hold_cards_cuda_hides(cards: list[Card], cuda: list[str], unmasked: bool) -
     why = f"CUDA lists {len(listed)} of {len(cards)} cards (hides gpu{', gpu'.join(str(c.index) for c in hidden)})"
     for card in cards:
         if card in hidden or unmasked:
+            card.unusable = True
             if card.state == "free":
                 card.state = "held"
             extra = "" if card in hidden else ": an unmasked run here fails at CUDA init"
