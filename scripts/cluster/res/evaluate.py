@@ -2459,6 +2459,12 @@ def parser() -> argparse.ArgumentParser:
     ev.add_argument(
         "--no-watch", action="store_true", help="--detach: return once a train run is started, with no watch"
     )
+    ev.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="--detach on a SLURM card: when the hold's end (walltime, node failure) cuts the run, leave it cut instead"
+        " of resuming it on a replacement hold",
+    )
     ev.add_argument("--no-recorder", action="store_true", help="--detach: arm no async recorder for an async train run")
     ev.add_argument("--cmd", action="store_true", help=argparse.SUPPRESS)  # script + its args are a command line
     # the card selectors and --wt come from `pls run --on/--wt` (see `pls run --help`), so they are not listed here
@@ -2611,7 +2617,7 @@ def main(argv: list[str] | None = None) -> None:
             wt = given[-1] if given else ""
             follow.arm_for(stage, run, wa.holder, wt, pools)
 
-        sys.exit(follow.rewatch(stages, arm=arm))
+        sys.exit(follow.rewatch(stages, arm=arm, holder=wa.holder))
     # `pls run --stop <lease> --holder <you>`: no script, no card to claim; a script's own --stop (after --) is its own
     if "--stop" in head:
         sp = argparse.ArgumentParser(prog="pls run --stop", description="stop a detached run and release its lease")

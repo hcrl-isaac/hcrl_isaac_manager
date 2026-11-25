@@ -1,0 +1,226 @@
+"""Resume a detached SLURM train run its hold's end cut short (walltime, node failure, preemption).
+
+The run's watch calls :func:`after_cut` once the run stops logging. When sacct says the hold ended under it, the
+cut hold gets one replacement hold (queued by the first of its runs to notice), and each cut run relaunches on the
+same card of the new node from its newest W&B checkpoint, with its recorded launch, code and remaining budget, as
+`pls run --move` relaunches. A run stopped on purpose, finished, or crashed on a live hold is never resumed.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import shlex
+import subprocess
+import sys
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+
+import evaluate as ev
+import leases as ls
+import move
+import res
+from probe import MASTER_OPTS, SSH_OPTS
+from sshslot import SSH
+
+CUT_STATES = ("TIMEOUT", "NODE_FAIL", "PREEMPTED")  # sacct states a hold ends in without anyone asking
+MAX_RESUMES = 3  # per run chain, so a run its node keeps killing cannot loop
+PENDING_NOTE_S = 6 * 3600  # a replacement hold still queued this long gets one note with its queue reason
+POLL_S = 60.0
+VERIFY_S = 2400.0  # a relaunch boots Kit and loads its checkpoint before its first iteration
+EVENTS = ls.STORE.parent / "events.jsonl"
+REPLACEMENTS = ls.STORE.parent / "replacements.json"
+NO_RESUME = "--no-resume"
+
+
+def event(**row: object) -> None:
+    """Append one line to the event log `pls res events` prints."""
+    EVENTS.parent.mkdir(parents=True, exist_ok=True)
+    with EVENTS.open("a") as f:
+        f.write(json.dumps({"ts": int(time.time()), **row}) + "\n")
+
+
+@contextmanager
+def _locked() -> Iterator[dict]:
+    """The replacement holds (cut job id -> new job id), held under a file lock while open."""
+    REPLACEMENTS.parent.mkdir(parents=True, exist_ok=True)
+    with (REPLACEMENTS.parent / "replacements.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        table = json.loads(REPLACEMENTS.read_text()) if REPLACEMENTS.is_file() else {}
+        yield table
+        REPLACEMENTS.write_text(json.dumps(table))
+
+
+def _login(t: ev.Target, cmd: str, timeout: float = 60) -> str:
+    """What ``cmd`` prints on the cluster's login node ("" when it fails)."""
+    try:
+        out = subprocess.run([SSH, *MASTER_OPTS, *SSH_OPTS, t.ssh, cmd], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return ""
+    return out.stdout if out.returncode == 0 else ""
+
+
+def hold_end(t: ev.Target) -> dict[str, str]:
+    """The hold job's sacct record: State, Partition, Timelimit, NodeList (empty when sacct cannot say)."""
+    out = _login(t, f"sacct -j {shlex.quote(t.job)} -X -n -P -o State,Partition,Timelimit,NodeList")
+    line = next((x for x in out.splitlines() if x.strip()), "")
+    keys = ("state", "partition", "timelimit", "nodes")
+    vals = line.split("|") + [""] * len(keys)
+    rec = dict(zip(keys, vals[: len(keys)], strict=True))
+    rec["state"] = rec["state"].split()[0] if rec["state"] else ""  # "CANCELLED by 123" -> CANCELLED
+    return rec
+
+
+def verdict(stage_files: dict[str, str | None], hold_state: str) -> str:
+    """``cut`` when the hold's end killed a run still short of its target, else why the run is left alone.
+
+    Args:
+        stage_files: The stage's ``status``, ``stop`` and ``pls_argv.json`` contents (None when absent).
+        hold_state: The hold job's sacct state.
+    """
+    if stage_files.get("stop") is not None:
+        return "stopped on purpose"
+    status = (stage_files.get("status") or "").strip()
+    if status == "0":
+        return "finished"
+    if hold_state not in CUT_STATES:
+        return f"not cut (hold {hold_state or 'state unknown'})"
+    argv = stage_files.get("pls_argv.json")
+    if argv is None:
+        return "launched before --move: no recorded launch to resume"
+    if NO_RESUME in json.loads(argv):
+        return "launched with --no-resume"
+    return "cut"
+
+
+def replacement(t: ev.Target, rec: dict[str, str], holder: str) -> str:
+    """The job id of the hold that replaces ``t.job``: queued here unless another cut run queued it first."""
+    with _locked() as table:
+        if t.job in table:
+            return table[t.job]
+        args = ["start", "--no-stage"]
+        if rec.get("partition"):
+            args += ["--partition", rec["partition"]]
+        if rec.get("timelimit"):
+            args += ["--time", rec["timelimit"]]
+        cmd, env = ev.cluster_dev_cmd(t.pool, "", *args)
+        out = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        sys.stderr.write(out.stderr)
+        found = [w for w in (out.stdout + out.stderr).replace(".", " ").split() if w.isdigit() and len(w) >= 5]
+        if out.returncode != 0 or not found:
+            raise SystemExit(f"[resume] could not queue a hold to replace job {t.job} on {t.pool}")
+        table[t.job] = found[0]
+        event(kind="hold_queued", cut_job=t.job, new_job=found[0], cluster=t.pool, holder=holder, **rec)
+        print(f"[resume] queued hold {found[0]} on {t.pool} to replace job {t.job}", file=sys.stderr)
+        return found[0]
+
+
+def wait_running(t: ev.Target, job: str, holder: str, sleep: Callable = time.sleep) -> str:
+    """The node of ``job`` once it runs; notes a long queue once, and exits if the job ends without running."""
+    start, noted = time.monotonic(), False
+    while True:
+        out = _login(t, f"squeue -j {shlex.quote(job)} -h -o '%T|%N|%r'").strip()
+        state, node, reason = ([*out.split("|"), "", ""])[:3] if out else ("", "", "")
+        if state == "RUNNING" and node:
+            return node
+        if not out and _login(t, f"sacct -j {shlex.quote(job)} -X -n -o State").strip():
+            raise SystemExit(f"[resume] replacement hold {job} ended before it ran")
+        if not noted and time.monotonic() - start > PENDING_NOTE_S:
+            note = (f"[resume] hold {job} still {state or 'queued'} after 6 h ({reason}); a shorter --time or another"
+                    " partition or cluster (pls res status) would start sooner")  # fmt: skip
+            print(note, file=sys.stderr)
+            event(kind="hold_pending", job=job, cluster=t.pool, reason=reason, holder=holder)
+            noted = True
+        sleep(POLL_S)
+
+
+def chain_count(stage: ev.Stage) -> int:
+    """How many times this run's chain was already resumed (the stage's ``resumes`` file)."""
+    raw = move.read_stage(stage, "resumes")
+    return int(raw.strip()) if raw and raw.strip().isdigit() else 0
+
+
+def after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
+    """Resume ``stage``'s run if its hold's end cut it; returns the resumed run's stage, else None (said why)."""
+    rec = hold_end(stage.t)
+    files = {name: move.read_stage(stage, name) for name in ("status", "stop", "pls_argv.json")}
+    why = verdict(files, rec.get("state", ""))
+    if why != "cut":
+        print(f"[resume] {label}: not resumed: {why}", file=sys.stderr)
+        return None
+    done = chain_count(stage)
+    if done >= MAX_RESUMES:
+        print(f"[resume] {label}: not resumed: already resumed {done} times", file=sys.stderr)
+        event(kind="resume_refused", label=label, holder=holder, why=f"{done} resumes")
+        return None
+    opts, script, args = move.split_launch(json.loads(files["pls_argv.json"] or "[]"))
+    state = move.progress(move.read_stage(stage, "log") or "")
+    if state is None:
+        print(f"[resume] {label}: not resumed: the run logged no W&B run and iteration to resume from", file=sys.stderr)
+        return None
+    url, _, total = state
+    have = move.wandb_checkpoints(url)
+    if not have:
+        print(f"[resume] {label}: not resumed: no checkpoint on {url} yet", file=sys.stderr)
+        return None
+    ckpt = max(have)
+    print(f"[resume] {label}: hold {stage.t.job} ended {rec['state']} at checkpoint {ckpt}/{total}", file=sys.stderr)
+    new_job = replacement(stage.t, rec, holder)
+    node = wait_running(stage.t, new_job, holder)
+    gpus = int(move.launch_value(opts, "--gpus") or 1)
+    on = f"{node}:{new_job}" if gpus > 1 else f"{node}:{new_job}:{stage.t.gpu}"
+    wt, made = move.pin_code(stage, f"resume-{stage.t.job}-{int(time.time())}")
+    try:
+        resume = ["--load_run", url, "--checkpoint", f"model_{ckpt}.pt", "--max_iterations", str(total - ckpt)]
+        where = ["--on", on, *(["--gpus", str(gpus), "--wait", "10m"] if gpus > 1 else [])]
+        argv = [*move.drop_card_selection(opts), *(["--wt", wt] if wt else []), *where, "--holder", holder]
+        argv += ["--detach", "--no-watch", script, "--", *move.drop_resume(args), *resume]
+        out = subprocess.run([sys.executable, ev.__file__, *argv], capture_output=True, text=True)
+        sys.stderr.write(out.stderr)
+    finally:
+        move.unpin(made)
+    found = move.STARTED.findall(out.stderr)
+    if out.returncode != 0 or not found:
+        event(kind="resume_failed", label=label, holder=holder, cut_job=stage.t.job, new_job=new_job, ckpt=ckpt)
+        print(f"[resume] {label}: the relaunch failed; by hand: {move.manual_steps('<lease>', holder, state)}",
+              file=sys.stderr)  # fmt: skip
+        return None
+    new = ev.Stage(ev.make_target(*_card(stage.t, node, new_job)))
+    new.dir = found[-1]
+    new.t.gpu = stage.t.gpu
+    _write(new, "resumes", str(done + 1))
+    verdict_new = move.confirm(new, ckpt, time.monotonic() + VERIFY_S)
+    moved = move.progress(move.read_stage(new, "log") or "")
+    new_url = moved[0] if moved else ""
+    event(kind="resumed" if verdict_new == "ok" else "resume_unconfirmed", label=label, holder=holder,
+          cut_job=stage.t.job, cut_state=rec["state"], new_job=new_job, card=on, ckpt=ckpt, url=new_url,
+          stage=new.dir)  # fmt: skip
+    print(f"[resume] {label}: cut at iter {ckpt} (hold {stage.t.job} {rec['state']}); resumed on hold {new_job},"
+          f" card {on}" + (f", as {new_url}" if new_url else "") + (f" ({verdict_new})" if verdict_new != "ok" else ""),
+          file=sys.stderr)  # fmt: skip
+    return new if verdict_new == "ok" else None
+
+
+def _card(t: ev.Target, node: str, job: str) -> tuple:
+    """The make_target arguments for the same card index on the replacement hold's node."""
+    pools = res.load_pools()
+    pool = next(p for p in pools if p.name == t.pool)
+    return pool, node, t.gpu, job, ""
+
+
+def _write(stage: ev.Stage, rel: str, text: str) -> None:
+    move.follow._probe(stage, f"echo {shlex.quote(text)} > {shlex.quote(stage.dir)}/{rel}")
+
+
+def print_events(follow: bool = False, sleep: Callable = time.sleep) -> None:
+    """`pls res events [--follow]`: every resume and replacement hold, one JSON line each."""
+    seen = 0
+    while True:
+        lines = EVENTS.read_text().splitlines() if EVENTS.is_file() else []
+        for line in lines[seen:]:
+            print(line, flush=True)
+        seen = len(lines)
+        if not follow:
+            return
+        sleep(5)

@@ -326,7 +326,8 @@ def cmd_move(
         return 0
     run = follow.WANDB_RUN.search(moved[0])
     print("[move] watching the moved run to its end (stopping this watch leaves the run running)", file=sys.stderr)
-    return follow.watch(new, "/".join(run.groups()) if run else "", moved[2], follow._run_name(args, new.dir))
+    run_path = "/".join(run.groups()) if run else ""
+    return follow.watch(new, run_path, moved[2], follow._run_name(args, new.dir), holder=holder)
 
 
 def _move(

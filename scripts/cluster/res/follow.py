@@ -166,8 +166,29 @@ def _control_path(ssh_opts: list[str]) -> str:
     return next((o.split("=", 1)[1] for o in ssh_opts if o.startswith("ControlPath=")), "")
 
 
-def watch(stage: Stage, run: str, target: int, label: str, launch: Callable = subprocess.run) -> int:
-    """Watch the run's log to its end with watch_run.sh and return its exit status (0 only once it finished)."""
+def watch(
+    stage: Stage, run: str, target: int, label: str, launch: Callable = subprocess.run, holder: str = ""
+) -> int:
+    """Watch the run's log to its end with watch_run.sh and return its exit status (0 only once it finished).
+
+    A SLURM run its hold's end cut short (walltime, node failure) is resumed on a replacement hold and watched on.
+    """
+    rc = _watch_once(stage, run, target, label, launch)
+    while rc != 0 and holder and stage.t.kind == "slurm":
+        import resume
+
+        new = resume.after_cut(stage, holder, label)
+        if new is None:
+            return rc
+        got = started(new)
+        if got is None:
+            return rc
+        stage, (run, target) = new, got
+        rc = _watch_once(stage, run, target, label, launch)
+    return rc
+
+
+def _watch_once(stage: Stage, run: str, target: int, label: str, launch: Callable) -> int:
     log = f"{stage.dir}/log" if stage.t.kind == "local" else f"{stage.t.ssh}:{stage.dir}/log"
     status = ["--status", f"{stage.dir}/status"]  # the runner's exit code, on the log's host
     env = dict(os.environ)
@@ -208,13 +229,19 @@ def detached_stages(leases: list, holder: str, only: list[str]) -> list[tuple[st
     return out
 
 
-def rewatch(stages: list[tuple[str, Stage]], launch: Callable = subprocess.run, arm: Callable | None = None) -> int:
+def rewatch(
+    stages: list[tuple[str, Stage]],
+    launch: Callable = subprocess.run,
+    arm: Callable | None = None,
+    holder: str = "",
+) -> int:
     """Watch already-running detached runs to their ends, one watch each, from this one call.
 
     Args:
         stages: (lease id, stage) per run.
         launch: Runs watch_run.sh (tests stub it).
         arm: Arms a recorder for ``(stage, run)``; called for a run still waiting on the one its launch asked for.
+        holder: The runs' holder, who may resume a run its hold's end cut short.
 
     Returns:
         0 once every run finished; otherwise the worst watch's exit status.
@@ -234,7 +261,7 @@ def rewatch(stages: list[tuple[str, Stage]], launch: Callable = subprocess.run, 
         if arm is not None and run and wants_recorder(stage):
             print(f"[res] {label}: its launch armed no recorder yet; arming one", file=sys.stderr)
             arm(stage, run)
-        codes[label] = watch(stage, run, target, label, launch=launch)
+        codes[label] = watch(stage, run, target, label, launch=launch, holder=holder)
 
     threads = [
         threading.Thread(target=one, args=(lid, st, i * REWATCH_STAGGER_S), daemon=True)
@@ -270,4 +297,4 @@ def after_launch(stage: Stage, args: argparse.Namespace, script_args: list[str],
         else:
             print("[res] NO RECORDER: the run logs to no W&B run, so none can follow it", file=sys.stderr)
     print("[res] watching it to its end (stopping this watch leaves the run running)", file=sys.stderr)
-    return watch(stage, run, target, _run_name(script_args, os.path.basename(stage.dir)))
+    return watch(stage, run, target, _run_name(script_args, os.path.basename(stage.dir)), holder=args.holder)
