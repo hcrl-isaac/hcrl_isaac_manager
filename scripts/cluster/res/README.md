@@ -168,6 +168,10 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   lease. A lease that records no run (one taken before `--stop` existed) is just released.
   `--keep-lease` keeps the card leased once the run is gone, so a relaunch (`pls run --on lease:<id>`) needs no
   reclaim and the card is never unheld in between. Like any lease it lapses after 30 min idle, counted from the stop.
+- `pls run --stop --stage <id> --on <cluster|host> --holder <you>` stops a run no lease records any more (its lease
+  released or lapsed while it ran): the stage's recorded launch must name you as holder, and a stage a live lease
+  still records is sent to `--stop lease:<id> --stage <id>`. `pls res status` and `pls res leases` show each lease's
+  stage id.
 - `pls run --move <lease> --to <same|lease:<id>|host:gpu> --holder <you>` moves a detached `train.py` run, e.g. off a
   node whose hold ends: it claims the target first, waits (`--wait`, 30 min) for a checkpoint newer than any on the
   run's W&B run, stops the run (keeping the lease when the card stays the same), relaunches it detached with the same
