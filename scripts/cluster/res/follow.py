@@ -169,7 +169,7 @@ def rewatch(stages: list[tuple[str, Stage]], launch: Callable = subprocess.run) 
     def one(lease_id: str, stage: Stage, delay: float) -> None:
         time.sleep(delay)
         label = f"{lease_id}/{os.path.basename(stage.dir)}"
-        got = started(stage, deadline_s=60)
+        got = started(stage)  # an ended run returns at once; a booting one gets the launch's own wait
         if got is None:
             print(f"[res] {label}: no live training run there (ended, or never trained); not watched", file=sys.stderr)
             codes[label] = 1
