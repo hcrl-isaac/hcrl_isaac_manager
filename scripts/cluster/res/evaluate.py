@@ -2482,7 +2482,8 @@ def parser() -> argparse.ArgumentParser:
         metavar="REPO[=PATH]",
         help=f"ship a repo beside the workspace and point its variable at it ({', '.join(SIBLINGS)}: default path"
         " ~/<repo>); any other git checkout as NAME=PATH ships whole, on PYTHONPATH, as <NAME>_ROOT, and runs its"
-        " scripts as NAME:<path> (repeatable)",
+        " scripts as NAME:<path> (repeatable). On a SLURM card the run sees only the container's mounts: data it"
+        " reads must sit under the cluster's artifacts dir (the container's /workspace/artifacts)",
     )
     ev.add_argument(
         "--venv",
