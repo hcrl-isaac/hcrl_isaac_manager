@@ -173,6 +173,17 @@ def local_workspace() -> str:
     return str(Path(out).parent) if out else str(MANAGER_DIR)
 
 
+def own_lease(on: str, holder: str) -> str:
+    """The id of ``holder``'s lease on the card ``on`` names (``host:gpu`` or ``host:job:gpu``), else ""."""
+    parts = on.split(":")
+    if len(parts) not in (2, 3) or not parts[-1].isdigit():
+        return ""
+    card, job = f"{parts[0]}:{parts[-1]}", parts[1] if len(parts) == 3 else ""
+    with ls.locked_store() as leases:
+        mine = [x for x in leases if x.holder == holder and x.card == card and not x.cpus and (not job or x.job == job)]
+    return mine[0].id if len(mine) == 1 else ""
+
+
 def make_target(pool: Pool, host: str, gpu: int, job: str = "", uuid: str = "") -> Target:
     """Target for one card; refuses pools whose backend `eval` cannot run on yet.
 
@@ -2205,6 +2216,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
                 " --pool, lease:<id>, --gpus, --tree, --wait or --min-free-gb"
             )
         refuse_device(run_args)  # before anything is claimed
+    if args.on and args.gpus == 1 and not args.cpus and (own := own_lease(resolve_on(args.on, pools), args.holder)):
+        print(f"[res] {args.on} is already yours: running on its lease {own}", file=sys.stderr)
+        args.lease, args.on = own, None
     taken, job, uuid, extra, reused = None, "", "", [], set()
     model = ""  # the claimed card's, for the render check
     if args.cpus:
