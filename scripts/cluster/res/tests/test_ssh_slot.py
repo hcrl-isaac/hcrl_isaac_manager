@@ -88,6 +88,22 @@ class SshSlotTest(unittest.TestCase):
         self.assertLessEqual(int((self.d / "max").read_text()), 4)
         self.assertGreater(time.monotonic() - t0, 2, "9 one-second sessions in 4 slots take at least 3 rounds")
 
+    def test_hosts_sharing_a_controlpath_template_get_their_own_slots(self) -> None:
+        def burst(host: str) -> list:
+            return [
+                threading.Thread(target=self.ssh, args=("-o", "ControlPath=/x/%C", host, "true"), kwargs={"HOLD": "1"})
+                for _ in range(4)
+            ]
+
+        runs = burst("u@a") + burst("u@b")
+        t0 = time.monotonic()
+        for r in runs:
+            r.start()
+        for r in runs:
+            r.join()
+        self.assertEqual(int((self.d / "max").read_text()), 8, "4 slots on each host's master, all at once")
+        self.assertLess(time.monotonic() - t0, 3, "neither host waited on the other's slots")
+
 
 if __name__ == "__main__":
     unittest.main()

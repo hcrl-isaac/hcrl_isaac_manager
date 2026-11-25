@@ -9,15 +9,22 @@ SLOT_WAIT_S=60    # a session that waits longer runs unslotted: a long transfer 
 RETRIES=5
 REFUSED='Session open refused by peer|mux_client_request_session: session request failed'
 
-cp="" interactive=0 control=0 prev=""
+cp="" dest="" interactive=0 control=0 opt=""
 for a in "$@"; do
+    if [ -n "$opt" ]; then  # the value of the option before it, never the destination
+        [ "$opt" = -o ] && case "$a" in ControlPath=*) cp=${a#ControlPath=} ;; esac
+        [ "$opt" = -O ] && control=1
+        opt=""
+        continue
+    fi
     case "$a" in
-        ControlPath=*) [ "$prev" = "-o" ] && cp=${a#ControlPath=} ;;
         -oControlPath=*) cp=${a#-oControlPath=} ;;
+        -[BbcDEeFIiJLlmOoPpQRSWw]) opt=$a ;;
+        -O?*) control=1 ;;
         -t | -tt) interactive=1 ;;
-        -O) control=1 ;;
+        -*) ;;
+        *) dest=$a; break ;;  # the rest is the remote command
     esac
-    prev=$a
 done
 if [ -z "$cp" ] || [ "$cp" = none ] || [ $interactive = 1 ] || [ $control = 1 ]; then
     exec ssh "$@"
@@ -25,9 +32,8 @@ fi
 
 dir="$HOME/.ssh/cm/slots"
 mkdir -p "$dir" 2>/dev/null
-# one set of slots per master: the ControlPath expanded for this host (a %C template names every host's)
-real=$(ssh -G "$@" 2>/dev/null | awk '$1 == "controlpath" { print $2; exit }')
-key=$(printf '%s' "${real:-$cp}" | cksum | cut -d' ' -f1)
+# one set of slots per master: its ControlPath template with the destination (a %C template names every host's)
+key=$(printf '%s %s' "$cp" "$dest" | cksum | cut -d' ' -f1)
 deadline=$(( $(date +%s) + SLOT_WAIT_S ))
 got=""
 while [ -z "$got" ] && [ "$(date +%s)" -lt "$deadline" ]; do
