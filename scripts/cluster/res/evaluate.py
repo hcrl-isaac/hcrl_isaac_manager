@@ -2286,7 +2286,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
                 manifest.append(f"{line} ({', '.join(sib.dirs) + ' only, ' if sib.dirs else ''}{sib.env})")
             if sib.importable:
                 pythonpath.append(container_path(t, env[sib.env]))
-                with_paths.append(container_path(t, env[sib.env]))
+                with_paths.append(env[sib.env])
         if args.root:
             manifest.append(f"python {args.root}/venv (--root)")
         if args.allow_dirty:
