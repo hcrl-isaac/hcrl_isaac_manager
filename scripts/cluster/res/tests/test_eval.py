@@ -1886,10 +1886,6 @@ class LaunchSlotTest(unittest.TestCase):
         self.assertEqual(err.getvalue().count("had no free session"), 1, err.getvalue())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class OwnLeaseTest(unittest.TestCase):
     """`--on <card>` on a card the caller already leases runs on that lease instead of refusing."""
 
@@ -1913,3 +1909,7 @@ class OwnLeaseTest(unittest.TestCase):
         self.assertEqual(ev.own_lease("c571-003:999:6", "Latent"), "")
         self.assertEqual(ev.own_lease("pepi:-1", "Latent"), "")
         self.assertEqual(ev.own_lease("horizon", "Latent"), "")
+
+
+if __name__ == "__main__":
+    unittest.main()
