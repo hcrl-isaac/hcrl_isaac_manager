@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import os
 import shlex
 import sys
@@ -93,6 +94,57 @@ class SubmitConfigTest(unittest.TestCase):
         self.assertTrue(paths)
         for path in paths:
             self.assertIn("CONFIG_DIR", path, f"{path} reads the shared rendered config")
+
+
+class BusyTest(unittest.TestCase):
+    JOBS = [
+        {"submission_id": "raysubmit_a", "status": "RUNNING", "start_time": 1_700_000_000_000,
+         "metadata": {"user_id": "me", "wt": "bl-fz-kick"}, "entrypoint": "x --task hhlm/T1-Kick-v0 --seed 1"},
+        {"submission_id": "raysubmit_b", "status": "SUCCEEDED", "metadata": {"user_id": "me"}},
+        {"submission_id": "raysubmit_c", "status": "PENDING", "metadata": {"user_id": "someone"}},
+    ]  # fmt: skip
+
+    def _main(self, env: dict) -> tuple[int, str]:
+        import busy
+
+        resp = mock.MagicMock()
+        resp.__enter__.return_value = io.StringIO(json.dumps(self.JOBS))
+        err = io.StringIO()
+        with (
+            mock.patch.object(busy.urllib.request, "urlopen", return_value=resp),
+            mock.patch.dict(os.environ, env, clear=False),
+            mock.patch.object(sys, "argv", ["busy.py", "http://ray:8265", "me"]),
+            contextlib.redirect_stderr(err),
+        ):
+            try:
+                busy.main()
+            except SystemExit as exc:
+                return int(exc.code or 0), err.getvalue()
+        return 0, err.getvalue()
+
+    def test_a_running_job_of_this_user_refuses_the_submit_naming_it(self) -> None:
+        os.environ.pop("RAY_ALONGSIDE", None)
+        rc, err = self._main({})
+        self.assertEqual(rc, 1)
+        self.assertIn("raysubmit_a RUNNING", err)
+        self.assertIn("--wt bl-fz-kick, task hhlm/T1-Kick-v0", err)
+        self.assertNotIn("raysubmit_b", err, "a finished job is no obstacle")
+        self.assertNotIn("raysubmit_c", err, "another user's job is not this check's business")
+
+    def test_alongside_submits_anyway(self) -> None:
+        self.assertEqual(self._main({"RAY_ALONGSIDE": "1"})[0], 0)
+
+    def test_an_unreadable_cluster_warns_and_lets_the_submit_through(self) -> None:
+        import busy
+
+        err = io.StringIO()
+        with (
+            mock.patch.object(busy.urllib.request, "urlopen", side_effect=OSError("refused")),
+            mock.patch.object(sys, "argv", ["busy.py", "http://ray:8265", "me"]),
+            contextlib.redirect_stderr(err),
+        ):
+            busy.main()
+        self.assertIn("not checking", err.getvalue())
 
 
 class TemplateExcludesTest(unittest.TestCase):

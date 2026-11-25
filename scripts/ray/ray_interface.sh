@@ -99,6 +99,8 @@ prepare_submit() {
     CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ray-job-config.XXXXXX")"
     trap 'rm -rf "$CONFIG_DIR"' EXIT
     render_job_configs "$RAY_USER_ID"
+    # one job at a time: the node's jobs share /workspace/ext (RAY_ALONGSIDE, from `pls run --alongside`, overrides)
+    python3 "$SCRIPT_DIR/busy.py" "$RAY_ADDRESS" "$RAY_USER_ID" || exit 1
 }
 
 #==
