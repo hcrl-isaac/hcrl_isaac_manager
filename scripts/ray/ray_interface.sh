@@ -49,7 +49,7 @@ sync_resources() {
 
 # Render the job configs from their templates. WT=<name> routes ext_dir + file mounts
 # through resources/<repo>/worktrees/<name> wherever one exists.
-render_job_configs() {  # render_job_configs <ray_user_id>
+render_job_configs() {  # render_job_configs <ray_user_id> : into $CONFIG_DIR (this script's dir unless a submit set it)
     local user_id="$1" manager_dir="$WORKSPACE_DIR" venv_py
     venv_py="$manager_dir/ilab/bin/python"
     [ -x "$venv_py" ] || venv_py="python3"
@@ -65,7 +65,7 @@ render_job_configs() {  # render_job_configs <ray_user_id>
     for cfg in job_config bench_job_config job_config_distributed; do
         RAY_USER_ID="$user_id" MANAGER_DIR="$RAY_ENV_ROOT" \
             envsubst '$RAY_USER_ID $MANAGER_DIR $WORKSPACE_FILE_MOUNTS $WORKSPACE_EXT_DIR' \
-            < "$SCRIPT_DIR/tools/$cfg.template.yaml" > "$SCRIPT_DIR/$cfg.yaml"
+            < "$SCRIPT_DIR/tools/$cfg.template.yaml" > "${CONFIG_DIR:-$SCRIPT_DIR}/$cfg.yaml"
     done
 }
 
@@ -95,6 +95,9 @@ ray_address() {
 prepare_submit() {
     load_env_ray
     RAY_ADDRESS="$(ray_address)"
+    # this submit's own copy: a shared one could be re-rendered by a concurrent submit (another WT) before it is read
+    CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ray-job-config.XXXXXX")"
+    trap 'rm -rf "$CONFIG_DIR"' EXIT
     render_job_configs "$RAY_USER_ID"
 }
 
@@ -200,7 +203,7 @@ case $command in
         job_args=("$@")
         echo "[INFO] Executing job command"
         [ ${#job_args[@]} -gt 0 ] && echo -e "\tJob arguments: ${job_args[*]}"
-        job_config=$SCRIPT_DIR/job_config.yaml
+        job_config=${CONFIG_DIR:-$SCRIPT_DIR}/job_config.yaml
         echo "[INFO] Executing job script..."
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
             --address "$RAY_ADDRESS" \
@@ -224,7 +227,7 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         echo "[INFO] Running $script on the Ray cluster ($worker)"
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
             --address "$RAY_ADDRESS" \
-            --job_config $SCRIPT_DIR/job_config.yaml \
+            --job_config "${CONFIG_DIR:-$SCRIPT_DIR}/job_config.yaml" \
             --python_script "$worker" \
             --aggregate_jobs ray/wrap_resources.py \
                 --gpu_per_worker 1 \
@@ -235,7 +238,7 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         job_args=("$@")
         echo "[INFO] Executing distributed job command"
         [ ${#job_args[@]} -gt 0 ] && echo -e "\tJob arguments: ${job_args[*]}"
-        job_config=$SCRIPT_DIR/job_config_distributed.yaml
+        job_config=${CONFIG_DIR:-$SCRIPT_DIR}/job_config_distributed.yaml
         echo "[INFO] Executing distributed job script..."
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
             --address "$RAY_ADDRESS" \
@@ -248,7 +251,7 @@ print(ext_script(sys.argv[2]))' "$SCRIPT_DIR" "$script")" || exit 1
         job_args=("$@")
         echo "[INFO] Executing bench command"
         [ ${#job_args[@]} -gt 0 ] && echo -e "\tBench arguments: ${job_args[*]}"
-        job_config=$SCRIPT_DIR/bench_job_config.yaml
+        job_config=${CONFIG_DIR:-$SCRIPT_DIR}/bench_job_config.yaml
         echo "[INFO] Executing bench script..."
         RAY_RUNTIME_ENV_IGNORE_GITIGNORE=1 python $SCRIPT_DIR/submit_job.py \
             --address "$RAY_ADDRESS" \

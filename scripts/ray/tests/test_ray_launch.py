@@ -56,6 +56,45 @@ class WorkspaceReposTest(unittest.TestCase):
         self.assertIn("umrl_tasks", workspace_repos(str(self.resources)))
 
 
+class FileMountsTest(unittest.TestCase):
+    def test_isaaclab_source_mounts_keep_the_checkout_layout(self) -> None:
+        """Isaac Lab finds its root only as <root>/source/isaaclab/isaaclab, so its packages mount under one root."""
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            (ws / "workspace.yaml").write_text("isaaclab:\n  mode: source\n")
+            for pkg in ("isaaclab", "isaaclab_rl"):
+                (ws / "resources" / "IsaacLab" / "source" / pkg).mkdir(parents=True)
+                (ws / "resources" / "IsaacLab" / "source" / pkg / "setup.py").write_text("")
+            (ws / "resources" / "IsaacLab" / "apps").mkdir()
+            (ws / "resources" / "robot_rl").mkdir()
+            (ws / "resources" / "robot_rl" / "setup.py").write_text("")
+            script = Path(__file__).resolve().parents[1] / "build_file_mounts.py"
+            out = subprocess.run(
+                [sys.executable, str(script)], env={**os.environ, "WORKSPACE_DIR": d}, capture_output=True, text=True
+            ).stdout
+        self.assertIn('/resources/IsaacLab/source/isaaclab": "/workspace/IsaacLab/source/isaaclab"', out)
+        self.assertIn('/resources/IsaacLab/source/isaaclab_rl": "/workspace/IsaacLab/source/isaaclab_rl"', out)
+        self.assertIn('/resources/IsaacLab/apps": "/workspace/IsaacLab/apps"', out)
+        self.assertIn('/resources/robot_rl": "/workspace/ext/robot_rl"', out)
+        self.assertNotIn("/workspace/ext/isaaclab", out)
+
+
+class SubmitConfigTest(unittest.TestCase):
+    def test_each_submit_reads_its_own_rendered_config(self) -> None:
+        """A shared rendered config can be re-rendered by a concurrent submit (another WT) before it is read."""
+        import re
+
+        sh = (Path(__file__).resolve().parents[1] / "ray_interface.sh").read_text()
+        self.assertIn('CONFIG_DIR="$(mktemp -d', sh)
+        reads = re.findall(r"job_config=([^\s]+)|--job_config (\S+)", sh)
+        paths = [a or b for a, b in reads if (a or b) != "$job_config"]
+        self.assertTrue(paths)
+        for path in paths:
+            self.assertIn("CONFIG_DIR", path, f"{path} reads the shared rendered config")
+
+
 class TemplateExcludesTest(unittest.TestCase):
     def test_every_job_template_excludes_what_preflight_checks(self) -> None:
         tools = Path(__file__).resolve().parents[1] / "tools"
