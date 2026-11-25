@@ -96,6 +96,11 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--distributed", action="store_true", help="(--on ray, train) a sub-job per GPU node")
     p.add_argument(
+        "--alongside",
+        action="store_true",
+        help="(--on ray) submit although another of your Ray jobs runs: they share the node's /workspace/ext",
+    )
+    p.add_argument(
         "--wt-data-ok",
         nargs="+",
         default=[],
@@ -301,6 +306,8 @@ def main(argv: list[str]) -> None:
         sys.exit("[pls] run: --tree runs a staged tree as is, with --batch or on a SLURM card; not with --wt")
     if ns.distributed and (ns.on != "ray" or run[0] != "train"):
         sys.exit("[pls] run: --distributed only applies to train on Ray (--on ray -- train)")
+    if ns.alongside and ns.on != "ray":
+        sys.exit("[pls] run: --alongside only applies on Ray (--on ray)")
     if ns.wt_data_ok and (ns.on != "ray" or not ns.wt):
         sys.exit("[pls] run: --wt-data-ok only applies to a worktree set on Ray (--on ray --wt NAME)")
     if not ns.on:
@@ -315,6 +322,8 @@ def main(argv: list[str]) -> None:
         env = {"WT": ns.wt} if ns.wt else {}
         if ns.wt_data_ok:
             env["WT_DATA_OK"] = os.pathsep.join(ns.wt_data_ok)
+        if ns.alongside:
+            env["RAY_ALONGSIDE"] = "1"
         env = env or None
         if script == "train":  # a training job: wrap_resources runs train.py (sweeps, aggregate jobs)
             handoff([RAY_BACKEND, "job_distributed" if ns.distributed else "job", *args], env=env)

@@ -118,7 +118,8 @@ def parse_job_config(cfg_file: str) -> tuple[dict, dict, dict]:
         "py_executable": job_config["py_executable"],
         "excludes": job_config.get("excludes", []),
     }
-    metadata = {"user_id": job_config["user_id"]}
+    # the worktree set, so a refusal or a list can say which code a job runs
+    metadata = {"user_id": job_config["user_id"], "wt": os.environ.get("WT", "")}
     other_data = {
         "python_script": job_config["python_script"],
         "file_mounts": file_mounts.replace('"', '\\"'),
