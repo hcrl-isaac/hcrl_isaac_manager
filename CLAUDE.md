@@ -88,6 +88,9 @@ Project skills live in `.claude/skills/`. Use them rather than re-deriving the s
   override key), `CUDA out of memory`, `No contact sensors added`, `Segmentation fault`, `Killed`, `srun: error`.
   Match all of them, not one.
 - Isaac Lab 3 quaternions are **xyzw** (2.x was wxyz), and asset data reads go through `.torch`.
+- **A FrameTransformer reads stale after a state write** (a reset, `reset_to`, a converter writing states) until
+  physics steps, even with a forced update; articulation body data is right at once. Terms read on the first step
+  after a reset take the frame's offset from the body pose instead.
 
 ## Experiments
 
