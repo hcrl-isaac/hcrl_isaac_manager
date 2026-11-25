@@ -658,6 +658,25 @@ class CommandTest(CommandBase):
         self.claim(any=True, share=True, min_free_gb=10, holder="b")
         self.assertIn("mckennie:2", self.stored())
 
+    def test_share_mine_shares_only_beside_this_users_own_processes(self) -> None:
+        """A recorder beside another user's busy training would slow it: --share-mine never picks that card."""
+        import getpass
+
+        from probe import Proc
+
+        theirs = card(index=1, state="busy")
+        theirs.procs = [Proc(pid=11, mem_mib=20000, user="zifan", cmd="train.py")]
+        ours = card(index=2, state="busy")
+        ours.procs = [Proc(pid=12, mem_mib=20000, user=getpass.getuser(), cmd="train.py")]
+        self.cards = [theirs, ours]
+        self.claim(any=True, share_mine=True, min_free_gb=10)
+        [lease] = self.leases()
+        self.assertEqual(lease.card, "mckennie:2")
+        self.assertTrue(lease.shared)
+        self.cards = [theirs]
+        with self.assertRaises(SystemExit):
+            self.claim(any=True, share_mine=True, min_free_gb=10, holder="b")
+
     def test_share_never_takes_a_card_no_run_can_start_on(self) -> None:
         """A card CUDA hides (or numbers apart) is held; --share must not read it as a busy card with room."""
         bad = card(index=2, state="held")

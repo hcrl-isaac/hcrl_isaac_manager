@@ -341,7 +341,8 @@ def _choose(
     when nothing runs there. ``rank`` orders --any candidates before the packing (lower first).
     """
     adopt = getattr(args, "adopt", False)
-    share = getattr(args, "share", False)
+    share = getattr(args, "share", False) or getattr(args, "share_mine", False)
+    mine = set(getattr(args, "share_logins", ())) if getattr(args, "share_mine", False) else None
     if args.any and adopt:
         sys.exit("[res] --adopt takes over named cards; name them (host:gpu ...)")
     if share and adopt:
@@ -351,7 +352,10 @@ def _choose(
     need = args.min_free_gb * 1024
 
     def shareable(c: Card) -> bool:  # in use by someone else, with room for this run beside them
-        return share and not c.unusable and c.state in ("busy", "held") and c.mem_total - c.mem_used >= need
+        if not (share and not c.unusable and c.state in ("busy", "held") and c.mem_total - c.mem_used >= need):
+            return False
+        # --share-mine: only beside this user's own processes, never slowing another user's job
+        return mine is None or (bool(c.procs) and all(p.user in mine for p in c.procs))
 
     if args.any:
         explicit_ray = {
@@ -455,6 +459,7 @@ def claim(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple[ls.Le
         The new leases with their cards and reports, and the lease windows.
     """
     ls.check_holder(args.holder, pools)
+    args.share_logins = ls.my_logins(pools)
     wait = getattr(args, "wait", None)
     deadline = time.monotonic() + wait if wait else None
     announced = False
@@ -537,7 +542,9 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
                         lease.expires = now + args.for_ if args.for_ else 0.0
                     else:
                         # beside another session's lease the card's current processes are its, even on a free-reading card
-                        shared = getattr(args, "share", False) and (c.state != "free" or key in by_key)
+                        shared = (getattr(args, "share", False) or getattr(args, "share_mine", False)) and (
+                            c.state != "free" or key in by_key
+                        )
                         lease = ls.new_lease(c, r, args.holder, args.note, args.for_, run=run, shared=shared)
                         if stage := getattr(args, "stage", ""):
                             lease.stage, lease.stages = stage, [stage]
@@ -842,6 +849,11 @@ def main() -> None:
         action="store_true",
         help="also take cards other processes use, when they have --min-free-gb free; the lease lives on your own"
         " processes there",
+    )
+    cl.add_argument(
+        "--share-mine",
+        action="store_true",
+        help="like --share, but only on cards whose every process is yours (another of your sessions' runs)",
     )
     cl.add_argument("--pool", action="append", help="only probe/pick from these pools (prefix match)")
     cl.add_argument("--holder", required=True, help="who holds it (your session name)")
