@@ -114,10 +114,11 @@ def _control_path(ssh_opts: list[str]) -> str:
 def watch(stage: Stage, run: str, target: int, label: str, launch: Callable = subprocess.run) -> int:
     """Watch the run's log to its end with watch_run.sh and return its exit status (0 only once it finished)."""
     log = f"{stage.dir}/log" if stage.t.kind == "local" else f"{stage.t.ssh}:{stage.dir}/log"
+    status = ["--status", f"{stage.dir}/status"]  # the runner's exit code, on the log's host
     env = dict(os.environ)
     if path := _control_path(stage.t.ssh_opts if stage.t.kind == "slurm" else []):
         env["WATCH_RUN_CONTROL_PATH"] = path
-    cmd = ["bash", str(WATCH), *(["--wandb", run] if run else []), label, log, str(target)]
+    cmd = ["bash", str(WATCH), *(["--wandb", run] if run else []), *status, label, log, str(target)]
     return launch(cmd, env=env).returncode
 
 

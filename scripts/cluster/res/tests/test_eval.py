@@ -182,6 +182,22 @@ class TargetTest(unittest.TestCase):
         want = ("u@hazard.cs.x", "/var/local/u/hcrl_isaac_manager", "/var/local/u", "cvd")
         self.assertEqual((t.ssh, t.workspace, t.scratch, t.pin), want)
 
+    def test_a_box_run_leaves_its_exit_code_in_its_stage_as_a_slurm_run_does(self) -> None:
+        """A detached run's watch ends on <stage>/status, so a box runner must write it on every exit."""
+        with tempfile.TemporaryDirectory() as d:
+            t = ev.make_target(Pool("a", "ssh", {"user": "u"}), "h", 2)
+            runner = ev.runner_script(t, d, "x.py", [], [])
+            traps = "\n".join(line for line in runner.splitlines() if line.startswith("trap "))
+            self.assertIn(f"{d}/status", traps)
+            subprocess.run(["bash", "-c", f"{traps}\nexit 3"], check=False)
+            self.assertEqual(Path(d, "status").read_text().strip(), "3")
+            # a stop signals the run's whole group mid-run: its status names the signal, never 0
+            proc = subprocess.Popen(["bash", "-c", f"{traps}\nsleep 30"], start_new_session=True)
+            time.sleep(0.5)
+            os.killpg(proc.pid, signal.SIGTERM)
+            proc.wait(10)
+            self.assertEqual(Path(d, "status").read_text().strip(), "143")
+
     def test_device_pinning_leaves_the_mask_off(self) -> None:
         t = ev.make_target(Pool("a40", "ssh", {"user": "u", "pin": "device"}), "pepi", 2)
         runner = ev.runner_script(t, "/s", "x.py", [], [])

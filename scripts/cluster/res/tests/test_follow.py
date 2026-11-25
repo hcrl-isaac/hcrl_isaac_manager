@@ -125,7 +125,10 @@ class WatchTest(unittest.TestCase):
 
         self.assertEqual(follow.watch(stage, "e/p/r", 600, "lbl", launch), 0)
         self.assertEqual(seen["cp"], "/h/.ssh/cm/%C")
-        self.assertEqual(seen["cmd"][2:], ["--wandb", "e/p/r", "lbl", f"u@login:{stage.dir}/log", "600"])
+        self.assertEqual(
+            seen["cmd"][2:],
+            ["--wandb", "e/p/r", "--status", f"{stage.dir}/status", "lbl", f"u@login:{stage.dir}/log", "600"],
+        )
 
     def test_watch_run_exits_with_its_verdict(self) -> None:
         stage = _stage()
