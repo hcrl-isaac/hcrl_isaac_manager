@@ -223,10 +223,8 @@ def _resume(
     state: tuple[str, int, int],
     ckpt: int,
 ) -> ev.Stage | None:
-    opts, script, args = launch
-    url, _, total = state
+    opts = launch[0]
     new_job = replacement(stage.t, rec, holder)
-    drop = f"pls res drop --on {stage.t.pool} {new_job}"
     try:
         node = wait_running(stage.t, new_job, holder)
     except SystemExit as e:
@@ -237,16 +235,36 @@ def _resume(
     gpus = int(move.launch_value(opts, "--gpus") or 1)
     on = f"{node}:{new_job}" if gpus > 1 else f"{node}:{new_job}:{stage.t.gpu}"
     wt, made = move.pin_code(stage, f"resume-{stage.t.job}-{int(time.time())}")
-    try:
-        resume = ["--load_run", url, "--checkpoint", f"model_{ckpt}.pt", "--max_iterations", str(total - ckpt)]
-        where = ["--on", on, *(["--gpus", str(gpus), "--wait", "10m"] if gpus > 1 else [])]
-        kept = [*move.drop_card_selection(_drop_holder(opts)), *(["--wt", wt] if wt else [])]
-        argv = [*kept, *where, "--holder", holder]
-        argv += ["--detach", "--no-watch", script, "--", *move.drop_resume(args), *resume]
-        out = subprocess.run([sys.executable, ev.__file__, *argv], capture_output=True, text=True)
-        sys.stderr.write(out.stderr)
+    try:  # the pinned code stays until the resumed run's recorder is armed from it
+        return _relaunch(stage, holder, label, rec, done, launch, state, ckpt, new_job, on, gpus, wt)
     finally:
         move.unpin(made)
+
+
+def _relaunch(
+    stage: ev.Stage,
+    holder: str,
+    label: str,
+    rec: dict[str, str],
+    done: int,
+    launch: tuple[list[str], str, list[str]],
+    state: tuple[str, int, int],
+    ckpt: int,
+    new_job: str,
+    on: str,
+    gpus: int,
+    wt: str,
+) -> ev.Stage | None:
+    opts, script, args = launch
+    url, _, total = state
+    drop = f"pls res drop --on {stage.t.pool} {new_job}"
+    resume = ["--load_run", url, "--checkpoint", f"model_{ckpt}.pt", "--max_iterations", str(total - ckpt)]
+    where = ["--on", on, *(["--gpus", str(gpus), "--wait", "10m"] if gpus > 1 else [])]
+    kept = [*move.drop_card_selection(_drop_holder(opts)), *(["--wt", wt] if wt else [])]
+    argv = [*kept, *where, "--holder", holder]
+    argv += ["--detach", "--no-watch", script, "--", *move.drop_resume(args), *resume]
+    out = subprocess.run([sys.executable, ev.__file__, *argv], capture_output=True, text=True)
+    sys.stderr.write(out.stderr)
     found = move.STARTED.findall(out.stderr)
     if out.returncode != 0 or not found:
         event(kind="resume_failed", label=label, holder=holder, cut_job=stage.t.job, new_job=new_job, ckpt=ckpt,
@@ -266,7 +284,10 @@ def _resume(
     print(f"[resume] {label}: cut at iter {ckpt} (hold {stage.t.job} {rec['state']}); resumed on hold {new_job},"
           f" card {on}" + (f", as {new_url}" if new_url else "") + (f" ({verdict_new})" if verdict_new != "ok" else ""),
           file=sys.stderr)  # fmt: skip
-    return new if verdict_new == "ok" else None
+    if verdict_new != "ok":
+        return None
+    move.arm_moved_recorder(new, holder, wt, opts, args, res.load_pools())  # its new W&B run, as its launch's had
+    return new
 
 
 def _drop_holder(opts: list[str]) -> list[str]:

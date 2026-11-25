@@ -125,7 +125,7 @@ class AfterCutTest(StateTest):
     ) -> tuple[ev.Stage | None, list[list[str]]]:
         files = {"status": None, "stop": None, "pls_argv.json": json.dumps(ARGV), "resumes": resumes,
                  "log": "https://wandb.ai/e/p/runs/abc Learning iteration 1450/2000"}  # fmt: skip
-        launched = []
+        launched, self.armed = [], []
 
         def run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess:
             launched.append(cmd)
@@ -147,6 +147,8 @@ class AfterCutTest(StateTest):
             mock.patch.object(resume, "_card", lambda stage_dir, holder: (POOL, "c102-007", 2, "105901", "GPU-z")),
             mock.patch.object(resume.ev, "make_target", lambda *a: _stage(job="105901").t),
             mock.patch.object(resume, "_write", lambda st, rel, text: written.append((rel, text))),
+            mock.patch.object(resume.move, "arm_moved_recorder", lambda st, *a: self.armed.append(st.dir)),
+            mock.patch.object(resume.res, "load_pools", lambda: [POOL]),
             mock.patch.object(resume.subprocess, "run", run),
             mock.patch("sys.stderr"),
         ]
@@ -170,6 +172,7 @@ class AfterCutTest(StateTest):
         self.assertEqual(args[args.index("--max_iterations") + 1], "600", "the budget the run had left")
         self.assertEqual(args[args.index("--seed") + 1], "3", "its own arguments kept")
         self.assertEqual(self.written, [("resumes", "1")])
+        self.assertEqual(self.armed, ["/w/new"], "the resumed run's new W&B run gets its recorder")
         [ev_row] = self.events()
         self.assertEqual((ev_row["kind"], ev_row["new_job"], ev_row["ckpt"]), ("resumed", "105901", 1400))
 
@@ -212,6 +215,7 @@ class AfterCutTest(StateTest):
     def test_a_relaunch_that_never_trains_is_reported_not_watched(self) -> None:
         new, _ = self.run_cut(confirm="timeout")
         self.assertIsNone(new)
+        self.assertEqual(self.armed, [])
         self.assertEqual(self.events()[0]["kind"], "resume_unconfirmed")
 
 
