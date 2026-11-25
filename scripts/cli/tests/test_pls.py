@@ -64,11 +64,14 @@ class PassThroughTest(unittest.TestCase):
                 cli.main(argv)
             self.assertNotEqual(ctx.exception.code, 0)
 
-    def test_test_defaults_to_the_core_repo_and_clears_pythonpath(self) -> None:
+    def test_test_defaults_to_the_core_repo_and_carries_only_the_exit_status_plugin(self) -> None:
+        plugins = str(Path(workspace.__file__).resolve().parent / "pytest_plugins")
+        self.assertTrue(Path(plugins, "pls_exit_status.py").is_file())
         with mock.patch.object(workspace.Path, "is_dir", return_value=True):
             h, chdir = self._pls("test")
-            self.assertEqual(h.cmd[1:], ["-m", "pytest", "-m", "not gpu"])
-            self.assertEqual(h.env["PYTHONPATH"], "")
+            # Kit, launched by a repo's conftest, exits 0: the plugin keeps pytest's own exit status
+            self.assertEqual(h.cmd[1:], ["-m", "pytest", "-p", "pls_exit_status", "-m", "not gpu"])
+            self.assertEqual(h.env["PYTHONPATH"], plugins)
             chdir.assert_called_with(cli.ROOT / "resources" / "hcrl_isaaclab")  # after the CLI's own chdir to ROOT
             h, _ = self._pls("test", "ssti_tasks", "-k", "walk")
             self.assertEqual(h.cmd[-2:], ["-k", "walk"])
@@ -88,7 +91,8 @@ class PassThroughTest(unittest.TestCase):
             h, chdir = self._pls("test", "mbrl_tasks", "--wt", "world-model-rl", "-k", "legible")
         fake.select.assert_called_once_with("world-model-rl")
         chdir.assert_called_with(Path("/w/mbrl"))
-        self.assertEqual((h.env["PYTHONPATH"], h.cmd[-2:]), ("/w/mbrl:/w/core", ["-k", "legible"]))
+        plugins = str(Path(workspace.__file__).resolve().parent / "pytest_plugins")
+        self.assertEqual((h.env["PYTHONPATH"], h.cmd[-2:]), (f"{plugins}:/w/mbrl:/w/core", ["-k", "legible"]))
 
     def test_test_help_prints_usage_and_an_unknown_repo_is_refused(self) -> None:
         with mock.patch("builtins.print") as out:
