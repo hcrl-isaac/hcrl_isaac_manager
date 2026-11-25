@@ -567,7 +567,7 @@ class SlurmTest(unittest.TestCase):
             left = list(prunes)
             return (
                 lambda cmd, **kw: mock.Mock(returncode=left.pop(0) if left else 0, stderr="timeout")
-                if cmd[0] == "ssh"
+                if os.path.basename(cmd[0]) in ("ssh", "ssh_slot.sh")
                 else staged
             )
 

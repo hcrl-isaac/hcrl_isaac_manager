@@ -75,7 +75,8 @@ function close_tb() {
 END { close_tb(); if (mode == "count") print bad + 0 }'
 
 CM=${WATCH_RUN_CONTROL_PATH:-$HOME/.ssh/cm/%C}
-SSH_SLOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../cluster" && pwd)/ssh_slot.sh"  # polls share the master's sessions
+SSH_SLOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../cluster" 2>/dev/null && pwd)/ssh_slot.sh"  # polls share the master's sessions
+[ -x "$SSH_SLOT" ] || SSH_SLOT=ssh  # a copy of this script outside the repo uses plain ssh
 mkdir -p "$(dirname "${CM/\%C/x}")" 2>/dev/null || true
 PROBE_S=90  # wall-clock limit per probe: a lost ControlMaster must fail, never wait on a 2FA prompt
 run_remote() {  # stdin: the probe script
