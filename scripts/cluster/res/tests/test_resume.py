@@ -25,7 +25,20 @@ def _stage(job: str = "100", gpu: int = 2) -> ev.Stage:
 
 
 NEW_LOG = "https://wandb.ai/e/p/runs/xyz Learning iteration 1460/2000"
-ARGV = ["--wt", "kick", "--on", "horizon", "hcrl_isaaclab:scripts/train.py", "--", "--task", "T", "--seed", "3"]
+ARGV = [
+    "--holder",
+    "Kick",
+    "--wt",
+    "kick",
+    "--on",
+    "horizon",
+    "hcrl_isaaclab:scripts/train.py",
+    "--",
+    "--task",
+    "T",
+    "--seed",
+    "3",
+]
 
 
 class VerdictTest(unittest.TestCase):
@@ -152,6 +165,7 @@ class AfterCutTest(StateTest):
         self.assertEqual(head[head.index("--on") + 1], "c102-007:105901:2", "same card index on the new node")
         self.assertEqual(head[head.index("--wt") + 1], "kick", "the run's own code, pinned")
         self.assertIn("--detach", head)
+        self.assertEqual(head.count("--holder"), 1, "the recorded holder is replaced, not repeated")
         self.assertEqual(args[args.index("--checkpoint") + 1], "model_1400.pt")
         self.assertEqual(args[args.index("--max_iterations") + 1], "600", "the budget the run had left")
         self.assertEqual(args[args.index("--seed") + 1], "3", "its own arguments kept")

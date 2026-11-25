@@ -240,7 +240,8 @@ def _resume(
     try:
         resume = ["--load_run", url, "--checkpoint", f"model_{ckpt}.pt", "--max_iterations", str(total - ckpt)]
         where = ["--on", on, *(["--gpus", str(gpus), "--wait", "10m"] if gpus > 1 else [])]
-        argv = [*move.drop_card_selection(opts), *(["--wt", wt] if wt else []), *where, "--holder", holder]
+        kept = [*move.drop_card_selection(_drop_holder(opts)), *(["--wt", wt] if wt else [])]
+        argv = [*kept, *where, "--holder", holder]
         argv += ["--detach", "--no-watch", script, "--", *move.drop_resume(args), *resume]
         out = subprocess.run([sys.executable, ev.__file__, *argv], capture_output=True, text=True)
         sys.stderr.write(out.stderr)
@@ -250,8 +251,8 @@ def _resume(
     if out.returncode != 0 or not found:
         event(kind="resume_failed", label=label, holder=holder, cut_job=stage.t.job, new_job=new_job, ckpt=ckpt,
               drop=drop)  # fmt: skip
-        print(f"[resume] {label}: the relaunch failed; by hand: {move.manual_steps('<lease>', holder, state)}; hold"
-              f" {new_job} stays held for that (`{drop}` releases it)", file=sys.stderr)  # fmt: skip
+        print(f"[resume] {label}: the relaunch on hold {new_job} failed (its output above); hold {new_job} stays held"
+              f" to relaunch it by hand from model_{ckpt}.pt (`{drop}` releases it)", file=sys.stderr)  # fmt: skip
         return None
     new = ev.Stage(ev.make_target(*_card(found[-1], holder)))
     new.dir = found[-1]
@@ -266,6 +267,19 @@ def _resume(
           f" card {on}" + (f", as {new_url}" if new_url else "") + (f" ({verdict_new})" if verdict_new != "ok" else ""),
           file=sys.stderr)  # fmt: skip
     return new if verdict_new == "ok" else None
+
+
+def _drop_holder(opts: list[str]) -> list[str]:
+    """The launch options without ``--holder``, which the resume passes as the watching session's."""
+    out, skip = [], False
+    for a in opts:
+        if skip:
+            skip = False
+        elif a == "--holder":
+            skip = True
+        elif not a.startswith("--holder="):
+            out.append(a)
+    return out
 
 
 def _card(stage_dir: str, holder: str) -> tuple:
