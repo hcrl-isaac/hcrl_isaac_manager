@@ -62,7 +62,7 @@ if [ ! -f "$ENV_FILE" ]; then
         echo "[cluster_dev] using the main checkout's profile ${ENV_FILE}" >&2
     fi
 fi
-MAIN_PROFILE_COMMANDS=" stage trees exec status tail open attach __resolve_tree __free_gb __master_up help -h --help "
+MAIN_PROFILE_COMMANDS=" stage data trees exec status tail open attach __resolve_tree __free_gb __master_up help -h --help "
 if [ -n "$MAIN_CHECKOUT" ] && [[ "$MAIN_PROFILE_COMMANDS" != *" ${1:-help} "* ]]; then
     echo "[cluster_dev] '${1}' changes the shared sentinel state; run it from the main checkout ${MAIN_CHECKOUT}" >&2
     exit 1
