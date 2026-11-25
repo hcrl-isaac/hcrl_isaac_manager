@@ -16,6 +16,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 import evaluate as ev
 import leases as ls
@@ -107,6 +108,8 @@ def replacement(t: ev.Target, rec: dict[str, str], holder: str) -> str:
         if rec.get("timelimit"):
             args += ["--time", rec["timelimit"]]
         cmd, env = ev.cluster_dev_cmd(t.pool, "", *args)
+        # a hold changes the shared sentinel state, which only the main checkout's cluster_dev.sh may write
+        cmd[1] = str(Path(ev.local_workspace()) / "scripts" / "cluster" / "cluster_dev" / "cluster_dev.sh")
         out = subprocess.run(cmd, env=env, capture_output=True, text=True)
         sys.stderr.write(out.stderr)
         found = [w for w in (out.stdout + out.stderr).replace(".", " ").split() if w.isdigit() and len(w) >= 5]
