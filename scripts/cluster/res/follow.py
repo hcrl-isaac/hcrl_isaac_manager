@@ -31,6 +31,10 @@ POLL_S = 20
 RECORDER_GB = 12  # free memory one recorder's render worker (one env, RTX) needs on a shared card
 RECORDER = "hcrl_isaaclab:scripts/video_recorder.py"
 RECORDER_KIT = "--kit_args=--/renderer/multiGpu/enabled=false"
+RECORDER_START_S = 300  # the recorder's runner starts no Kit: its first W&B sweep comes within a minute or two
+RECORDER_FILE = "recorder"  # in a train run's stage: "pending" until a recorder is confirmed, then "<pool> <stage>"
+SWEPT = re.compile(r"\[recorder\] (Sweeping|No runs tagged|Skipping)")
+RECORDER_STARTED = re.compile(r"started detached on (\S+?):gpu(\d+) \(stage (\S+)\)")
 
 
 def _probe(stage: Stage, cmd: str) -> str:
@@ -90,21 +94,71 @@ def eval_mode(script_args: list[str]) -> str:
     return value("--eval") or value("--video") or "on"
 
 
-def arm_recorder(run: str, holder: str, wt: str, pools: list, launch: Callable = subprocess.run) -> str:
+def recorder_alive(stage: Stage, deadline_s: float = RECORDER_START_S, poll_s: float = 10.0,
+                   clock: Callable = time.monotonic, sleep: Callable = time.sleep) -> str:  # fmt: skip
+    """``ok`` once a just-started recorder logs its first W&B sweep, else why not (the tail of its log)."""
+    d = shlex.quote(stage.dir)
+    end = clock() + deadline_s
+    while True:
+        out = _probe(stage, f"grep -m1 -E '\\[recorder\\] (Sweeping|No runs tagged|Skipping)' {d}/log;"
+                            f" [ -e {d}/status ] && echo __ENDED__ && tail -n 6 {d}/log")  # fmt: skip
+        if SWEPT.search(out):
+            return "ok"
+        if "__ENDED__" in out:
+            return "it exited before its first sweep:\n" + out.split("__ENDED__", 1)[1].strip()
+        if clock() >= end:
+            return f"no first sweep in {deadline_s / 60:g} min:\n" + _probe(stage, f"tail -n 6 {d}/log").strip()
+        sleep(poll_s)
+
+
+def arm_recorder(
+    run: str, holder: str, wt: str, pools: list, launch: Callable = subprocess.run, alive: Callable = recorder_alive
+) -> tuple[str, str]:
     """Start an async recorder that follows ``run`` into W&B on a shared card of a render pool with ``recorder_root``.
 
     Returns:
-        The pool it started on, or "" when no pool could start one.
+        ``(pool, stage dir)`` of one that started and swept W&B once, or ``("", why)`` when none did.
     """
+    from evaluate import Stage, make_target
+
     entity, project, run_id = run.split("/")
+    why = "no render pool with recorder_root could start one"
     for pool in (p for p in pools if p.settings.get("recorder_root") and p.settings.get("render")):
         cmd = [sys.executable, str(HERE / "evaluate.py"), "--any", "--pool", pool.name, "--share", "--min-free-gb"]
         cmd += [str(RECORDER_GB), "--root", pool.settings["recorder_root"], "--holder", holder, "--detach"]
         cmd += [*(["--wt", wt] if wt else []), RECORDER, "--", "--mode", "async", "--follow", "--only_run", run_id]
         cmd += ["--wandb_project", f"{entity}/{project}", "--device", "{DEVICE}", RECORDER_KIT]
-        if launch(cmd).returncode == 0:
-            return pool.name
-    return ""
+        out = launch(cmd, capture_output=True, text=True)
+        sys.stderr.write(out.stderr or "")
+        found = RECORDER_STARTED.findall(out.stderr or "")
+        if out.returncode != 0 or not found:
+            continue
+        host, gpu, stage_dir = found[-1]
+        stage = Stage(make_target(pool, host, int(gpu)))
+        stage.dir = stage_dir
+        verdict = alive(stage)
+        if verdict == "ok":
+            return pool.name, stage_dir
+        why = f"the one started on {host}:gpu{gpu} (stage {stage_dir}) died: {verdict}"
+        print(f"[res] RECORDER FAILED on {pool.name}: {why}", file=sys.stderr)
+    return "", why
+
+
+def arm_for(stage: Stage, run: str, holder: str, wt: str, pools: list) -> bool:
+    """Arm ``stage``'s run a recorder and note it in the stage; say loudly when none starts."""
+    on, where = arm_recorder(run, holder, wt, pools)
+    if on:
+        _probe(stage, f"echo {shlex.quote(f'{on} {where}')} > {shlex.quote(stage.dir)}/{RECORDER_FILE}")
+        print(f"[res] armed an async recorder for {run} on {on} (stage {where}); it swept W&B", file=sys.stderr)
+        return True
+    print(f"[res] NO RECORDER: {where}; its evals and videos stay unrecorded until one runs. `pls run --watch"
+          f" --holder {shlex.quote(holder)}` tries again", file=sys.stderr)  # fmt: skip
+    return False
+
+
+def wants_recorder(stage: Stage) -> bool:
+    """The run asked for an async recorder at launch and none has been confirmed since."""
+    return _probe(stage, f"cat {shlex.quote(stage.dir)}/{RECORDER_FILE} 2>/dev/null").strip() == "pending"
 
 
 def _control_path(ssh_opts: list[str]) -> str:
@@ -154,12 +208,13 @@ def detached_stages(leases: list, holder: str, only: list[str]) -> list[tuple[st
     return out
 
 
-def rewatch(stages: list[tuple[str, Stage]], launch: Callable = subprocess.run) -> int:
+def rewatch(stages: list[tuple[str, Stage]], launch: Callable = subprocess.run, arm: Callable | None = None) -> int:
     """Watch already-running detached runs to their ends, one watch each, from this one call.
 
     Args:
         stages: (lease id, stage) per run.
         launch: Runs watch_run.sh (tests stub it).
+        arm: Arms a recorder for ``(stage, run)``; called for a run still waiting on the one its launch asked for.
 
     Returns:
         0 once every run finished; otherwise the worst watch's exit status.
@@ -176,6 +231,9 @@ def rewatch(stages: list[tuple[str, Stage]], launch: Callable = subprocess.run) 
             return
         run, target = got
         print(f"[res] {label}: watching toward iteration {target}" + (f" (W&B {run})" if run else ""), file=sys.stderr)
+        if arm is not None and run and wants_recorder(stage):
+            print(f"[res] {label}: its launch armed no recorder yet; arming one", file=sys.stderr)
+            arm(stage, run)
         codes[label] = watch(stage, run, target, label, launch=launch)
 
     threads = [
@@ -207,11 +265,9 @@ def after_launch(stage: Stage, args: argparse.Namespace, script_args: list[str],
     run, target = got
     print(f"[res] training toward iteration {target}" + (f" (W&B {run})" if run else ""), file=sys.stderr)
     if eval_mode(script_args) == "async" and not getattr(args, "no_recorder", False):
-        on = arm_recorder(run, args.holder, args.wt, pools) if run else ""
-        if on:
-            print(f"[res] armed an async recorder for {run} on {on}", file=sys.stderr)
+        if run:
+            arm_for(stage, run, args.holder, args.wt, pools)
         else:
-            why = "the run logs to no W&B run" if not run else "no render pool with recorder_root could start one"
-            print(f"[res] NO RECORDER: {why}; its evals and videos stay unrecorded until one runs", file=sys.stderr)
+            print("[res] NO RECORDER: the run logs to no W&B run, so none can follow it", file=sys.stderr)
     print("[res] watching it to its end (stopping this watch leaves the run running)", file=sys.stderr)
     return watch(stage, run, target, _run_name(script_args, os.path.basename(stage.dir)))

@@ -387,11 +387,10 @@ def arm_moved_recorder(stage: ev.Stage, holder: str, wt: str, opts: list[str], a
         return
     moved = progress(read_stage(stage, "log") or "")
     run = follow.WANDB_RUN.search(moved[0]) if moved else None
-    on = follow.arm_recorder("/".join(run.groups()), holder, wt, pools) if run else ""
-    if on:
-        print(f"[move] armed an async recorder for the new W&B run on {on}", file=sys.stderr)
+    if run:
+        follow.arm_for(stage, "/".join(run.groups()), holder, wt, pools)
     else:
-        print("[move] NO RECORDER for the new W&B run: arm one by hand", file=sys.stderr)
+        print("[move] NO RECORDER: the moved run logs no W&B run yet; `pls run --watch` arms one", file=sys.stderr)
 
 
 def parser() -> argparse.ArgumentParser:

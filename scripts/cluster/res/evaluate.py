@@ -360,6 +360,17 @@ def refuse_unrenderable(script: str, script_args: list[str], pool: Pool, model: 
         )
 
 
+def wants_async_recorder(args: argparse.Namespace, script: str, run_args: list[str]) -> bool:
+    """A detached train.py launch whose evals and videos an async recorder makes."""
+    return (
+        bool(args.detach)
+        and not args.cmd
+        and os.path.basename(script) == "train.py"
+        and follow.eval_mode(run_args) == "async"
+        and not getattr(args, "no_recorder", False)
+    )
+
+
 def refuse_device(script_args: list[str]) -> None:
     """Exit when a ``--cpus`` run's arguments name ``{DEVICE}``: it leases no card, so there is none to fill in."""
     if any("{DEVICE}" in arg for arg in script_args):
@@ -2292,6 +2303,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         stage.write(json.dumps({"pls_refs": {"value": pls_refs}}) + "\n", "wandb_config.yaml", mode=0o644)
         if raw := getattr(args, "raw_argv", None):  # the launch, as `pls run --move` relaunches it
             stage.write(json.dumps(raw) + "\n", "pls_argv.json", mode=0o644)
+        if wants_async_recorder(args, script, run_args):  # until one is confirmed, `pls run --watch` arms it
+            stage.write("pending\n", follow.RECORDER_FILE, mode=0o644)
         # snapshots are read-only, runs may be concurrent and a stage is removed after a success, so relative outputs
         # (train.py's logs/, a census's tables) go to a writable working dir of this run's own, kept afterwards
         work = container_path(t, f"{t.scratch}/res-eval/work/{os.path.basename(stage.dir)}")
@@ -2364,6 +2377,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             rc = 0
             if not args.cmd and os.path.basename(script) == "train.py" and not getattr(args, "no_watch", False):
                 rc = follow.after_launch(stage, args, run_args, pools)
+            elif wants_async_recorder(args, script, run_args):
+                print(f"[res] NO RECORDER yet: --no-watch arms none; `pls run --watch --holder {args.holder}` arms"
+                      " it once the run trains", file=sys.stderr)  # fmt: skip
         else:
             print(f"[res] running {os.path.basename(script)} on {t.where} (stage {stage.dir})", file=sys.stderr)
             held = taken.id if taken is not None else args.lease or ""
@@ -2577,7 +2593,15 @@ def main(argv: list[str] | None = None) -> None:
             stage.dir = d
             stages.append((lease_id, stage))
         print(f"[res] watching {len(stages)} detached run(s) of {wa.holder}", file=sys.stderr)
-        sys.exit(follow.rewatch(stages))
+
+        def arm(stage: Stage, run: str) -> None:
+            raw = follow._probe(stage, f"cat {shlex.quote(stage.dir)}/pls_argv.json 2>/dev/null")
+            argv = json.loads(raw) if raw.strip() else []
+            head = argv[: argv.index("--")] if "--" in argv else argv
+            wt = head[head.index("--wt") + 1] if "--wt" in head[:-1] else ""
+            follow.arm_for(stage, run, wa.holder, wt, pools)
+
+        sys.exit(follow.rewatch(stages, arm=arm))
     # `pls run --stop <lease> --holder <you>`: no script, no card to claim; a script's own --stop (after --) is its own
     if "--stop" in head:
         sp = argparse.ArgumentParser(prog="pls run --stop", description="stop a detached run and release its lease")

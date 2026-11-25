@@ -221,8 +221,11 @@ class MoveTest(unittest.TestCase):
         watch = mock.patch.object(
             move.follow, "watch", lambda st, run, tot, lbl: self.watched.append((run, tot)) or self.verdict
         )
-        arm = mock.patch.object(move.follow, "arm_recorder", lambda run, h, wt, pools: self.armed.append(run) or "a40")
-        for p in (stop, go, watch, arm):
+        arm = mock.patch.object(
+            move.follow, "arm_recorder", lambda run, h, wt, pools: self.armed.append(run) or ("a40", "/rec")
+        )
+        note = mock.patch.object(move.follow, "_probe", lambda st, cmd: "")
+        for p in (stop, go, watch, arm, note):
             p.start()
             self.addCleanup(p.stop)
 

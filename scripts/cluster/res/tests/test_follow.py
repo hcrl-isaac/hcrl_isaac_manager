@@ -80,37 +80,75 @@ class EvalModeTest(unittest.TestCase):
 class RecorderTest(unittest.TestCase):
     POOLS = [
         Pool("larg-a100", "ssh", {}),
-        Pool("larg-a40", "ssh", {"recorder_root": "/var/local/u/isaac3", "render": True}),
-        Pool("ebuntu", "ssh", {"recorder_root": "/home/e/isaac3", "render": True}),
+        Pool("larg-a40", "ssh", {"user": "u", "recorder_root": "/var/local/u/isaac3", "render": True}),
+        Pool("ebuntu", "ssh", {"user": "u", "recorder_root": "/home/e/isaac3", "render": True}),
         Pool("horizon-like", "ssh", {"recorder_root": "/r"}),  # a root, but no RTX render: never picked
     ]
 
+    def arm(self, wt: str, codes: list[int], verdicts: list[str] | None = None, calls: list | None = None) -> tuple:
+        rcs, said = iter(codes), iter(verdicts or ["ok"] * len(codes))
+        calls = [] if calls is None else calls
+
+        def launch(cmd: list[str], **kw: object) -> subprocess.CompletedProcess:
+            calls.append(cmd)
+            rc = next(rcs)
+            err = "[res] started detached on pepi:gpu3 (stage /var/rec/ab)\n" if rc == 0 else "[res] no free card\n"
+            return subprocess.CompletedProcess(cmd, rc, "", err)
+
+        return follow.arm_recorder("e/p/r", "S", wt, self.POOLS, launch, alive=lambda st: next(said))
+
     def test_it_follows_the_run_on_a_shared_card_of_a_recorder_pool(self) -> None:
         calls = []
-        on = follow.arm_recorder("hcrl/kick/ab12cd34", "Kick", "", self.POOLS, lambda c: calls.append(c) or _rc(0))
-        self.assertEqual((on, len(calls)), ("larg-a40", 1), "pools without recorder_root are skipped")
+        on = self.arm("", [0], calls=calls)
+        self.assertEqual((on, len(calls)), (("larg-a40", "/var/rec/ab"), 1), "pools without recorder_root are skipped")
         cmd = calls[0]
-        for want in (["--pool", "larg-a40"], ["--root", "/var/local/u/isaac3"], ["--only_run", "ab12cd34"]):
+        for want in (["--pool", "larg-a40"], ["--root", "/var/local/u/isaac3"], ["--only_run", "r"]):
             self.assertIn(want, [cmd[i : i + 2] for i in range(len(cmd) - 1)])
         self.assertIn("--share", cmd)
         self.assertIn("--follow", cmd)
-        self.assertEqual(cmd[cmd.index("--wandb_project") + 1], "hcrl/kick")
+        self.assertEqual(cmd[cmd.index("--wandb_project") + 1], "e/p")
         self.assertNotIn("--wt", cmd)
 
     def test_a_pool_that_cannot_start_one_falls_through_to_the_next(self) -> None:
-        codes = iter([1, 0])
         calls = []
-        on = follow.arm_recorder("e/p/r", "S", "lift", self.POOLS, lambda c: calls.append(c) or _rc(next(codes)))
-        self.assertEqual(on, "ebuntu")
+        self.assertEqual(self.arm("lift", [1, 0], calls=calls), ("ebuntu", "/var/rec/ab"))
         self.assertEqual(calls[1][calls[1].index("--wt") + 1], "lift", "the recorder renders the run's own code")
+
+    def test_a_recorder_that_dies_before_its_first_sweep_is_not_armed(self) -> None:
+        on, why = self.arm("", [0, 0], ["it exited before its first sweep:\nTraceback", "ok"])
+        self.assertEqual(on, "ebuntu", "the next render pool is tried")
+        on, why = self.arm("", [0, 1], ["it exited before its first sweep:\nCUDA numbers pepi:gpu3 cuda:0"])
+        self.assertEqual(on, "")
+        self.assertIn("pepi:gpu3", why)
+        self.assertIn("died", why)
 
     def test_only_render_pools_are_tried(self) -> None:
         calls = []
-        follow.arm_recorder("e/p/r", "S", "", self.POOLS, lambda c: calls.append(c[c.index("--pool") + 1]) or _rc(1))
-        self.assertEqual(calls, ["larg-a40", "ebuntu"])
+        self.arm("", [1, 1], calls=calls)
+        self.assertEqual([c[c.index("--pool") + 1] for c in calls], ["larg-a40", "ebuntu"])
 
     def test_no_pool_starts_one(self) -> None:
-        self.assertEqual(follow.arm_recorder("e/p/r", "S", "", self.POOLS, lambda c: _rc(1)), "")
+        self.assertEqual(self.arm("", [1, 1])[0], "")
+
+    def test_a_recorder_is_alive_once_it_sweeps_and_dead_once_it_exits_first(self) -> None:
+        stage = _stage()
+        log = Path(stage.dir, "log")
+        log.write_text("[recorder] Sweeping 1 tagged run(s): ['r']\n")
+        self.assertEqual(follow.recorder_alive(stage, 5, 0.01), "ok")
+        log.write_text("Traceback (most recent call last):\nRuntimeError: boom\n")
+        Path(stage.dir, "status").write_text("1")
+        self.assertIn("RuntimeError: boom", follow.recorder_alive(stage, 5, 0.01))
+
+    def test_arming_notes_the_recorder_in_the_runs_stage(self) -> None:
+        stage = _stage()
+        Path(stage.dir, follow.RECORDER_FILE).write_text("pending\n")
+        self.assertTrue(follow.wants_recorder(stage))
+        with mock.patch.object(follow, "arm_recorder", lambda *a: ("larg-a40", "/var/rec/ab")):
+            self.assertTrue(follow.arm_for(stage, "e/p/r", "S", "", []))
+        self.assertEqual(Path(stage.dir, follow.RECORDER_FILE).read_text().strip(), "larg-a40 /var/rec/ab")
+        self.assertFalse(follow.wants_recorder(stage))
+        with mock.patch.object(follow, "arm_recorder", lambda *a: ("", "no render pool")):
+            self.assertFalse(follow.arm_for(stage, "e/p/r", "S", "", []))
 
 
 class WatchTest(unittest.TestCase):
@@ -146,7 +184,7 @@ class AfterLaunchTest(unittest.TestCase):
         self.watched: list = []
         patches = [
             mock.patch.object(follow, "started", lambda st: ("hcrl/kick/ab12cd34", 6000)),
-            mock.patch.object(follow, "arm_recorder", lambda *a: self.armed.append(a) or "larg-a40"),
+            mock.patch.object(follow, "arm_recorder", lambda *a: self.armed.append(a) or ("larg-a40", "/rec")),
             mock.patch.object(follow, "watch", lambda *a: self.watched.append(a) or 3),
         ]
         for p in patches:
@@ -204,6 +242,23 @@ class RewatchTest(unittest.TestCase):
         self.assertEqual(len(launched), 1, "an ended run is reported, not watched")
         self.assertIn("e/p/run1", launched[0])
         self.assertEqual(rc, 1, "the ended run makes the call non-zero")
+
+    def test_a_run_whose_launch_armed_no_recorder_gets_one_from_the_watch(self) -> None:
+        pending, armed_already = _stage(), _stage()
+        Path(pending.dir, follow.RECORDER_FILE).write_text("pending\n")
+        Path(armed_already.dir, follow.RECORDER_FILE).write_text("larg-a40 /var/rec/x\n")
+        armed = []
+        with (
+            mock.patch.object(follow, "REWATCH_STAGGER_S", 0),
+            mock.patch.object(follow, "started", lambda st, deadline_s=0: ("e/p/" + Path(st.dir).name, 10)),
+            mock.patch("sys.stderr"),
+        ):
+            follow.rewatch(
+                [("L1", pending), ("L2", armed_already)],
+                launch=lambda cmd, env: _rc(0),
+                arm=lambda st, run: armed.append(run),
+            )
+        self.assertEqual(armed, ["e/p/" + Path(pending.dir).name], "only the run still waiting on its recorder")
 
 
 if __name__ == "__main__":
