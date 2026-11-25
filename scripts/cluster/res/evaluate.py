@@ -2598,7 +2598,9 @@ def main(argv: list[str] | None = None) -> None:
             raw = follow._probe(stage, f"cat {shlex.quote(stage.dir)}/pls_argv.json 2>/dev/null")
             argv = json.loads(raw) if raw.strip() else []
             head = argv[: argv.index("--")] if "--" in argv else argv
-            given = [b for a, b in zip(head, head[1:]) if a == "--wt"] + [x[5:] for x in head if x.startswith("--wt=")]
+            given = [b for a, b in itertools.pairwise(head) if a == "--wt"] + [
+                x[5:] for x in head if x.startswith("--wt=")
+            ]
             wt = given[-1] if given else ""
             follow.arm_for(stage, run, wa.holder, wt, pools)
 
