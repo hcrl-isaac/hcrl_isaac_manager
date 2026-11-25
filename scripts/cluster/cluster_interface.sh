@@ -59,9 +59,11 @@ push_sif() {
 }
 
 # Build the .sif on the cluster (CLUSTER_ARCH=arm64): upload hcrl-isaac.def and its files next to the .sif, then
-# `apptainer build --fakeroot` in a batch job with the profile's resources, replacing the .sif only once built.
+# `apptainer build --fakeroot` in a batch job with the profile's resources, replacing the .sif only once built. With
+# a target (setup --build-only), the image is left at that name beside the .sif, for swap_remote_sif to put in place.
 build_remote_sif() {
     source_cluster_env
+    local target="${1:-${IMAGE_NAME}.sif}"
     local build="${CLUSTER_SIF_PATH}/build-${IMAGE_NAME}" submit="${CONFIG_DIR}/${CLUSTER}/submit_job_slurm.sh"
     local dockerfile="${SCRIPT_DIR}/../docker/Dockerfile" base flags="" flag value free min="${CLUSTER_BUILD_MIN_FREE_GB:-40}"
     local build_args="" arg
@@ -104,8 +106,8 @@ if [ \"\$(cat base.ref 2>/dev/null)\" != '${base}' ]; then
     echo '${base}' > base.ref
 fi
 apptainer build --fakeroot --force${build_args} ${IMAGE_NAME}.sif.partial.\$SLURM_JOB_ID hcrl-isaac.def
-mv -f ${IMAGE_NAME}.sif.partial.\$SLURM_JOB_ID '${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif'
-echo \"[cluster] built ${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif\""
+mv -f ${IMAGE_NAME}.sif.partial.\$SLURM_JOB_ID '${CLUSTER_SIF_PATH}/${target}'
+echo \"[cluster] built ${CLUSTER_SIF_PATH}/${target}\""
     local opts="-N 1 -t ${CLUSTER_BUILD_TIME:-02:00:00} -J ${IMAGE_NAME}-build -o '${build}/build-%j.log'${flags}"
     echo "[cluster] building in a batch job (sbatch ${opts}); it can take ~15 min"
     local rc=0 out id
@@ -122,6 +124,18 @@ echo \"[cluster] built ${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif\""
         echo "[ERROR] lost the connection while job ${id} runs; it may still finish: see ${log}" >&2; exit "$rc"
     fi
     [ "$rc" -eq 0 ] || { echo "[ERROR] build job ${id} failed (exit ${rc}); see ${log}" >&2; exit "$rc"; }
+}
+
+# Put a --build-only image in place (setup --push-only). A running job keeps the image it opened; only runs started
+# after the swap get the new one.
+swap_remote_sif() {
+    source_cluster_env
+    ensure_ssh_master
+    local next="${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif.next"
+    ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "[ -f '${next}' ]" < /dev/null ||
+        { echo "[ERROR] no ${next}: build it first with 'setup --build-only'" >&2; exit 1; }
+    ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "mv -f '${next}' '${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif'" < /dev/null
+    echo "[cluster] swapped in ${CLUSTER_SIF_PATH}/${IMAGE_NAME}.sif"
 }
 
 # Submit a batch job on the login node: the cluster's submit_job_slurm.sh holds its #SBATCH config and
@@ -252,8 +266,12 @@ esac
 case "${cmd}:${ARCH:-amd64}:${1:-}" in
     *:amd64:*) ;;
     setup:arm64:) build_remote_sif; exit ;;
+    setup:arm64:--build-only) build_remote_sif "${IMAGE_NAME}.sif.next"; exit ;;  # built beside the live .sif
+    setup:arm64:--push-only) swap_remote_sif; exit ;;
     setup:arm64:*)
-        echo "[ERROR] ${CLUSTER} is arm64: its .sif is built on the cluster by 'setup', with no flags" >&2; exit 1 ;;
+        echo "[ERROR] ${CLUSTER} is arm64: 'setup' builds its .sif on the cluster; --build-only leaves it as" \
+            "${IMAGE_NAME}.sif.next and --push-only swaps that in" >&2
+        exit 1 ;;
 esac
 
 case "$cmd" in
@@ -272,7 +290,8 @@ case "$cmd" in
     job)         cmd_job "$@" ;;   # `pls run --on <name> --batch`
     -h | --help | help)
         echo "The SLURM backend of pls (CLUSTER=<profile>); run it through:"
-        echo "  pls setup --on <cluster> [--build-only|--push-only]  build the shared .sif and push it (arm64: built there)"
+        echo "  pls setup --on <cluster> [--build-only|--push-only]  build the shared .sif and push it (arm64: built there;"
+        echo "                                                       --build-only parks it, --push-only swaps it in)"
         echo "  pls setup --add <name> [--update]                    create or regenerate a profile"
         echo "  pls jobs --on <cluster> [list|logs <job>|stop <job>]  this profile's batch jobs"
         echo "  pls run --on <cluster> --batch [--tree N | --wt S] -- <script> [args]  submit one"
