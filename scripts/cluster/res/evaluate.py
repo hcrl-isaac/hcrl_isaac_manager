@@ -2490,6 +2490,25 @@ def main(argv: list[str] | None = None) -> None:
         import move
 
         sys.exit(move.main(argv, res.load_pools()))
+    if "--watch" in head:  # `pls run --watch [LEASE ...] --holder <you>`: watch running detached runs again
+        wp = argparse.ArgumentParser(
+            prog="pls run --watch", description="watch detached runs again (after their launching shell ended)"
+        )
+        wp.add_argument("--watch", nargs="*", default=[], metavar="LEASE", help="leases to watch (default: all yours)")
+        wp.add_argument("--holder", required=True, help="your session name (must match the leases)")
+        wa = wp.parse_args(argv)
+        pools = res.load_pools()
+        with ls.locked_store() as leases:
+            found = follow.detached_stages(list(leases), wa.holder, [x.removeprefix("lease:") for x in wa.watch])
+        if not found:
+            sys.exit(f"[res] no detached run on {'those leases' if wa.watch else 'any lease'} of {wa.holder}")
+        stages = []
+        for lease_id, d in found:
+            stage = Stage(make_target(*_lease_card(lease_id, wa.holder, pools)))
+            stage.dir = d
+            stages.append((lease_id, stage))
+        print(f"[res] watching {len(stages)} detached run(s) of {wa.holder}", file=sys.stderr)
+        sys.exit(follow.rewatch(stages))
     # `pls run --stop <lease> --holder <you>`: no script, no card to claim; a script's own --stop (after --) is its own
     if "--stop" in head:
         sp = argparse.ArgumentParser(prog="pls run --stop", description="stop a detached run and release its lease")
