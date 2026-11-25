@@ -192,12 +192,18 @@ job_state() { on_login "squeue -j $1 -h -o '%T'" 2>/dev/null | tr -d '[:space:]'
 #============================================================================
 # Subcommands
 #============================================================================
-cmd_start() {
-    local stage=1
+cmd_start() {  # start [--no-stage] [--partition P] [--time T] : hold a node (the config's queue and time unless given)
+    local stage=1 over=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-stage) stage=""; shift ;;
-            *) err "start: unknown argument '$1' (usage: start [--no-stage])"; exit 1 ;;
+            # sbatch's own options override the #SBATCH lines, so one hold can use another queue (a renamed or short one)
+            --partition|--time)
+                [ -n "${2:-}" ] || { err "start: $1 needs a value"; exit 1; }
+                over+=("$1=$2")
+                [ "$1" = --partition ] && DEV_PARTITION="$2" || DEV_TIME="$2"
+                shift 2 ;;
+            *) err "start: unknown argument '$1' (usage: start [--no-stage] [--partition P] [--time T])"; exit 1 ;;
         esac
     done
     ensure_master
@@ -214,7 +220,7 @@ cmd_start() {
     export SBATCH_DIRECTIVES
     envsubst '$SBATCH_DIRECTIVES' < "${SCRIPT_DIR}/sentinel.sbatch" | on_login "cat > ${sbatch_remote}"
     local jobid raw
-    raw="$(on_login "sbatch --parsable ${sbatch_remote}")" || { err "sbatch failed."; exit 1; }
+    raw="$(on_login "sbatch --parsable ${over[*]} ${sbatch_remote}")" || { err "sbatch failed."; exit 1; }
     # --parsable prints "<jobid>[;<cluster>]". Some login shells (e.g. TACC) emit banner/
     # balance lines first, so DON'T strip digits globally -- take the LAST non-empty line and
     # the field before any ';', then keep only its digits.
@@ -334,7 +340,8 @@ require_running() {
     if [ -n "${DEV_JOBID:-}" ]; then
         DD_JOBID="$DEV_JOBID"
         master_alive || { err "SSH master is down -- re-run './cluster_dev.sh start' (needs 2FA)."; exit 1; }
-        local row state part acct gpus; row="$(on_login "squeue -j ${DD_JOBID} -h -o '%T %N %P %a %b' 2>/dev/null")"
+        local row state part acct gpus limit
+        row="$(on_login "squeue -j ${DD_JOBID} -h -o '%T %N %P %a %b %l' 2>/dev/null")"
         state="$(echo "$row" | awk '{print $1}')"
         [ "$state" = "RUNNING" ] || { err "Job ${DD_JOBID} not RUNNING (state=${state:-gone})."; exit 1; }
         DD_NODE="$(echo "$row" | awk '{print $2}')"; DD_MODE="srun"
@@ -345,6 +352,9 @@ require_running() {
         [ -n "$part" ] && SRUN_PART_OPT="-p ${part}"
         [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A $(_acct_spelling "$acct")"
         [ -n "$gpus" ] && SRUN_GRES_OPT="--gres=gpu:${gpus}"
+        # a step may not ask past its job's own limit (a short-queue hold): take that limit, not the config's
+        limit="$(echo "$row" | awk '{print $6}')"
+        [ -n "$limit" ] && [ "$limit" != UNLIMITED ] && DEV_TIME="$limit"
         _srun_opts
         log "[override] targeting job ${DD_JOBID} on ${DD_NODE} via srun --overlap"
         return
@@ -368,9 +378,14 @@ require_running() {
     if [ "$DD_MODE" = "auto" ]; then
         [ "$(state_get SSH_NODE_OK)" = "yes" ] && [ -n "$DD_NODE" ] && DD_MODE="ssh" || DD_MODE="srun"
     fi
-    if [ "$DD_MODE" = "srun" ]; then  # the job may have been moved to another account since it was submitted
-        local acct; acct="$(on_login "squeue -j ${DD_JOBID} -h -o %a 2>/dev/null")"
-        [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A $(_acct_spelling "$acct")" && _srun_opts
+    if [ "$DD_MODE" = "srun" ]; then  # the job's own account, queue and limit: it may differ from the config's
+        local row acct part limit; row="$(on_login "squeue -j ${DD_JOBID} -h -o '%a %P %l' 2>/dev/null")"
+        acct="$(echo "$row" | awk '{print $1}')"; part="$(echo "$row" | awk '{print $2}')"
+        limit="$(echo "$row" | awk '{print $3}')"
+        [ -n "$acct" ] && [ "$acct" != "(null)" ] && SRUN_ACCT_OPT="-A $(_acct_spelling "$acct")"
+        [ -n "$part" ] && SRUN_PART_OPT="-p ${part}"
+        [ -n "$limit" ] && [ "$limit" != UNLIMITED ] && DEV_TIME="$limit"
+        _srun_opts
     fi
 }
 
