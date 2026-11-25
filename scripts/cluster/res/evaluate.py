@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import hashlib
 import itertools
 import json
@@ -43,6 +44,9 @@ CONTAINER_ARTIFACTS = "/workspace/artifacts"
 CONTAINER_PYTHON = "/isaac-sim/python.sh"
 CONTAINER_TMP = "/tmp/res-eval"  # in the container's /tmp, the step's own node-local dir (develop exec --own-tmp)
 CKPT_CACHE = Path.home() / ".cache" / "hcrl_res" / "checkpoints"
+SLOT_DIR = Path.home() / ".cache" / "hcrl_res" / "ssh-slots"
+# launches at once over one SLURM login's SSH master: its sshd caps sessions per connection (MaxSessions, often 10)
+LAUNCH_SLOTS = 4
 TRACEBACK = "Traceback (most recent call last)"
 TIMED_OUT = 124
 DEFAULT_STALL_S = 900.0  # an attached run's --stall when none is given
@@ -99,6 +103,62 @@ class Target:
     def ssh_opts(self) -> list[str]:
         """ssh options: a SLURM login only over its existing master (a new connection would need 2FA)."""
         return [*MASTER_OPTS, *SSH_OPTS] if self.kind == "slurm" else list(SSH_OPTS)
+
+
+class LaunchSlot:
+    """One of a SLURM login's few concurrent launches, so they never outnumber its SSH master's sessions."""
+
+    def __init__(self, login: str, slots: int = LAUNCH_SLOTS) -> None:
+        self.login, self.slots, self.fd = login, max(1, slots), None
+
+    def acquire(self, poll_s: float = 2.0) -> LaunchSlot:
+        """Take a free slot, waiting (and saying so once) while every slot is taken."""
+        d = SLOT_DIR / self.login.replace("/", "_")
+        d.mkdir(parents=True, exist_ok=True)
+        said = False
+        while True:
+            for i in range(self.slots):
+                fd = os.open(d / f"slot{i}", os.O_CREAT | os.O_RDWR, 0o600)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    os.close(fd)
+                    continue
+                self.fd = fd
+                return self
+            if not said:
+                print(
+                    f"[res] {self.slots} launches (or attached runs, which keep theirs while they run) are using"
+                    f" {self.login}'s SSH connection, which takes few sessions at once; waiting for one to finish",
+                    file=sys.stderr,
+                )
+                said = True
+            time.sleep(poll_s)
+
+    def release(self) -> None:
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+
+_EXPLAINED: set[str] = set()
+
+
+def explain_ssh_failure(t: Target) -> None:
+    """Name why ssh to a SLURM login failed (once per login): its master is down, or it had no free session."""
+    if t.ssh in _EXPLAINED:
+        return
+    _EXPLAINED.add(t.ssh)
+    up = subprocess.run(["ssh", *t.ssh_opts, "-O", "check", t.ssh], capture_output=True).returncode == 0
+    if up:
+        print(
+            f"[res] {t.ssh}'s SSH connection is up but had no free session (its sshd's MaxSessions), so ssh tried a"
+            " new login, which needs 2FA: that is the 'Permission denied (keyboard-interactive)'. Too many sessions"
+            " use it at once (launches, watches, shells); retry when fewer run.",
+            file=sys.stderr,
+        )
+    else:
+        print(f"[res] {t.ssh}'s SSH connection is down: reopen it with `pls connect --on <cluster>`", file=sys.stderr)
 
 
 def local_workspace() -> str:
@@ -1168,7 +1228,10 @@ class Stage:
         self.root = ""  # an Isaac Lab install root a SLURM run's step uses instead of the cluster's image (--root)
 
     def _ssh(self, cmd: str, **kw: object) -> subprocess.CompletedProcess:
-        return subprocess.run(["ssh", *self.t.ssh_opts, self.t.ssh, cmd], **kw)
+        r = subprocess.run(["ssh", *self.t.ssh_opts, self.t.ssh, cmd], **kw)
+        if r.returncode == 255 and self.t.kind == "slurm":  # ssh's own failure, not the command's
+            explain_ssh_failure(self.t)
+        return r
 
     def _rsync_ssh(self) -> str:
         return "ssh " + " ".join(shlex.quote(o) for o in self.t.ssh_opts)
@@ -2179,7 +2242,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             pool, job, uuid = None, card.job, card.uuid
         else:
             pool, uuid = next(p for p in pools if p.name == rep.pool.split("/")[0]), card.uuid
-    rc, stage, detached, staging = 1, None, False, None
+    rc, stage, detached, staging, slot = 1, None, False, None, None
     handlers = {sig: signal.signal(sig, _interrupt) for sig in (signal.SIGTERM, signal.SIGHUP)}
     try:
         if pool is None:  # inside the try, so a refusal still releases the lease
@@ -2189,6 +2252,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         t.extra_uuids = tuple(c.uuid for _, c, _ in claimed[1:]) if extra else ()
         t.cores = taken.cores if args.cpus else ""
         run_args = fill_device(run_args, t, launcher)  # before staging, so a wrong cuda:N costs nothing
+        if t.kind == "slurm":  # staging and submitting share the login's few SSH sessions with other launches
+            slot = LaunchSlot(t.ssh, int(pool.settings.get("launch_slots", LAUNCH_SLOTS))).acquire()
         if t.kind != "slurm":  # the pool's guardrails, before anything is staged
             args.timeout = pool_timeout(pool, args.timeout)
             check_free_disk(t, pool)
@@ -2290,6 +2355,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if args.detach:
             stage.start_detached(fill_checkpoints(run_args, paths))
             detached = True
+            if slot is not None:  # submitted: its watch must not keep the next launch waiting
+                slot.release()
             held = taken.id if taken is not None else args.lease or ""
             for lease_id in (held, *(x.id for x in extra)):  # every card's lease names the run's stage
                 _record_stage(lease_id, stage.dir)
@@ -2308,6 +2375,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
     except SystemExit as exc:  # a refusal before the run started: its reason is the exit, never a log to read
         rc = exc.code if exc.code is not None else 0
     finally:
+        if slot is not None:
+            slot.release()
         if staging is not None:
             staging.stop()
         for sig, old in handlers.items():

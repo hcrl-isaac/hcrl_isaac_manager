@@ -1845,5 +1845,46 @@ class EvalRunTest(Isolated):
         self.assertIn("exactly one", str(rc))
 
 
+class LaunchSlotTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        patch = mock.patch.object(ev, "SLOT_DIR", Path(self.tmp))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_launch_waits_while_every_slot_is_taken(self) -> None:
+        """Launches beyond the login's slots wait (saying why once) instead of overflowing its SSH master."""
+        first = ev.LaunchSlot("u@login", slots=1).acquire()
+        got, err = [], io.StringIO()
+
+        def second() -> None:
+            with contextlib.redirect_stderr(err):
+                got.append(ev.LaunchSlot("u@login", slots=1).acquire(poll_s=0.05))
+
+        th = threading.Thread(target=second)
+        th.start()
+        time.sleep(0.3)
+        self.assertEqual(got, [], "the second launch waits")
+        self.assertEqual(err.getvalue().count("waiting for one to finish"), 1)
+        first.release()
+        th.join(5)
+        self.assertEqual(len(got), 1, "and takes the slot once it frees")
+        got[0].release()
+        ev.LaunchSlot("other@login", slots=1).acquire().release()  # another login has slots of its own
+
+    def test_an_ssh_failure_names_its_cause_once(self) -> None:
+        t = mock.Mock(ssh="u@login", ssh_opts=["-o", "x"])
+        err = io.StringIO()
+        with (
+            mock.patch.object(ev, "_EXPLAINED", set()),
+            mock.patch.object(ev.subprocess, "run", return_value=mock.Mock(returncode=0)),
+            contextlib.redirect_stderr(err),
+        ):
+            ev.explain_ssh_failure(t)
+            ev.explain_ssh_failure(t)
+        self.assertEqual(err.getvalue().count("had no free session"), 1, err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
