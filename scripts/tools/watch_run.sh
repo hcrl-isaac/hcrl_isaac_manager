@@ -1,18 +1,26 @@
 #!/usr/bin/env bash
 # Watchdog for a training run. Every exit is FINISHED, STALLED, DEAD, FAILED or BLIND (no probe answered for stall_min).
 #
-#   watch_run.sh [--wandb <entity/project/run_id>] <label> <log> <target-iters> [stall_min] [report_every] [metric-grep]
+#   watch_run.sh [--wandb <entity/project/run_id>] [--status <file>] <label> <log> <target-iters> [stall_min] [report_every]
+#                [metric-grep]
 #
 # <log> is a local path, user@host:/path when the log lands on a different host from the process, or ray:<job_id>
 # for a Ray job (read through `pls jobs --on ray logs`; a job Ray reports FAILED or STOPPED is FAILED here). A run that
 # logs every N iterations finishes when it closes (W&B's sync lines after its last iteration) within N of the target.
 # With --wandb, a log that cannot be read (its login node down) is replaced by the run's W&B state, iteration and last
-# log time, so a login outage is not BLIND while the run still logs.
+# log time, so a login outage is not BLIND while the run still logs. With --status (a file on the log's host holding the
+# run's exit code once it ends, as a detached pls run writes) the run is finished only when that file says 0.
 set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WANDB_RUN=""
-if [ "${1:-}" = --wandb ]; then WANDB_RUN=$2; shift 2; fi
+WANDB_RUN=""; STATUS_F=""
+while :; do
+    case "${1:-}" in
+        --wandb) WANDB_RUN=$2; shift 2 ;;
+        --status) STATUS_F=$2; shift 2 ;;
+        *) break ;;
+    esac
+done
 LABEL=$1; LOG_SPEC=$2; TARGET=$3; STALL_MIN=${4:-20}; EVERY=${5:-100}; MET=${6:-}
 RAY_JOB=""
 case $LOG_SPEC in
@@ -23,6 +31,9 @@ case $LOG_SPEC in
 esac
 PLS=${WATCH_RUN_PLS:-pls}  # the pls a Ray watch asks; tests stub it
 [ "${EVERY:-0}" -gt 0 ] 2>/dev/null || EVERY=0   # 0 disables the periodic metric line
+# iterations print 0-based (the last is TARGET-1); a run may stop a few short, but a short run gets no slack
+SLACK=$((TARGET / 20)); [ "$SLACK" -gt 5 ] && SLACK=5
+DONE_AT=$((TARGET - 1 - SLACK))
 
 ERRPAT='Traceback|error running python|Error executing|CUDA out of memory|Could not override|No contact sensors|Segmentation fault|Killed|srun: error|Disk quota exceeded|Worker exited -11'
 # benign noise: ranks starting together, srun failing to load its unused http_parser plugin, and srun answering an
@@ -107,7 +118,8 @@ ln=\$(grep -anE 'Learning iteration [0-9]+/' "\$f" | tail -1 | cut -d: -f1)
 # errors and the run's closing lines count only after the last progress line (W&B prints "View run" at start too)
 err=\$(tail -n +\${ln:-1} "\$f" | awk -v mode=count -v err='$ERRPAT' -v benign='$BENIGNPAT' '$ERRAWK')
 closed=\$(tail -n +\${ln:-1} "\$f" | grep -acE 'Synced [0-9]+ W&B file|View run .* at:')
-echo "it=\${it:-none} prev=\${prev:-none} age=\$age err=\$err closed=\$closed"
+code=none; [ -n "$STATUS_F" ] && [ -s "$STATUS_F" ] && code=\$(tr -dc 0-9 < "$STATUS_F")
+echo "it=\${it:-none} prev=\${prev:-none} age=\$age err=\$err closed=\$closed code=\${code:-none}"
 EOF
 }
 
@@ -129,7 +141,7 @@ while true; do
             crashed|failed|killed)
                 echo "[$LABEL] FAILED: W&B run $WANDB_RUN is $wstate at iter ${w_iter:-none} (target $TARGET)"; exit 1 ;;
             finished)
-                if [ -n "$w_iter" ] && [ "$w_iter" -ge $((TARGET - 5)) ]; then
+                if [ -n "$w_iter" ] && [ "$w_iter" -ge "$DONE_AT" ]; then
                     echo "[$LABEL] finished: W&B run $WANDB_RUN finished at iter $w_iter (target $TARGET)"; exit 0
                 fi
                 echo "[$LABEL] FAILED: W&B run $WANDB_RUN finished at iter ${w_iter:-none}, short of target $TARGET"; exit 1 ;;
@@ -141,7 +153,7 @@ while true; do
         if [ -n "$w_iter" ]; then
             [ "$w_iter" != "$last_it" ] && { last_it=$w_iter; last_change=$now; }
             [ $booted -eq 0 ] && { booted=1; echo "[$LABEL] training (iter $w_iter, from W&B)"; }
-            if [ "$w_iter" -ge $((TARGET - 5)) ]; then echo "[$LABEL] finished at iter $w_iter (target $TARGET, from W&B)"; exit 0; fi
+            if [ "$w_iter" -ge "$DONE_AT" ]; then echo "[$LABEL] finished at iter $w_iter (target $TARGET, from W&B)"; exit 0; fi
             if [ "$EVERY" -gt 0 ] && [ $((w_iter / EVERY)) != "$lastc" ]; then
                 lastc=$((w_iter / EVERY)); echo "[$LABEL] iter $w_iter (W&B)"
             fi
@@ -168,7 +180,7 @@ while true; do
         echo "[$LABEL] not started yet"; sleep 120; continue
     fi
     field() { local v=${st#* $1=}; [ "$v" = "$st" ] && v=${st#$1=}; echo "${v%% *}"; }
-    it=$(field it); prev=$(field prev); age=$(field age); err=$(field err); closed=$(field closed)
+    it=$(field it); prev=$(field prev); age=$(field age); err=$(field err); closed=$(field closed); code=$(field code)
     [ "$it" = none ] && it=""
     [ "$prev" = none ] && prev=$it
 
@@ -183,17 +195,27 @@ while true; do
         booted=1; echo "[$LABEL] training (iter $it)"
         [ "$EVERY" -gt 0 ] && lastc=$((it / EVERY))
     fi
-    # a run that logs every N iterations closes up to N past its last progress line
-    if [ -n "$it" ] && [ "${closed:-0}" != "0" ]; then
-        gap=$((it - prev)); [ "$gap" -gt 0 ] || gap=0
-        if [ $((it + gap)) -ge $((TARGET - 5)) ]; then
-            echo "[$LABEL] finished: the run closed after iter $it (logs every ${gap:-1}, target $TARGET)"; exit 0
+    gap=0; [ -n "$it" ] && gap=$((it - prev)); [ "$gap" -gt 0 ] || gap=0
+    if [ -n "$STATUS_F" ]; then
+        # the exit code is the end: a long eval or a 0-based last iteration only looks like one in the log
+        if [ "$code" != none ]; then
+            if [ "$code" != 0 ]; then echo "[$LABEL] FAILED: the run exited $code at iter ${it:-none}"; exit 1; fi
+            if [ -n "$it" ] && [ $((it + gap)) -ge "$DONE_AT" ]; then
+                echo "[$LABEL] finished: the run exited 0 after iter $it (target $TARGET)"; exit 0
+            fi
+            echo "[$LABEL] FAILED: the run exited 0 at iter ${it:-none}, short of target $TARGET"; exit 1
         fi
-        echo "[$LABEL] FAILED: the run closed at iter $it, short of target $TARGET"; exit 1
-    fi
-    # a run may stop a few short of the nominal target
-    if [ -n "$it" ] && [ "$it" -ge $((TARGET - 5)) ]; then
-        echo "[$LABEL] finished at iter $it (target $TARGET)"; exit 0
+    else
+        # a run that logs every N iterations closes up to N past its last progress line
+        if [ -n "$it" ] && [ "${closed:-0}" != "0" ]; then
+            if [ $((it + gap)) -ge "$DONE_AT" ]; then
+                echo "[$LABEL] finished: the run closed after iter $it (logs every ${gap:-1}, target $TARGET)"; exit 0
+            fi
+            echo "[$LABEL] FAILED: the run closed at iter $it, short of target $TARGET"; exit 1
+        fi
+        if [ -n "$it" ] && [ "$it" -ge "$DONE_AT" ]; then
+            echo "[$LABEL] finished at iter $it (target $TARGET)"; exit 0
+        fi
     fi
     case $RAY_STATUS in  # Ray knows the job ended before its log can say so
         FAILED|STOPPED)

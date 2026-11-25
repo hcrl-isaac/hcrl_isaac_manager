@@ -75,6 +75,8 @@ class Lease:
         shared: Claimed with ``--share`` on a card other processes use: theirs are no conflict, and only the
             holder's own processes keep the lease alive.
         neighbors: PIDs on a shared card at the claim: another session's run under the same login is no activity.
+        open: The holder lets other sessions ``--share`` the card beside its runs (``pls res open``); each of them
+            takes a lease of its own there.
     """
 
     id: str
@@ -102,6 +104,16 @@ class Lease:
     runner_pid: int = 0
     shared: bool = False
     neighbors: list[str] = field(default_factory=list)
+    open: bool = False
+
+
+def by_card(leases: list[Lease]) -> dict[str, Lease]:
+    """Each leased card's deciding lease: one not open to sharing when there is one, so a card is open only if all are."""
+    out: dict[str, Lease] = {}
+    for lease in leases:
+        if lease.key not in out or out[lease.key].open:
+            out[lease.key] = lease
+    return out
 
 
 def is_cpu(lease: Lease) -> bool:

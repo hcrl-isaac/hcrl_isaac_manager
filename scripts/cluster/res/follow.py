@@ -11,6 +11,7 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -114,10 +115,11 @@ def _control_path(ssh_opts: list[str]) -> str:
 def watch(stage: Stage, run: str, target: int, label: str, launch: Callable = subprocess.run) -> int:
     """Watch the run's log to its end with watch_run.sh and return its exit status (0 only once it finished)."""
     log = f"{stage.dir}/log" if stage.t.kind == "local" else f"{stage.t.ssh}:{stage.dir}/log"
+    status = ["--status", f"{stage.dir}/status"]  # the runner's exit code, on the log's host
     env = dict(os.environ)
     if path := _control_path(stage.t.ssh_opts if stage.t.kind == "slurm" else []):
         env["WATCH_RUN_CONTROL_PATH"] = path
-    cmd = ["bash", str(WATCH), *(["--wandb", run] if run else []), label, log, str(target)]
+    cmd = ["bash", str(WATCH), *(["--wandb", run] if run else []), *status, label, log, str(target)]
     return launch(cmd, env=env).returncode
 
 
@@ -128,6 +130,65 @@ def _run_name(script_args: list[str], fallback: str) -> str:
         if a.startswith("--run_name="):
             return a.split("=", 1)[1]
     return fallback
+
+
+REWATCH_STAGGER_S = 5.0  # between re-armed watches' first probes, so their ssh calls do not start in one burst
+
+
+def detached_stages(leases: list, holder: str, only: list[str]) -> list[tuple[str, str]]:
+    """(lease id, stage dir) of each detached run ``holder``'s leases carry, once per stage, oldest lease first.
+
+    Args:
+        leases: The lease store.
+        holder: Whose leases.
+        only: Lease ids to keep (all of the holder's when empty).
+    """
+    out, seen = [], set()
+    for lease in sorted(leases, key=lambda x: x.created):
+        if lease.holder != holder or (only and lease.id not in only):
+            continue
+        for d in lease.stages or ([lease.stage] if lease.stage else []):
+            if d not in seen:  # a --gpus run's cards all record its one stage
+                seen.add(d)
+                out.append((lease.id, d))
+    return out
+
+
+def rewatch(stages: list[tuple[str, Stage]], launch: Callable = subprocess.run) -> int:
+    """Watch already-running detached runs to their ends, one watch each, from this one call.
+
+    Args:
+        stages: (lease id, stage) per run.
+        launch: Runs watch_run.sh (tests stub it).
+
+    Returns:
+        0 once every run finished; otherwise the worst watch's exit status.
+    """
+    codes: dict[str, int] = {}
+
+    def one(lease_id: str, stage: Stage, delay: float) -> None:
+        time.sleep(delay)
+        label = f"{lease_id}/{os.path.basename(stage.dir)}"
+        got = started(stage)  # an ended run returns at once; a booting one gets the launch's own wait
+        if got is None:
+            print(f"[res] {label}: no live training run there (ended, or never trained); not watched", file=sys.stderr)
+            codes[label] = 1
+            return
+        run, target = got
+        print(f"[res] {label}: watching toward iteration {target}" + (f" (W&B {run})" if run else ""), file=sys.stderr)
+        codes[label] = watch(stage, run, target, label, launch=launch)
+
+    threads = [
+        threading.Thread(target=one, args=(lid, st, i * REWATCH_STAGGER_S), daemon=True)
+        for i, (lid, st) in enumerate(stages)
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    for label, rc in sorted(codes.items()):
+        print(f"[res] {label}: {'finished' if rc == 0 else f'exit {rc}'}", file=sys.stderr)
+    return max(codes.values(), default=0)
 
 
 def after_launch(stage: Stage, args: argparse.Namespace, script_args: list[str], pools: list) -> int:

@@ -251,6 +251,26 @@ check "other files are not" "[ ! -e '$R/resources/motion_datasets/clips/walk.npz
 check "and nothing there is deleted" "[ -f '$R/resources/motion_datasets/remote_only.pt' ]"
 check "nothing lands on the shared workspace's code" "[ ! -e '$R/resources/robot_rl' ]"
 
+# `data --wt SET` adds the set's data worktree's new files, never replacing one the shared copy already has
+md="$L/resources/motion_datasets/worktrees/t2"
+mkdir -p "$md/clips" && echo branch > "$md/clips/t2.pt" && echo branch > "$md/clips/walk.pt"
+dev data --wt t2 > "$T/out_dwt0" 2>&1; rc=$?
+check "a set whose file differs from the cluster's copy is refused, naming it" \
+    "[ $rc != 0 ] && grep -q 'clips/walk.pt' '$T/out_dwt0' && [ ! -e '$R/resources/motion_datasets/clips/t2.pt' ]"
+dev data --wt t2 --keep-existing > "$T/out_dwt" 2>&1; rc=$?
+check "--keep-existing adds the set's new files" "[ $rc = 0 ] && grep -qx branch '$R/resources/motion_datasets/clips/t2.pt'"
+check "and leaves a file already there as it was, saying so" \
+    "grep -qx pt '$R/resources/motion_datasets/clips/walk.pt' && grep -q 'walk.pt differs on the cluster' '$T/out_dwt'"
+check "its worktrees dir is not copied" "[ ! -e '$R/resources/motion_datasets/worktrees' ]"
+echo pq > "$md/clips/walk.pt"  # a same-size change, as a retrained policy of one architecture is
+dev data --wt t2 > "$T/out_dwt4" 2>&1; rc=$?
+check "a same-size changed file is refused too" "[ $rc != 0 ] && grep -q 'clips/walk.pt' '$T/out_dwt4'"
+rm "$md/clips/walk.pt"
+dev data --wt t2 > "$T/out_dwt3" 2>&1; rc=$?
+check "a set adding only new files needs no flag" "[ $rc = 0 ]"
+dev data --wt nope > "$T/out_dwt2" 2>&1; rc=$?
+check "a set with no data worktree is refused" "[ $rc != 0 ] && grep -q 'no data repo has worktrees/nope' '$T/out_dwt2'"
+
 # a partial tree takes its other repos from the newest default, never the shared checkout
 dev stage p1 hcrl_isaaclab=feat > "$T/out_p1" 2>&1
 pt="$(ls -d "$R"/trees/p1-* 2>/dev/null | head -1)"
