@@ -2272,13 +2272,12 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             code = local_code(source, args.wt)
             pythonpath, manifest = stage.sync_code(code, local_data(source, args.wt), args.root or "")
         for name, (src, sib) in siblings.items():  # a sibling repo, found through its variable (and PYTHONPATH)
-            if t.kind == "slurm":
-                sys.exit(f"[res] --with {name} ships to box cards only; SLURM runs do not support it yet")
             if t.kind == "local":
                 env[sib.env] = src
                 manifest.append(f"{name} {src} {_describe(src)} (in place, {sib.env})")
-            else:
-                env[sib.env], line = stage.snapshot(name, src, outputs=False, only=sib.dirs)
+            else:  # a SLURM snapshot sits on the cluster's scratch, which its container sees under artifacts/
+                snap, line = stage.snapshot(name, src, outputs=False, only=sib.dirs)
+                env[sib.env] = container_path(t, snap)
                 manifest.append(f"{line} ({', '.join(sib.dirs) + ' only, ' if sib.dirs else ''}{sib.env})")
             if sib.importable:
                 pythonpath.append(container_path(t, env[sib.env]))
