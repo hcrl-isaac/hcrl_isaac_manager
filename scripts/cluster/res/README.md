@@ -175,8 +175,10 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   does), then confirms it trains and watches it on. A run stopped with `pls run --stop`, finished, crashed on a live
   hold, launched before `--move` existed, or with `--no-resume` is left as it is; a run chain resumes at most 3 times.
   A replacement still queued after 6 h is noted once with its queue reason. Only a running watch resumes: after a
-  session restart, `pls run --watch --holder <you>` re-arms its runs' watches. `pls res events [--follow]` prints every
-  replacement hold and resume as JSON lines.
+  session restart, `pls run --watch --holder <you>` re-arms its runs' watches, including a cut run whose resume the
+  dead watch left unfinished (it rejoins the same replacement hold). A failed relaunch leaves its replacement held and
+  says how to drop it (`pls res drop --on <cluster> <job>`). `pls res events [--follow]` prints every replacement hold
+  and resume as JSON lines.
 - `pls run --move <lease> --to <same|lease:<id>|host:gpu> --holder <you>` moves a detached `train.py` run, e.g. off a
   node whose hold ends: it claims the target first, waits (`--wait`, 30 min) for a checkpoint newer than any on the
   run's W&B run, stops the run (keeping the lease when the card stays the same), relaunches it detached with the same

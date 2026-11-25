@@ -84,6 +84,15 @@ class ReplacementTest(StateTest):
         self.assertEqual(calls[0][calls[0].index("--time") + 1], "2-00:00:00")
         self.assertEqual(self.events()[0]["kind"], "hold_queued")
 
+    def test_the_job_id_is_cluster_devs_own_line_not_an_earlier_number(self) -> None:
+        banner = "Welcome to Horizon. Allocation balance: 1234567 SU, 20261125.\n"
+
+        def run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess:
+            return subprocess.CompletedProcess(cmd, 0, banner, "[cluster_dev] Submitted sentinel job 105901 (x).\n")
+
+        with mock.patch.object(resume.subprocess, "run", run), mock.patch("sys.stderr"):
+            self.assertEqual(resume.replacement(_stage().t, {"state": "TIMEOUT"}, "Kick"), "105901")
+
     def test_a_long_queue_is_noted_once(self) -> None:
         answers = iter(["PENDING|(None)|Resources"] * 3 + ["RUNNING|c102-007|None"])
         clock = iter([0, 1, 7 * 3600, 8 * 3600, 9 * 3600, 10 * 3600])
@@ -98,7 +107,9 @@ class ReplacementTest(StateTest):
 
 
 class AfterCutTest(StateTest):
-    def run_cut(self, resumes: str | None = None, confirm: str = "ok") -> tuple[ev.Stage | None, list[list[str]]]:
+    def run_cut(
+        self, resumes: str | None = None, confirm: str = "ok", wait: object = None
+    ) -> tuple[ev.Stage | None, list[list[str]]]:
         files = {"status": None, "stop": None, "pls_argv.json": json.dumps(ARGV), "resumes": resumes,
                  "log": "https://wandb.ai/e/p/runs/abc Learning iteration 1450/2000"}  # fmt: skip
         launched = []
@@ -117,7 +128,7 @@ class AfterCutTest(StateTest):
             ),
             mock.patch.object(resume.move, "wandb_checkpoints", lambda url: {1000: 1, 1400: 1}),
             mock.patch.object(resume, "replacement", lambda t, rec, holder: "105901"),
-            mock.patch.object(resume, "wait_running", lambda t, job, holder: "c102-007"),
+            mock.patch.object(resume, "wait_running", wait or (lambda t, job, holder: "c102-007")),
             mock.patch.object(resume.move, "pin_code", lambda st, tag: ("kick", [])),
             mock.patch.object(resume.move, "confirm", lambda st, past, deadline: confirm),
             mock.patch.object(resume, "_card", lambda stage_dir, holder: (POOL, "c102-007", 2, "105901", "GPU-z")),
@@ -154,6 +165,36 @@ class AfterCutTest(StateTest):
         self.assertEqual(launched, [])
         self.assertEqual(self.events()[0]["kind"], "resume_refused")
 
+    def test_a_replacement_that_ends_unused_is_forgotten_and_reported(self) -> None:
+        with resume._locked() as table:
+            table["holds"]["100"] = "105901"
+
+        def ended(t: ev.Target, job: str, holder: str) -> str:
+            raise SystemExit("[resume] replacement hold 105901 ended before it ran")
+
+        new, launched = self.run_cut(wait=ended)
+        self.assertEqual((new, launched), (None, []))
+        self.assertEqual(self.events()[0]["kind"], "resume_failed")
+        with resume._locked() as table:
+            self.assertEqual(table, {"holds": {}, "pending": {}}, "a re-armed watch queues a fresh hold")
+
+    def test_a_resume_is_pending_while_it_runs_and_cleared_after(self) -> None:
+        seen = []
+
+        def wait(t: ev.Target, job: str, holder: str) -> str:
+            with resume._locked() as table:
+                rows = dict(table["pending"])
+            seen.append((rows, resume.pending_stages("Kick", [POOL])))
+            return "c102-007"
+
+        self.run_cut(wait=wait)
+        [(rows, [(label, st)])] = seen
+        row = rows["/w/artifacts/res-eval/abc"]
+        self.assertEqual((label, st.dir), ("resume:100", "/w/artifacts/res-eval/abc"))
+        self.assertEqual((row["holder"], row["job"], row["gpu"], row["host"]), ("Kick", "100", 2, "c101-001"))
+        self.assertEqual(resume.pending_stages("Kick", [POOL]), [], "cleared once the resume ended")
+        self.assertEqual(resume.pending_stages("Latent", [POOL]), [])
+
     def test_a_relaunch_that_never_trains_is_reported_not_watched(self) -> None:
         new, _ = self.run_cut(confirm="timeout")
         self.assertIsNone(new)
@@ -178,6 +219,19 @@ class WatchTest(unittest.TestCase):
         ):
             rc = follow.watch(old, "e/p/abc", 2000, "lbl", holder="Kick")
         self.assertEqual((rc, watched), (0, [old.dir, "/w/new"]))
+
+    def test_a_rewatched_run_already_cut_is_resumed(self) -> None:
+        new = _stage(job="105901")
+        new.dir = "/w/new"
+        got = iter([None, ("e/p/xyz", 2000)])
+        with (
+            mock.patch.object(follow, "_watch_once", lambda *a: 0),
+            mock.patch.object(resume, "after_cut", lambda st, holder, label: new),
+            mock.patch.object(follow, "started", lambda st: next(got)),
+            mock.patch.object(follow, "REWATCH_STAGGER_S", 0),
+            mock.patch("sys.stderr"),
+        ):
+            self.assertEqual(follow.rewatch([("resume:100", _stage())], holder="Kick"), 0)
 
     def test_without_a_holder_or_off_slurm_a_dead_run_is_just_reported(self) -> None:
         with mock.patch.object(follow, "_watch_once", lambda *a: 1), mock.patch.object(resume, "after_cut") as cut:

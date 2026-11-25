@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -33,6 +34,7 @@ VERIFY_S = 2400.0  # a relaunch boots Kit and loads its checkpoint before its fi
 EVENTS = ls.STORE.parent / "events.jsonl"
 REPLACEMENTS = ls.STORE.parent / "replacements.json"
 NO_RESUME = "--no-resume"
+SUBMITTED = re.compile(r"Submitted sentinel job (\d+)")  # cluster_dev.sh's line for the hold it queued
 
 
 def event(**row: object) -> None:
@@ -44,13 +46,40 @@ def event(**row: object) -> None:
 
 @contextmanager
 def _locked() -> Iterator[dict]:
-    """The replacement holds (cut job id -> new job id), held under a file lock while open."""
+    """``holds`` (cut job id -> replacement job id) and ``pending`` (stage dir -> card), under a file lock."""
     REPLACEMENTS.parent.mkdir(parents=True, exist_ok=True)
     with (REPLACEMENTS.parent / "replacements.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         table = json.loads(REPLACEMENTS.read_text()) if REPLACEMENTS.is_file() else {}
+        table.setdefault("holds", {})
+        table.setdefault("pending", {})
         yield table
         REPLACEMENTS.write_text(json.dumps(table))
+
+
+def pending_stages(holder: str, pools: list) -> list[tuple[str, ev.Stage]]:
+    """``holder``'s cut runs whose resume a watch began and never ended, as (label, stage) for `pls run --watch`."""
+    with _locked() as table:
+        rows = [(d, r) for d, r in table["pending"].items() if r["holder"] == holder]
+    by_name = {p.name: p for p in pools}
+    out = []
+    for d, r in rows:
+        if r["pool"] in by_name:
+            stage = ev.Stage(ev.make_target(by_name[r["pool"]], r["host"], r["gpu"], r["job"], r["uuid"]))
+            stage.dir = d
+            out.append((f"resume:{r['job']}", stage))
+    return out
+
+
+def _pending(stage: ev.Stage, holder: str) -> None:
+    """Record the stage's unfinished resume for ``holder``, or clear it when ``holder`` is empty."""
+    t = stage.t
+    with _locked() as table:
+        if holder:
+            table["pending"][stage.dir] = {"holder": holder, "pool": t.pool, "host": t.host, "gpu": t.gpu,
+                                           "job": t.job, "uuid": t.uuid}  # fmt: skip
+        else:
+            table["pending"].pop(stage.dir, None)
 
 
 def _login(t: ev.Target, cmd: str, timeout: float = 60) -> str:
@@ -100,8 +129,8 @@ def verdict(stage_files: dict[str, str | None], hold_state: str) -> str:
 def replacement(t: ev.Target, rec: dict[str, str], holder: str) -> str:
     """The job id of the hold that replaces ``t.job``: queued here unless another cut run queued it first."""
     with _locked() as table:
-        if t.job in table:
-            return table[t.job]
+        if t.job in table["holds"]:
+            return table["holds"][t.job]
         args = ["start", "--no-stage"]
         if rec.get("partition"):
             args += ["--partition", rec["partition"]]
@@ -112,13 +141,19 @@ def replacement(t: ev.Target, rec: dict[str, str], holder: str) -> str:
         cmd[1] = str(Path(ev.local_workspace()) / "scripts" / "cluster" / "cluster_dev" / "cluster_dev.sh")
         out = subprocess.run(cmd, env=env, capture_output=True, text=True)
         sys.stderr.write(out.stderr)
-        found = [w for w in (out.stdout + out.stderr).replace(".", " ").split() if w.isdigit() and len(w) >= 5]
+        found = SUBMITTED.search(out.stdout + out.stderr)
         if out.returncode != 0 or not found:
             raise SystemExit(f"[resume] could not queue a hold to replace job {t.job} on {t.pool}")
-        table[t.job] = found[0]
-        event(kind="hold_queued", cut_job=t.job, new_job=found[0], cluster=t.pool, holder=holder, **rec)
-        print(f"[resume] queued hold {found[0]} on {t.pool} to replace job {t.job}", file=sys.stderr)
-        return found[0]
+        table["holds"][t.job] = found[1]
+        event(kind="hold_queued", cut_job=t.job, new_job=found[1], cluster=t.pool, holder=holder, **rec)
+        print(f"[resume] queued hold {found[1]} on {t.pool} to replace job {t.job}", file=sys.stderr)
+        return found[1]
+
+
+def forget(cut_job: str) -> None:
+    """Drop the cut job's replacement record, so the next resume of its runs queues a fresh hold."""
+    with _locked() as table:
+        table["holds"].pop(cut_job, None)
 
 
 def wait_running(t: ev.Target, job: str, holder: str, sleep: Callable = time.sleep) -> str:
@@ -171,8 +206,34 @@ def after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
         return None
     ckpt = max(have)
     print(f"[resume] {label}: hold {stage.t.job} ended {rec['state']} at checkpoint {ckpt}/{total}", file=sys.stderr)
+    _pending(stage, holder)  # a watch that dies before the resume ends leaves it for `pls run --watch` to pick up
+    try:
+        return _resume(stage, holder, label, rec, done, (opts, script, args), state, ckpt)
+    finally:
+        _pending(stage, "")
+
+
+def _resume(
+    stage: ev.Stage,
+    holder: str,
+    label: str,
+    rec: dict[str, str],
+    done: int,
+    launch: tuple[list[str], str, list[str]],
+    state: tuple[str, int, int],
+    ckpt: int,
+) -> ev.Stage | None:
+    opts, script, args = launch
+    url, _, total = state
     new_job = replacement(stage.t, rec, holder)
-    node = wait_running(stage.t, new_job, holder)
+    drop = f"pls res drop --on {stage.t.pool} {new_job}"
+    try:
+        node = wait_running(stage.t, new_job, holder)
+    except SystemExit as e:
+        forget(stage.t.job)
+        event(kind="resume_failed", label=label, holder=holder, cut_job=stage.t.job, new_job=new_job, why=str(e))
+        print(f"{e}; `pls run --watch --holder {holder}` on the run queues a fresh one", file=sys.stderr)
+        return None
     gpus = int(move.launch_value(opts, "--gpus") or 1)
     on = f"{node}:{new_job}" if gpus > 1 else f"{node}:{new_job}:{stage.t.gpu}"
     wt, made = move.pin_code(stage, f"resume-{stage.t.job}-{int(time.time())}")
@@ -187,9 +248,10 @@ def after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
         move.unpin(made)
     found = move.STARTED.findall(out.stderr)
     if out.returncode != 0 or not found:
-        event(kind="resume_failed", label=label, holder=holder, cut_job=stage.t.job, new_job=new_job, ckpt=ckpt)
-        print(f"[resume] {label}: the relaunch failed; by hand: {move.manual_steps('<lease>', holder, state)}",
-              file=sys.stderr)  # fmt: skip
+        event(kind="resume_failed", label=label, holder=holder, cut_job=stage.t.job, new_job=new_job, ckpt=ckpt,
+              drop=drop)  # fmt: skip
+        print(f"[resume] {label}: the relaunch failed; by hand: {move.manual_steps('<lease>', holder, state)}; hold"
+              f" {new_job} stays held for that (`{drop}` releases it)", file=sys.stderr)  # fmt: skip
         return None
     new = ev.Stage(ev.make_target(*_card(found[-1], holder)))
     new.dir = found[-1]

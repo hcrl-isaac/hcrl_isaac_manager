@@ -2599,13 +2599,18 @@ def main(argv: list[str] | None = None) -> None:
         pools = res.load_pools()
         with ls.locked_store() as leases:
             found = follow.detached_stages(list(leases), wa.holder, [x.removeprefix("lease:") for x in wa.watch])
-        if not found:
-            sys.exit(f"[res] no detached run on {'those leases' if wa.watch else 'any lease'} of {wa.holder}")
         stages = []
         for lease_id, d in found:
             stage = Stage(make_target(*_lease_card(lease_id, wa.holder, pools)))
             stage.dir = d
             stages.append((lease_id, stage))
+        if not wa.watch:  # cut runs whose resume a dead watch left unfinished, their leases gone with the hold
+            import resume
+
+            have = {st.dir for _, st in stages}
+            stages += [(k, st) for k, st in resume.pending_stages(wa.holder, pools) if st.dir not in have]
+        if not stages:
+            sys.exit(f"[res] no detached run on {'those leases' if wa.watch else 'any lease'} of {wa.holder}")
         print(f"[res] watching {len(stages)} detached run(s) of {wa.holder}", file=sys.stderr)
 
         def arm(stage: Stage, run: str) -> None:

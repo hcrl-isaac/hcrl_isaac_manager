@@ -173,7 +173,11 @@ def watch(stage: Stage, run: str, target: int, label: str, launch: Callable = su
 
     A SLURM run its hold's end cut short (walltime, node failure) is resumed on a replacement hold and watched on.
     """
-    rc = _watch_once(stage, run, target, label, launch)
+    return resume_cut(stage, _watch_once(stage, run, target, label, launch), label, launch, holder)
+
+
+def resume_cut(stage: Stage, rc: int, label: str, launch: Callable, holder: str) -> int:
+    """Resume a SLURM run that ended with ``rc`` if its hold's end cut it, and watch the resumed run on."""
     while rc != 0 and holder and stage.t.kind == "slurm":
         import resume
 
@@ -254,7 +258,7 @@ def rewatch(
         got = started(stage)  # an ended run returns at once; a booting one gets the launch's own wait
         if got is None:
             print(f"[res] {label}: no live training run there (ended, or never trained); not watched", file=sys.stderr)
-            codes[label] = 1
+            codes[label] = resume_cut(stage, 1, label, launch, holder)  # a run its hold's end cut while unwatched
             return
         run, target = got
         print(f"[res] {label}: watching toward iteration {target}" + (f" (W&B {run})" if run else ""), file=sys.stderr)
