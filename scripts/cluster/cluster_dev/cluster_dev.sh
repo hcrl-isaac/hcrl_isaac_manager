@@ -207,15 +207,10 @@ cmd_start() {  # start [--no-stage] [--partition P] [--time T] : hold a node (th
         esac
     done
     ensure_master
-    # 1) stage the workspace as `default` first, so the node runs the latest on attach.
-    if [ -z "$stage" ]; then
-        log "Skipping the stage: exec runs the newest staged \`default\` (or --tree); stage one with 'pls stage --on ${CLUSTER}'."
-    else
-        ( cmd_stage default ) || err "staging failed (continuing; re-run './cluster_dev.sh stage')."
-    fi
     push_env_cluster || err "could not push ${ENV_FILE} (exec falls back to scripts/cluster/.env.cluster)."
-    # 2) render + submit the sentinel sbatch from the template. Only $SBATCH_DIRECTIVES is substituted;
-    # runtime refs ($SLURM_JOB_ID, $HOME, $(hostname)) are left for the job to evaluate on the node.
+    # 1) render + submit the sentinel sbatch from the template, before any slow step, so its job id is known at once.
+    # Only $SBATCH_DIRECTIVES is substituted; runtime refs ($SLURM_JOB_ID, $HOME, $(hostname)) are left for the job to
+    # evaluate on the node.
     local sbatch_remote=".cluster_dev_sentinel.sbatch"
     export SBATCH_DIRECTIVES
     envsubst '$SBATCH_DIRECTIVES' < "${SCRIPT_DIR}/sentinel.sbatch" | on_login "cat > ${sbatch_remote}"
@@ -230,9 +225,16 @@ cmd_start() {  # start [--no-stage] [--partition P] [--time T] : hold a node (th
     state_set JOBID "$jobid"; state_set JOB_STATE "SUBMITTED"; state_set NODE ""
     state_set SUBMIT_TS "$(date -u +%FT%TZ)"
     log "Submitted sentinel job ${jobid} (partition=${DEV_PARTITION:-default}, gpus=${DEV_GPUS:-default}, time=${DEV_TIME:-default})."
-    # 3) background watcher tracks the (possibly long) queue wait.
+    # 2) background watcher tracks the (possibly long) queue wait.
     cmd_watch_start "$jobid"
     log "Watcher started. It may queue for hours -- check './cluster_dev.sh status' anytime."
+    # 3) stage the workspace as `default` while the job queues, so the node runs the latest on attach.
+    if [ -z "$stage" ]; then
+        log "Skipping the stage: exec runs the newest staged \`default\` (or --tree); stage one with 'pls stage --on ${CLUSTER}'."
+    else
+        log "Staging the workspace as \`default\` while job ${jobid} queues (minutes; the job is already submitted)."
+        ( cmd_stage default ) || err "staging failed; job ${jobid} stays queued (re-run 'pls stage --on ${CLUSTER}')."
+    fi
     log "When NODE is set + JOB_STATE=RUNNING, use './cluster_dev.sh attach' or 'exec'."
 }
 

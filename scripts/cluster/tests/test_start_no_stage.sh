@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `develop start` stages the workspace as the tree `default` before submitting the sentinel; --no-stage skips it.
+# `develop start` submits the sentinel, then stages the workspace as the tree `default`; --no-stage skips the stage.
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 T="$(mktemp -d)"
@@ -59,6 +59,8 @@ check "a --partition with no value is refused" "[ $? -ne 0 ] && grep -q 'needs a
 
 dev start > "$T/out2" 2>&1
 stop_watcher
+check "the job id is printed before the stage starts" \
+    "awk '/Submitted sentinel job 4242/ { s = NR } /Staging the workspace/ { t = NR } END { exit !(s && t && s < t) }' '$T/out2'"
 check "plain start stages the workspace as default" "grep -qx edited \"\$(ls -d '$T'/remote/trees/default-* | head -1)/resources/hcrl_isaaclab/a.py\""
 check "and nothing is mirrored onto the shared workspace" "[ ! -e '$T/remote/resources/hcrl_isaaclab' ]"
 check "exec then runs that tree" "dev __resolve_tree default 2>/dev/null | grep -q '/trees/default-[0-9a-f]\{10\}$'"
