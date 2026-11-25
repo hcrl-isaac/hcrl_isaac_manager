@@ -174,5 +174,37 @@ def _rc(code: int) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess([], code)
 
 
+class RewatchTest(unittest.TestCase):
+    def test_a_holders_detached_runs_once_each_oldest_first(self) -> None:
+        def lease(i: str, holder: str, created: float, stages: list[str]) -> SimpleNamespace:
+            return SimpleNamespace(
+                id=i, holder=holder, created=created, stages=stages, stage=stages[-1] if stages else ""
+            )
+
+        leases = [
+            lease("b", "me", 2, ["/s/run2"]),
+            lease("a", "me", 1, ["/s/run1"]),
+            lease("a2", "me", 1.5, ["/s/run1"]),  # another card of the same --gpus run
+            lease("c", "other", 0, ["/s/theirs"]),
+            lease("d", "me", 3, []),
+        ]
+        self.assertEqual(follow.detached_stages(leases, "me", []), [("a", "/s/run1"), ("b", "/s/run2")])
+        self.assertEqual(follow.detached_stages(leases, "me", ["b"]), [("b", "/s/run2")])
+
+    def test_every_live_run_is_watched_from_one_call(self) -> None:
+        live, ended = _stage(), _stage()
+        got = {live.dir: ("e/p/run1", 4000), ended.dir: None}
+        launched = []
+        with (
+            mock.patch.object(follow, "REWATCH_STAGGER_S", 0),
+            mock.patch.object(follow, "started", lambda st, deadline_s=0: got[st.dir]),
+            mock.patch("sys.stderr"),
+        ):
+            rc = follow.rewatch([("L1", live), ("L2", ended)], launch=lambda cmd, env: launched.append(cmd) or _rc(0))
+        self.assertEqual(len(launched), 1, "an ended run is reported, not watched")
+        self.assertIn("e/p/run1", launched[0])
+        self.assertEqual(rc, 1, "the ended run makes the call non-zero")
+
+
 if __name__ == "__main__":
     unittest.main()

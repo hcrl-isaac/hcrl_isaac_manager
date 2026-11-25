@@ -283,7 +283,7 @@ def _batch(on: str, wt: str, tree: str, run: list[str]) -> None:
 
 
 def main(argv: list[str]) -> None:
-    if {"--stop", "--move"} & set(argv[: argv.index("--")] if "--" in argv else argv):  # a detached run: no script
+    if {"--stop", "--move", "--watch"} & set(argv[: argv.index("--")] if "--" in argv else argv):  # no script
         handoff([*CARD_CMD, *argv])
         return
     opts, run = _split(argv)
