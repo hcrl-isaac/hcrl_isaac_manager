@@ -413,6 +413,15 @@ class SlurmTest(unittest.TestCase):
             ev.slurm_profile(label, "3566414", pools)
         self.assertIn("Invalid job id", str(cm.exception.code))
 
+    def test_a_with_repo_joins_the_containers_pythonpath_after_its_env(self) -> None:
+        t = ev.Target("horizon", "slurm", "c125-013", 0, "u@login", "/w", "/w/artifacts", job="71017", uuid="GPU-a")
+        repo = "/workspace/artifacts/res-eval/code/fb-57f5"
+        runner = ev.slurm_runner_script(t, "/x", f"{repo}/scripts/a.py", [], "/c", pythonpath=[repo])
+        line = f'export PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}"{repo}'
+        self.assertIn(line, runner)
+        self.assertLess(runner.index("source /x/env"), runner.index(line), "after the env, so it adds to it")
+        self.assertNotIn("PYTHONPATH", ev.slurm_runner_script(t, "/x", "/s.py", [], "/c"))
+
     def test_a_multi_gpu_runner_pins_every_card_and_launches_one_rank_per_card(self) -> None:
         t = ev.Target("horizon", "slurm", "c125-013", 0, "u@login", "/w", "/w/artifacts", job="71017", uuid="GPU-a")
         t.extra_uuids = ("GPU-b", "GPU-c", "GPU-d")
