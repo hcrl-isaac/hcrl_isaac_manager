@@ -30,10 +30,13 @@ class RenderCheckTest(unittest.TestCase):
         self.assertFalse(self.refused("video_recorder.py", [], LARG, "NVIDIA A100 80GB PCIe"), "A100s film here")
         self.assertFalse(self.refused("train.py", [], SLURM, "NVIDIA GB200"))
 
-    def test_a_viser_recording_runs_anywhere(self) -> None:
-        for args in (["--video_format", "viser"], ["--video_format=viser"]):
-            with self.subTest(args=args):
-                self.assertFalse(self.refused("video_logger.py", args, SLURM, "NVIDIA GB200"))
+    def test_a_viser_recording_or_a_no_video_score_runs_anywhere(self) -> None:
+        for fmt in ("viser", "none"):
+            for args in (["--mode", "async", "--video_format", fmt], [f"--video_format={fmt}"]):
+                with self.subTest(args=args):
+                    self.assertFalse(self.refused("video_recorder.py", args, SLURM, "NVIDIA GB200"))
+        # a format word elsewhere in the arguments is no format choice
+        self.assertTrue(self.refused("video_recorder.py", ["--note", "none"], SLURM, "NVIDIA GB200"))
 
     def test_the_pools_render_setting_decides_over_the_model(self) -> None:
         self.assertTrue(self.refused("video_recorder.py", [], Pool("x", "ssh", {"render": False}), "NVIDIA A40"))

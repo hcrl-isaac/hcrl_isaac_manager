@@ -275,6 +275,7 @@ def fill_device(script_args: list[str], t: Target, launcher: bool = False) -> li
 
 
 RTX_RECORDERS = ("video_recorder.py", "video_logger.py")
+UNRENDERED_FORMATS = ("viser", "none")  # a state recording, or a score with no clip: neither films the viewport
 # cards whose Kit RTX viewport films an empty scene ("RTX drew N frames without the scene"); A100s do render here
 NO_RTX_MODELS = ("GB200",)
 
@@ -283,20 +284,20 @@ def refuse_unrenderable(script: str, script_args: list[str], pool: Pool, model: 
     """Exit before anything is staged when an RTX recording pass would run on a card Kit cannot film on.
 
     A pool's ``render`` setting decides when it is set; otherwise the card's model does (``NO_RTX_MODELS``). A
-    ``--video_format viser`` pass records states, not frames, and runs anywhere.
+    ``--video_format viser`` or ``none`` pass films no frames and runs anywhere.
     """
     if os.path.basename(script) not in RTX_RECORDERS:
         return
-    if ["--video_format", "viser"] in map(
-        list, itertools.pairwise(script_args)
-    ) or "--video_format=viser" in script_args:
+    pairs = {f"{a}={b}" for a, b in itertools.pairwise(script_args) if a == "--video_format"}
+    if pairs.union(script_args) & {f"--video_format={f}" for f in UNRENDERED_FORMATS}:
         return
     render = pool.settings.get("render")
     if render is False or (render is not True and any(m in model for m in NO_RTX_MODELS)):
         sys.exit(
             f"[res] {os.path.basename(script)} films Kit's RTX viewport, which draws an empty scene on"
             f" {model or pool.name}, so its evals and videos would never upload: run it on a pool with"
-            " render = true (`pls res pools`), or record states with --video_format viser"
+            " render = true (`pls res pools`), record states with --video_format viser, or score with no video"
+            " with --video_format none"
         )
 
 
