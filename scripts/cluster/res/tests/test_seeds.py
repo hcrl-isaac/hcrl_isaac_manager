@@ -50,6 +50,20 @@ class PlanTest(unittest.TestCase):
                 seeds.plan(argv)
 
 
+class DispatchTest(unittest.TestCase):
+    def test_either_spelling_of_seeds_reaches_seeds_main(self) -> None:
+        import evaluate as ev
+
+        for flag in (["--seeds", "1,2"], ["--seeds=1,2"]):
+            argv = ["--on", "a:0,b:1", *flag, "--detach", SCRIPT, "--", "--task", "T"]
+            with self.subTest(flag=flag), mock.patch.object(seeds, "main", return_value=0) as m:
+                with self.assertRaises(SystemExit):
+                    ev.main(argv)
+                m.assert_called_once_with(argv)
+        self.assertEqual([s for _, s, _ in seeds.plan(["--on", "a:0,b:1", "--seeds=1,2", "--detach", SCRIPT, "--"])],
+                         [1, 2])  # fmt: skip
+
+
 class MainTest(unittest.TestCase):
     def test_every_run_launches_at_once_and_streams_with_its_seed(self) -> None:
         launched = []

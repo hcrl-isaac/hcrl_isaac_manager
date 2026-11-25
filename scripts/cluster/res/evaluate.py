@@ -2585,7 +2585,7 @@ def main(argv: list[str] | None = None) -> None:
 
     argv = sys.argv[1:] if argv is None else argv
     head = argv[: argv.index("--")] if "--" in argv else argv
-    if "--seeds" in head:  # `pls run --on A,B --seeds 1,2 --detach -- <script>`: one detached run per (card, seed)
+    if any(a == "--seeds" or a.startswith("--seeds=") for a in head):  # one detached run per (card, seed)
         import seeds
 
         sys.exit(seeds.main(argv))

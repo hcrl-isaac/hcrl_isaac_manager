@@ -97,7 +97,8 @@ def main(argv: list[str], popen: Callable = subprocess.Popen) -> int:
         th.start()
     for th in threads:
         th.join()
+    done = "launched" if "--no-watch" in argv[: argv.index("--")] else "finished"  # a watched launch ends with its run
     for where, seed, _ in runs:
         rc = codes.get(seed, 1)
-        print(f"[seeds] seed {seed} ({where}): {'finished' if rc == 0 else f'exit {rc}'}", file=sys.stderr)
+        print(f"[seeds] seed {seed} ({where}): {done if rc == 0 else f'exit {rc}'}", file=sys.stderr)
     return max(codes.values(), default=1)
