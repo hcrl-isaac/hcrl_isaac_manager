@@ -104,6 +104,28 @@ class SshSlotTest(unittest.TestCase):
         self.assertEqual(int((self.d / "max").read_text()), 8, "4 slots on each host's master, all at once")
         self.assertLess(time.monotonic() - t0, 3, "neither host waited on the other's slots")
 
+    def test_a_master_ssh_leaves_running_does_not_keep_its_slot(self) -> None:
+        # a ControlPersist master outlives the call; one that kept the shim's fd 9 would hold the slot for its life
+        # (OpenSSH closes fds above 2 itself; the shim must not rely on it)
+        fake = self.d / "bin" / "ssh"
+        fake.write_text(
+            "#!/usr/bin/env bash\n"
+            # it keeps every inherited file (a lock among them) and drops the pipes, as a detached daemon does
+            "( for f in /proc/self/fd/*; do n=${f##*/}; [ $n -gt 2 ] && [[ $(readlink $f) == pipe:* ]]"
+            ' && eval "exec $n>&-"; done\n'
+            f"  exec sleep 30 ) </dev/null >/dev/null 2>&1 &\necho $! > {self.d}/daemon.pid\nexit 0\n"
+        )
+        fake.chmod(0o755)
+        self.addCleanup(lambda: subprocess.run(["kill", (self.d / "daemon.pid").read_text().strip()], check=False))
+        t0 = time.monotonic()
+        self.assertEqual(self.ssh("-o", "ControlPath=/x/%C", "-o", "ControlPersist=48h", "u@h", "true").returncode, 0)
+        self.assertLess(time.monotonic() - t0, 10, "the call returns while the master lives on")
+        slots = sorted((self.d / ".ssh" / "cm" / "slots").glob("*"))
+        self.assertTrue(slots, "the call took a slot")
+        for slot in slots:
+            free = subprocess.run(["flock", "-n", str(slot), "true"], check=False)
+            self.assertEqual(free.returncode, 0, f"{slot.name} still held by the master the call left")
+
 
 if __name__ == "__main__":
     unittest.main()

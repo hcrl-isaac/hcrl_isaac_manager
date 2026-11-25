@@ -38,9 +38,9 @@ deadline=$(( $(date +%s) + SLOT_WAIT_S ))
 got=""
 while [ -z "$got" ] && [ "$(date +%s)" -lt "$deadline" ]; do
     for i in $(seq 0 $((SLOTS - 1))); do
-        exec {fd}>>"$dir/$key.$i"
-        if flock -n "$fd"; then got=$i; break; fi
-        exec {fd}>&-
+        exec 9>>"$dir/$key.$i"  # the lock is this shell's fd 9; nothing it starts keeps it
+        if flock -n 9; then got=$i; break; fi
+        exec 9>&-
     done
     [ -z "$got" ] && sleep "0.$(( RANDOM % 9 + 1 ))"
 done
@@ -49,7 +49,8 @@ err=$(mktemp "${TMPDIR:-/tmp}/ssh_slot.XXXXXX")
 trap 'rm -f "$err"' EXIT
 delay=1
 for attempt in $(seq 1 $RETRIES); do
-    ssh "$@" 2> >(tee "$err" >&2)
+    # a ControlPersist master ssh daemonizes would otherwise hold the slot for its whole life
+    ssh "$@" 9>&- 2> >(exec tee "$err" >&2 9>&-)
     rc=$?
     [ -n "${!:-}" ] && wait "$!" 2>/dev/null  # the tee, so $err is complete
     # a refused session never started, so its stdin was not read and the call can be made again
