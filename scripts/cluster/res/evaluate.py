@@ -743,6 +743,8 @@ def runner_script(
     where = t.where if t.cores else f"{t.where} ({t.pin})"
     return f"""#!/usr/bin/env bash
 set -u
+# the run's exit code once it ends, as the SLURM runner leaves it: what a detached run's watch ends on
+trap 'echo $? > {q(stage + "/status")}' EXIT
 exec > >(tee -a {q(stage + "/log")}) 2>&1
 cd {q(t.workspace)} || {{ echo "[res] no workspace {t.workspace} on {t.host}"; exit 97; }}
 set -a; source {q(stage + "/env")}; set +a
