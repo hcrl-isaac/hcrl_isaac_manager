@@ -101,6 +101,29 @@ class PinTest(unittest.TestCase):
         move.unpin(made)
         self.assertFalse(pinned.exists())
 
+    def test_a_wt_run_staged_into_a_tree_is_pinned_at_its_commits_not_left_on_the_default_tree(self) -> None:
+        refs = {"pls_refs": {"value": {"repos": {"ssti_tasks": {"commit": "abc", "dirty": 0}},
+                                       "tree": "res-eval-516913856d", "wt": "bl-fz-lift"}}}  # fmt: skip
+        files = {"wandb_config.yaml": json.dumps(refs),
+                 "pls_argv.json": json.dumps(["--wt", "bl-fz-lift", "--on", "horizon", "train.py", "--", "--task", "T"])}  # fmt: skip
+        tried = []
+        with (
+            mock.patch.object(move, "read_stage", lambda st, rel: files.get(rel)),
+            mock.patch.object(move.ev, "local_workspace", lambda: "/m"),
+            mock.patch.object(move.ev, "local_code", lambda ws, wt: {"ssti_tasks": "/m/resources/ssti_tasks"}),
+            mock.patch.object(move.subprocess, "run", lambda cmd, **kw: tried.append(cmd) or mock.Mock(returncode=0)),
+        ):
+            wt, _ = move.pin_code(None, "move-t")
+        self.assertEqual(wt, "move-t", "a --wt run relaunches on worktrees at its recorded commits")
+        self.assertEqual(tried[0][-1], "abc")
+
+    def test_only_a_tree_launch_reuses_its_tree(self) -> None:
+        refs = {"pls_refs": {"value": {"repos": {"ssti_tasks": {"commit": "abc", "dirty": 0}}, "tree": "t1", "wt": ""}}}
+        files = {"wandb_config.yaml": json.dumps(refs),
+                 "pls_argv.json": json.dumps(["--tree", "t1", "--on", "horizon", "train.py", "--", "--task", "T"])}  # fmt: skip
+        with mock.patch.object(move, "read_stage", lambda st, rel: files.get(rel)):
+            self.assertEqual(move.pin_code(None, "move-t"), ("", []))
+
     def test_a_run_with_uncommitted_changes_cannot_be_pinned(self) -> None:
         refs = {"pls_refs": {"value": {"repos": {"ssti_tasks": {"commit": "abc", "dirty": 2}}, "tree": "", "wt": ""}}}
         with (
@@ -323,6 +346,24 @@ class MoveTest(unittest.TestCase):
         with mock.patch.object(move, "wait_checkpoint", lambda url, after, dl: None), self.assertRaises(SystemExit):
             move.cmd_move("old", "s", "same", 60, 60, [])
         self.assertEqual((self.stops, self.launches), ([], []))
+
+
+class DropEndedTest(unittest.TestCase):
+    def test_a_lease_that_ran_an_earlier_run_keeps_only_its_live_one(self) -> None:
+        import tempfile
+
+        t = move.ev.Target("horizon", "slurm", "c1", 2, "u@login", "/w", "/s", job="5", uuid="g")
+        ended = {"/s/res-eval/teacher"}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(move.ls, "STORE", Path(tmp) / "leases.json"):
+            with move.ls.locked_store() as leases:
+                leases.append(move.ls.Lease("a1", "k", "c1:2", "horizon", "Baseline", stage="/s/res-eval/student",
+                                            stages=["/s/res-eval/teacher", "/s/res-eval/student"]))  # fmt: skip
+            sh = lambda st, cmd: 0 if any(d in cmd for d in ended) else 1  # noqa: E731
+            with mock.patch.object(move.ev.Stage, "sh", sh), mock.patch("sys.stderr"):
+                move.drop_ended("a1", t)
+            with move.ls.locked_store() as leases:
+                [x] = leases
+        self.assertEqual((x.stages, x.stage), (["/s/res-eval/student"], "/s/res-eval/student"))
 
 
 if __name__ == "__main__":
