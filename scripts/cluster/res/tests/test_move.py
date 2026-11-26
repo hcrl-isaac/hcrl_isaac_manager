@@ -101,6 +101,29 @@ class PinTest(unittest.TestCase):
         move.unpin(made)
         self.assertFalse(pinned.exists())
 
+    def test_a_wt_run_staged_into_a_tree_is_pinned_at_its_commits_not_left_on_the_default_tree(self) -> None:
+        refs = {"pls_refs": {"value": {"repos": {"ssti_tasks": {"commit": "abc", "dirty": 0}},
+                                       "tree": "res-eval-516913856d", "wt": "bl-fz-lift"}}}  # fmt: skip
+        files = {"wandb_config.yaml": json.dumps(refs),
+                 "pls_argv.json": json.dumps(["--wt", "bl-fz-lift", "--on", "horizon", "train.py", "--", "--task", "T"])}  # fmt: skip
+        tried = []
+        with (
+            mock.patch.object(move, "read_stage", lambda st, rel: files.get(rel)),
+            mock.patch.object(move.ev, "local_workspace", lambda: "/m"),
+            mock.patch.object(move.ev, "local_code", lambda ws, wt: {"ssti_tasks": "/m/resources/ssti_tasks"}),
+            mock.patch.object(move.subprocess, "run", lambda cmd, **kw: tried.append(cmd) or mock.Mock(returncode=0)),
+        ):
+            wt, _ = move.pin_code(None, "move-t")
+        self.assertEqual(wt, "move-t", "a --wt run relaunches on worktrees at its recorded commits")
+        self.assertEqual(tried[0][-1], "abc")
+
+    def test_only_a_tree_launch_reuses_its_tree(self) -> None:
+        refs = {"pls_refs": {"value": {"repos": {"ssti_tasks": {"commit": "abc", "dirty": 0}}, "tree": "t1", "wt": ""}}}
+        files = {"wandb_config.yaml": json.dumps(refs),
+                 "pls_argv.json": json.dumps(["--tree", "t1", "--on", "horizon", "train.py", "--", "--task", "T"])}  # fmt: skip
+        with mock.patch.object(move, "read_stage", lambda st, rel: files.get(rel)):
+            self.assertEqual(move.pin_code(None, "move-t"), ("", []))
+
     def test_a_run_with_uncommitted_changes_cannot_be_pinned(self) -> None:
         refs = {"pls_refs": {"value": {"repos": {"ssti_tasks": {"commit": "abc", "dirty": 2}}, "tree": "", "wt": ""}}}
         with (

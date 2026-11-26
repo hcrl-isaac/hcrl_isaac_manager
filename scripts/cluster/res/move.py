@@ -123,8 +123,14 @@ def pin_code(stage: ev.Stage, tag: str) -> tuple[str, list[tuple[str, str]]]:
     if raw is None:
         sys.exit("[move] the run recorded no code refs (wandb_config.yaml), so its code cannot be rebuilt")
     refs = json.loads(raw)["pls_refs"]["value"]
-    if refs.get("tree"):
+    # only a --tree launch reuses its tree (the relaunch keeps --tree); a --wt launch is staged into a tree too, so a
+    # recorded tree name alone would relaunch on the default tree, not the run's own code
+    launch = json.loads(read_stage(stage, "pls_argv.json") or "[]")
+    head = launch[: launch.index("--")] if "--" in launch else launch
+    if any(a == "--tree" or a.startswith("--tree=") for a in head):
         return "", []
+    if not refs.get("repos"):
+        sys.exit("[move] the run recorded no code commits (pls_refs.repos), so its code cannot be rebuilt")
     workspace = ev.local_workspace()
     code = ev.local_code(workspace, refs.get("wt") or "")
     made: list[tuple[str, str]] = []
