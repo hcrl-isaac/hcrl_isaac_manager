@@ -1910,8 +1910,14 @@ def _repo_script(spec: str, wt: str, siblings: dict[str, tuple[str, Sibling]] | 
     return repo, rel
 
 
-def _record_stage(lease_id: str, stage_dir: str) -> None:
-    """Note the detached run's stage on its lease, beside any earlier ones, so `pls run --stop <lease>` finds them all."""
+def _record_stage(lease_id: str, stage_dir: str, note: str = "") -> None:
+    """Note the detached run's stage on its lease, beside any earlier ones, so `pls run --stop <lease>` finds them all.
+
+    Args:
+        lease_id: The lease the run holds ("" records nothing).
+        stage_dir: The run's stage dir.
+        note: The run's description, which replaces the lease's note so status names the run now on the card.
+    """
     if not lease_id:
         return
     with ls.locked_store() as leases:
@@ -1920,6 +1926,17 @@ def _record_stage(lease_id: str, stage_dir: str) -> None:
                 lease.stage = stage_dir
                 if stage_dir not in lease.stages:
                     lease.stages.append(stage_dir)
+                if note:
+                    lease.note = note
+
+
+def launch_note(note: str, script: str, run_args: list[str]) -> str:
+    """What a detached launch tells status it is: its --note, else the script and its --run_name."""
+    if note:
+        return note
+    name = next((b for a, b in itertools.pairwise(run_args) if a == "--run_name"), "")
+    name = name or next((a.split("=", 1)[1] for a in run_args if a.startswith("--run_name=")), "")
+    return f"{os.path.basename(script)} {name}".strip()
 
 
 def _print_detached(stage: Stage, lease_id: str, holder: str) -> None:
@@ -2419,8 +2436,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             if slot is not None:  # submitted: its watch must not keep the next launch waiting
                 slot.release()
             held = taken.id if taken is not None else args.lease or ""
+            note = launch_note(args.note, local_file, run_args)
             for lease_id in (held, *(x.id for x in extra)):  # every card's lease names the run's stage
-                _record_stage(lease_id, stage.dir)
+                _record_stage(lease_id, stage.dir, note)
             _print_detached(stage, held, args.holder)
             rc = 0
             if not args.cmd and os.path.basename(script) == "train.py" and not getattr(args, "no_watch", False):
