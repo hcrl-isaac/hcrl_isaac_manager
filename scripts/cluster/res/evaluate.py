@@ -259,6 +259,32 @@ def pool_timeout(pool: Pool, timeout: float) -> float:
     return timeout or cap
 
 
+def resolve_root(t: Target, root: str) -> str:
+    """The ``--root`` install on an ssh box: a bare name sits beside the box's workspace; refused if it has no venv.
+
+    Args:
+        t: The ssh target.
+        root: ``--root`` as given: an absolute path, or a name such as ``isaac3-v300``.
+
+    Returns:
+        The root's absolute path on the box.
+    """
+    path = root if root.startswith("/") else f"{os.path.dirname(t.workspace.rstrip('/'))}/{root}"
+    try:
+        ok = subprocess.run(
+            [SSH, *t.ssh_opts, t.ssh, f"[ -x {shlex.quote(path)}/venv/bin/python ]"], capture_output=True, timeout=60
+        ).returncode
+    except subprocess.TimeoutExpired:
+        ok = 255
+    if ok == 255:
+        sys.exit(f"[res] could not reach {t.host} to check --root {path}: nothing staged")
+    if ok != 0:
+        sys.exit(
+            f"[res] --root {root}: {t.host} has no {path}/venv/bin/python (ls {os.path.dirname(path)} lists roots)"
+        )
+    return path
+
+
 def check_free_disk(t: Target, pool: Pool) -> None:
     """Refuse to stage when the filesystem holding the target's scratch dir has less free than ``min_free_disk_gb``."""
     need = pool.settings.get("min_free_disk_gb")
@@ -2289,6 +2315,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if t.kind != "slurm":  # the pool's guardrails, before anything is staged
             args.timeout = pool_timeout(pool, args.timeout)
             check_free_disk(t, pool)
+        if t.kind == "ssh" and args.root:
+            args.root = resolve_root(t, args.root)
         staging = _LeaseHeartbeat(taken.id if taken is not None else args.lease or "", *(x.id for x in extra)).start()
         stage = Stage(t)
         stage.make()

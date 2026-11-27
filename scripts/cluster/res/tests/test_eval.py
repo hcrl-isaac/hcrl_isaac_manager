@@ -1924,5 +1924,33 @@ class OwnLeaseTest(unittest.TestCase):
         self.assertEqual(ev.own_lease("horizon", "Latent"), "")
 
 
+class ResolveRootTest(unittest.TestCase):
+    """`--root <name>` on an ssh box is the install beside the box's workspace; a missing one is refused by path."""
+
+    def setUp(self) -> None:
+        self.t = ev.Target("larg", "ssh", "pepi", 0, ssh="u@pepi", workspace="/var/local/u/hcrl_isaac_manager")
+        self.probed: list[str] = []
+
+    def probe(self, rc: int) -> mock._patch:
+        def run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess:
+            self.probed.append(cmd[-1])
+            return subprocess.CompletedProcess(cmd, rc)
+
+        return mock.patch.object(ev.subprocess, "run", run)
+
+    def test_a_bare_name_sits_beside_the_workspace_and_a_path_stays_as_given(self) -> None:
+        with self.probe(0):
+            self.assertEqual(ev.resolve_root(self.t, "isaac3-v300"), "/var/local/u/isaac3-v300")
+            self.assertEqual(ev.resolve_root(self.t, "/opt/isaac3"), "/opt/isaac3")
+        self.assertEqual(
+            self.probed, ["[ -x /var/local/u/isaac3-v300/venv/bin/python ]", "[ -x /opt/isaac3/venv/bin/python ]"]
+        )
+
+    def test_a_root_without_a_venv_is_refused_naming_the_path_tried(self) -> None:
+        with self.probe(1), self.assertRaises(SystemExit) as cm:
+            ev.resolve_root(self.t, "isaac3")
+        self.assertIn("/var/local/u/isaac3/venv/bin/python", str(cm.exception.code))
+
+
 if __name__ == "__main__":
     unittest.main()
