@@ -419,6 +419,32 @@ def _activity(lease: Lease, card: Card) -> bool | None:
     return card.state == "busy" or (card.state == "held" and card.util >= HELD_UTIL)
 
 
+def keep_cut_runs(released: list[tuple[Lease, str]]) -> None:
+    """Hand released SLURM leases' detached runs to the resume table, so `pls run --watch` still resumes a cut one.
+
+    Args:
+        released: The released leases with the reason for each, as `reconcile` returns them.
+    """
+    rows = {}
+    for lease, _ in released:
+        host, _, gpu = lease.card.split(" ")[0].partition(":")
+        profile = lease.report.partition("(")[2].rstrip(")").split(",")[0].strip()
+        if not lease.job or not gpu.isdigit() or not profile:
+            continue
+        card = {"holder": lease.holder, "pool": profile, "host": host, "gpu": int(gpu), "job": lease.job,
+                "uuid": lease.key if ":" not in lease.key else ""}  # fmt: skip
+        rows.update({d: card for d in dict.fromkeys([*lease.stages, lease.stage]) if d})
+    if not rows:
+        return
+    table_path = STORE.parent / "replacements.json"  # resume.py's table, under its lock
+    with (STORE.parent / "replacements.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        table = json.loads(table_path.read_text()) if table_path.is_file() else {}
+        for d, card in rows.items():
+            table.setdefault("pending", {}).setdefault(d, card)
+        table_path.write_text(json.dumps(table))
+
+
 def reconcile(
     leases: list[Lease],
     reports: list[Report],

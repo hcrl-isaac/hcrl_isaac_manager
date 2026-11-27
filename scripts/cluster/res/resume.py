@@ -183,6 +183,13 @@ def chain_count(stage: ev.Stage) -> int:
 
 def after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
     """Resume ``stage``'s run if its hold's end cut it; returns the resumed run's stage, else None (said why)."""
+    try:
+        return _after_cut(stage, holder, label)
+    finally:
+        _pending(stage, "")  # decided: a watch that dies mid-resume never gets here, so its row stays
+
+
+def _after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
     rec = hold_end(stage.t)
     files = {name: move.read_stage(stage, name) for name in ("status", "stop", "pls_argv.json")}
     why = verdict(files, rec.get("state", ""))
@@ -207,10 +214,7 @@ def after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
     ckpt = max(have)
     print(f"[resume] {label}: hold {stage.t.job} ended {rec['state']} at checkpoint {ckpt}/{total}", file=sys.stderr)
     _pending(stage, holder)  # a watch that dies before the resume ends leaves it for `pls run --watch` to pick up
-    try:
-        return _resume(stage, holder, label, rec, done, (opts, script, args), state, ckpt)
-    finally:
-        _pending(stage, "")
+    return _resume(stage, holder, label, rec, done, (opts, script, args), state, ckpt)
 
 
 def _resume(
