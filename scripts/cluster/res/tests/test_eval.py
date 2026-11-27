@@ -1890,5 +1890,30 @@ class LaunchSlotTest(unittest.TestCase):
         self.assertEqual(err.getvalue().count("had no free session"), 1, err.getvalue())
 
 
+class OwnLeaseTest(unittest.TestCase):
+    """`--on <card>` on a card the caller already leases runs on that lease instead of refusing."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        p = mock.patch.object(ev.ls, "STORE", Path(tmp.name) / "leases.json")
+        p.start()
+        self.addCleanup(p.stop)
+        with ev.ls.locked_store() as leases:
+            leases.append(ev.ls.Lease("a6de9c", "k1", "c571-003:6", "horizon", "Latent", job="3747515"))
+            leases.append(ev.ls.Lease("b1", "k2", "c571-003:7", "horizon", "Kick", job="3747515"))
+            leases.append(ev.ls.Lease("c1", "k3", "pepi:-1", "larg", "Latent", cpus=4))
+
+    def test_the_callers_own_card_resolves_to_its_lease_in_either_spelling(self) -> None:
+        self.assertEqual(ev.own_lease("c571-003:3747515:6", "Latent"), "a6de9c")
+        self.assertEqual(ev.own_lease("c571-003:6", "Latent"), "a6de9c")
+
+    def test_another_holders_card_another_job_or_a_cpu_lease_do_not(self) -> None:
+        self.assertEqual(ev.own_lease("c571-003:3747515:7", "Latent"), "", "a peer's lease stays the claim's to refuse")
+        self.assertEqual(ev.own_lease("c571-003:999:6", "Latent"), "")
+        self.assertEqual(ev.own_lease("pepi:-1", "Latent"), "")
+        self.assertEqual(ev.own_lease("horizon", "Latent"), "")
+
+
 if __name__ == "__main__":
     unittest.main()
