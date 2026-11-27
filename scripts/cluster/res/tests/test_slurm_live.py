@@ -18,6 +18,17 @@ def _lease(lid: str, stage: str) -> ls.Lease:
 
 
 class SlurmLiveTest(unittest.TestCase):
+    def setUp(self) -> None:
+        import evaluate as ev
+
+        def target(pool: Pool, host: str, gpu: int, job: str = "", uuid: str = "") -> ev.Target:
+            return ev.Target(pool.name, "slurm", host, gpu, pool.settings["login"], "/w", pool.settings["scratch"],
+                             job=job, uuid=uuid)  # fmt: skip
+
+        p = mock.patch.object(ev, "make_target", target)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_a_fresh_heartbeat_is_live_and_a_stale_or_ended_one_is_not(self) -> None:
         leases = [_lease("a", "/s/res-eval/fresh"), _lease("b", "/s/res-eval/stale"), _lease("c", "/s/res-eval/done")]
         out = "/s/res-eval/done ended\n/s/res-eval/fresh 3\n/s/res-eval/stale 900\n"
