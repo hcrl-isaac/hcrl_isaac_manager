@@ -1105,6 +1105,10 @@ class SlurmEvalTest(Isolated):
         self.assertIn("CKPT_A_CONTENT weights", log)
         node_tmp = self.tmp / "node_tmp" / stage.name
         self.assertIn(f"TMPDIR {node_tmp}", log, "a per-run TMPDIR inside the node-local /tmp")
+        for _ in range(100):  # the status is written just before the runner's EXIT trap removes TMPDIR
+            if not node_tmp.exists():
+                break
+            time.sleep(0.1)
         self.assertFalse(node_tmp.exists(), "the run's TMPDIR goes with it")
         work = self.remote / "artifacts" / "res-eval" / "work" / stage.name
         self.assertIn(f"CWD {work}", log, "a copied script writes into a work dir that outlives its stage")
