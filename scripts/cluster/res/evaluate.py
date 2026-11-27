@@ -181,7 +181,12 @@ def own_lease(on: str, holder: str) -> str:
         return ""
     card, job = f"{parts[0]}:{parts[-1]}", parts[1] if len(parts) == 3 else ""
     with ls.locked_store() as leases:
-        mine = [x for x in leases if x.holder == holder and x.card == card and not x.cpus and (not job or x.job == job)]
+        # a SLURM lease records its card as a label, `host:gpu (job J)`
+        mine = [
+            x
+            for x in leases
+            if x.holder == holder and x.card.split(" ")[0] == card and not x.cpus and (not job or x.job == job)
+        ]
     return mine[0].id if len(mine) == 1 else ""
 
 

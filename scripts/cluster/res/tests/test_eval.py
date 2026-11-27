@@ -1909,13 +1909,16 @@ class OwnLeaseTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         with ev.ls.locked_store() as leases:
-            leases.append(ev.ls.Lease("a6de9c", "k1", "c571-003:6", "horizon", "Latent", job="3747515"))
-            leases.append(ev.ls.Lease("b1", "k2", "c571-003:7", "horizon", "Kick", job="3747515"))
+            # SLURM leases record their card as res.claim writes it: the label `host:gpu (job J)`
+            leases.append(ev.ls.Lease("a6de9c", "k1", "c571-003:6 (job 3747515)", "horizon", "Latent", job="3747515"))
+            leases.append(ev.ls.Lease("b1", "k2", "c571-003:7 (job 3747515)", "horizon", "Kick", job="3747515"))
+            leases.append(ev.ls.Lease("d1", "k4", "pepi:2", "larg", "Latent"))
             leases.append(ev.ls.Lease("c1", "k3", "pepi:-1", "larg", "Latent", cpus=4))
 
     def test_the_callers_own_card_resolves_to_its_lease_in_either_spelling(self) -> None:
         self.assertEqual(ev.own_lease("c571-003:3747515:6", "Latent"), "a6de9c")
         self.assertEqual(ev.own_lease("c571-003:6", "Latent"), "a6de9c")
+        self.assertEqual(ev.own_lease("pepi:2", "Latent"), "d1", "an ssh box's card has no job label")
 
     def test_another_holders_card_another_job_or_a_cpu_lease_do_not(self) -> None:
         self.assertEqual(ev.own_lease("c571-003:3747515:7", "Latent"), "", "a peer's lease stays the claim's to refuse")
