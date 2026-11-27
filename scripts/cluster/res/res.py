@@ -291,7 +291,9 @@ def slurm_live(leases: list[ls.Lease], pools: list[Pool]) -> set[str]:
 
     by_pool: dict[str, list[ls.Lease]] = {}
     for x in leases:
-        pool = next((p for p in pools if p.kind == "slurm" and x.report.split(" ")[0] == p.name), None)
+        # a cluster's label is "<name> (<profile>, ...)"; its pools are the profiles (horizon, amd-rtx, rtx-small)
+        names = [n.strip() for n in x.report.partition("(")[2].rstrip(")").split(",") if n.strip()] or [x.report]
+        pool = next((p for n in names for p in pools if p.kind == "slurm" and p.name == n), None)
         if pool is not None:
             by_pool.setdefault(pool.name, []).append(x)
     live: set[str] = set()

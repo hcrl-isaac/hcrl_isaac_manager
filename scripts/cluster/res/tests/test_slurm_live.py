@@ -24,6 +24,13 @@ class SlurmLiveTest(unittest.TestCase):
         with mock.patch("follow._probe", lambda st, cmd: out):
             self.assertEqual(res.slurm_live(leases, POOLS), {"a"})
 
+    def test_a_multi_profile_cluster_label_finds_its_pool(self) -> None:
+        pools = [Pool("amd-rtx", "slurm", {"login": "u@s3", "scratch": "/w"})]
+        x = ls.Lease("s", "ks", "c571-003:6", "stampede3 (amd-rtx, stampede)", "Latent", job="9", stage="/w/r/a",
+                     stages=["/w/r/a"])  # fmt: skip
+        with mock.patch("follow._probe", lambda st, cmd: "/w/r/a 4\n"):
+            self.assertEqual(res.slurm_live([x], pools), {"s"})
+
     def test_an_unreachable_cluster_marks_nothing_live(self) -> None:
         def down(st: object, cmd: str) -> str:
             raise SystemExit("no master")
