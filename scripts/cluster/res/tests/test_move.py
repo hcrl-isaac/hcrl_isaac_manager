@@ -348,5 +348,23 @@ class MoveTest(unittest.TestCase):
         self.assertEqual((self.stops, self.launches), ([], []))
 
 
+class DropEndedTest(unittest.TestCase):
+    def test_a_lease_that_ran_an_earlier_run_keeps_only_its_live_one(self) -> None:
+        import tempfile
+
+        t = move.ev.Target("horizon", "slurm", "c1", 2, "u@login", "/w", "/s", job="5", uuid="g")
+        ended = {"/s/res-eval/teacher"}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(move.ls, "STORE", Path(tmp) / "leases.json"):
+            with move.ls.locked_store() as leases:
+                leases.append(move.ls.Lease("a1", "k", "c1:2", "horizon", "Baseline", stage="/s/res-eval/student",
+                                            stages=["/s/res-eval/teacher", "/s/res-eval/student"]))  # fmt: skip
+            sh = lambda st, cmd: 0 if any(d in cmd for d in ended) else 1  # noqa: E731
+            with mock.patch.object(move.ev.Stage, "sh", sh), mock.patch("sys.stderr"):
+                move.drop_ended("a1", t)
+            with move.ls.locked_store() as leases:
+                [x] = leases
+        self.assertEqual((x.stages, x.stage), (["/s/res-eval/student"], "/s/res-eval/student"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -275,6 +275,29 @@ def manual_steps(lease_id: str, holder: str, state: tuple[str, int, int] | None)
     )
 
 
+def drop_ended(lease_id: str, t: ev.Target) -> None:
+    """Forget the stages of ``lease_id`` whose run already ended, on every lease recording them, so a lease that ran
+    an earlier run before its current one still moves."""
+    with ls.locked_store() as leases:
+        lease = next(x for x in leases if x.id == lease_id)
+        stages = list(lease.stages) or ([lease.stage] if lease.stage else [])
+    if len(stages) < 2:  # nothing to choose between: the one-run checks below decide
+        return
+    probe, q = ev.Stage(t), shlex.quote
+    # ended: its status is written, its stage was removed, or (SLURM) its runner's heartbeat went stale
+    stale = '|| [ -n "$(find {d}/heartbeat -mmin +2 2>/dev/null)" ]' if t.kind == "slurm" else ""
+    ended = [d for d in stages if probe.sh(f"[ -f {q(d)}/status ] || [ ! -d {q(d)} ] {stale.format(d=q(d))}") == 0]
+    if not ended or len(ended) == len(stages):
+        return
+    with ls.locked_store() as leases:
+        for x in leases:
+            if set(x.stages) & set(ended) or x.stage in ended:
+                x.stages = [d for d in x.stages if d not in ended]
+                x.stage = x.stages[-1] if x.stages else ""
+    names = ", ".join(d.rstrip("/").rsplit("/", 1)[-1] for d in ended)
+    print(f"[move] lease {lease_id}: dropped the record of runs that already ended ({names})", file=sys.stderr)
+
+
 def cmd_move(
     lease_id: str, holder: str, to: str, wait_s: float, verify_s: float, pools: list[Pool], watch: bool = True
 ) -> int:
@@ -296,6 +319,7 @@ def cmd_move(
     """
     lease_id = lease_id.removeprefix("lease:")
     pool, host, gpu, job, uuid_ = ev._lease_card(lease_id, holder, pools)
+    drop_ended(lease_id, ev.make_target(pool, host, gpu, job, uuid_))
     with ls.locked_store() as leases:
         lease = next(x for x in leases if x.id == lease_id)
         recorded = {x.id: list(x.stages) or ([x.stage] if x.stage else []) for x in leases}
