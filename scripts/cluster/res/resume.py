@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -53,6 +54,7 @@ def _locked() -> Iterator[dict]:
         table = json.loads(REPLACEMENTS.read_text()) if REPLACEMENTS.is_file() else {}
         table.setdefault("holds", {})
         table.setdefault("pending", {})
+        table.setdefault("resumed", {})
         yield table
         REPLACEMENTS.write_text(json.dumps(table))
 
@@ -71,15 +73,46 @@ def pending_stages(holder: str, pools: list) -> list[tuple[str, ev.Stage]]:
     return out
 
 
-def _pending(stage: ev.Stage, holder: str) -> None:
-    """Record the stage's unfinished resume for ``holder``, or clear it when ``holder`` is empty."""
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def claim(stage: ev.Stage, holder: str) -> str:
+    """Claim the resume of ``stage``'s run for this watch; "" when claimed, else why another watch has it.
+
+    Two watches on one run (a re-arm beside a live watch) would each relaunch it: the first to claim resumes it, a
+    claim whose watch died passes to the next, and a run already relaunched is never relaunched again.
+    """
     t = stage.t
     with _locked() as table:
-        if holder:
-            table["pending"][stage.dir] = {"holder": holder, "pool": t.pool, "host": t.host, "gpu": t.gpu,
-                                           "job": t.job, "uuid": t.uuid}  # fmt: skip
-        else:
+        if done := table["resumed"].get(stage.dir):
+            return f"already resumed as {done}"
+        row = table["pending"].get(stage.dir) or {}
+        pid = int(row.get("pid") or 0)
+        if pid and pid != os.getpid() and _alive(pid):
+            return f"another watch (pid {pid}) is resuming it"
+        table["pending"][stage.dir] = {"holder": holder, "pool": t.pool, "host": t.host, "gpu": t.gpu,
+                                       "job": t.job, "uuid": t.uuid, "pid": os.getpid()}  # fmt: skip
+    return ""
+
+
+def _release(stage: ev.Stage) -> None:
+    """Drop ``stage``'s pending row once this watch decided it; a row another live watch claimed stays theirs."""
+    with _locked() as table:
+        pid = int((table["pending"].get(stage.dir) or {}).get("pid") or 0)
+        if not pid or pid == os.getpid() or not _alive(pid):
             table["pending"].pop(stage.dir, None)
+
+
+def _mark_resumed(old_dir: str, new_dir: str) -> None:
+    with _locked() as table:
+        table["resumed"][old_dir] = new_dir
 
 
 def _login(t: ev.Target, cmd: str, timeout: float = 60) -> str:
@@ -186,7 +219,7 @@ def after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
     try:
         return _after_cut(stage, holder, label)
     finally:
-        _pending(stage, "")  # decided: a watch that dies mid-resume never gets here, so its row stays
+        _release(stage)  # decided; a watch that dies mid-resume never gets here, so its claim stays
 
 
 def _after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
@@ -213,7 +246,10 @@ def _after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
         return None
     ckpt = max(have)
     print(f"[resume] {label}: hold {stage.t.job} ended {rec['state']} at checkpoint {ckpt}/{total}", file=sys.stderr)
-    _pending(stage, holder)  # a watch that dies before the resume ends leaves it for `pls run --watch` to pick up
+    # the claim is left in place by a watch that dies mid-resume, for `pls run --watch` to pick up
+    if taken := claim(stage, holder):
+        print(f"[resume] {label}: not resumed here: {taken}", file=sys.stderr)
+        return None
     return _resume(stage, holder, label, rec, done, (opts, script, args), state, ckpt)
 
 
@@ -278,6 +314,7 @@ def _relaunch(
         return None
     new = ev.Stage(ev.make_target(*_card(found[-1], holder)))
     new.dir = found[-1]
+    _mark_resumed(stage.dir, new.dir)  # relaunched, confirmed or not: no other watch relaunches it again
     _write(new, "resumes", str(done + 1))
     verdict_new = move.confirm(new, ckpt, time.monotonic() + VERIFY_S)
     moved = move.progress(move.read_stage(new, "log") or "")

@@ -177,11 +177,24 @@ class AfterCutTest(StateTest):
         self.assertEqual((ev_row["kind"], ev_row["new_job"], ev_row["ckpt"]), ("resumed", "105901", 1400))
 
     def test_a_decided_stage_leaves_the_pending_table(self) -> None:
-        resume._pending(_stage(), "Kick")  # e.g. a released lease's run, or a dead watch's unfinished resume
+        with resume._locked() as table:  # a released lease's run: no watch has claimed it
+            table["pending"][_stage().dir] = {"holder": "Kick", "pool": "horizon", "host": "c102-007", "gpu": 2,
+                                              "job": "100", "uuid": ""}  # fmt: skip
         new, launched = self.run_cut(resumes="3")
         self.assertEqual((new, launched), (None, []))
         with resume._locked() as table:
             self.assertEqual(table["pending"], {}, "a later watch does not decide it again")
+
+    def test_a_released_leases_run_is_resumed_by_one_watch_and_the_next_stands_down(self) -> None:
+        with resume._locked() as table:  # keep_cut_runs' row: no pid, so the first watch to decide it claims it
+            table["pending"][_stage().dir] = {"holder": "Kick", "pool": "horizon", "host": "c102-007", "gpu": 2,
+                                              "job": "100", "uuid": ""}  # fmt: skip
+        first, launched = self.run_cut()
+        self.assertEqual((first.dir, len(launched)), ("/w/new", 1))
+        self.assertIsNone(resume.after_cut(_stage(), "Kick", "lease/abc"), "a second watch on the same run")
+        self.assertEqual(len(launched), 1, "relaunched once")
+        with resume._locked() as table:
+            self.assertEqual((table["pending"], table["resumed"]), ({}, {_stage().dir: "/w/new"}))
 
     def test_a_chain_resumed_three_times_is_left_cut(self) -> None:
         new, launched = self.run_cut(resumes="3")
@@ -200,7 +213,7 @@ class AfterCutTest(StateTest):
         self.assertEqual((new, launched), (None, []))
         self.assertEqual(self.events()[0]["kind"], "resume_failed")
         with resume._locked() as table:
-            self.assertEqual(table, {"holds": {}, "pending": {}}, "a re-armed watch queues a fresh hold")
+            self.assertEqual(table, {"holds": {}, "pending": {}, "resumed": {}}, "a re-armed watch queues a fresh hold")
 
     def test_a_resume_is_pending_while_it_runs_and_cleared_after(self) -> None:
         seen = []
@@ -224,6 +237,36 @@ class AfterCutTest(StateTest):
         self.assertIsNone(new)
         self.assertEqual(self.armed, [])
         self.assertEqual(self.events()[0]["kind"], "resume_unconfirmed")
+
+
+class ClaimTest(StateTest):
+    def test_a_second_watch_stands_down_while_the_first_resumes_the_run(self) -> None:
+        with resume._locked() as table:
+            table["pending"]["/w/artifacts/res-eval/abc"] = {"holder": "Kick", "pid": 1}  # pid 1 is always alive
+        self.assertIn("another watch (pid 1)", resume.claim(_stage(), "Kick"))
+
+    def test_a_dead_watchs_claim_passes_on_and_a_resumed_run_is_never_relaunched(self) -> None:
+        with resume._locked() as table:
+            table["pending"]["/w/artifacts/res-eval/abc"] = {"holder": "Kick", "pid": 2**22 + 7}  # no such process
+        self.assertEqual(resume.claim(_stage(), "Kick"), "", "the claim of a watch that died is taken over")
+        resume._mark_resumed("/w/artifacts/res-eval/abc", "/w/new")
+        self.assertEqual(resume.claim(_stage(), "Kick"), "already resumed as /w/new")
+
+    def test_after_cut_does_not_relaunch_a_run_another_watch_is_resuming(self) -> None:
+        with resume._locked() as table:
+            table["pending"]["/w/artifacts/res-eval/abc"] = {"holder": "Kick", "pid": 1}
+        files = {"status": None, "stop": None, "pls_argv.json": json.dumps(ARGV), "resumes": None,
+                 "log": "https://wandb.ai/e/p/runs/abc Learning iteration 1450/2000"}  # fmt: skip
+        with (
+            mock.patch.object(resume, "hold_end", lambda t: {"state": "TIMEOUT", "partition": "gpu", "timelimit": "1"}),
+            mock.patch.object(resume.move, "read_stage", lambda st, rel: files.get(rel)),
+            mock.patch.object(resume.move, "wandb_checkpoints", lambda url: {1400: 1}),
+            mock.patch.object(resume, "replacement", side_effect=AssertionError("queued a second hold")),
+            mock.patch("sys.stderr"),
+        ):
+            self.assertIsNone(resume.after_cut(_stage(), "Kick", "lease/abc"))
+        with resume._locked() as table:
+            self.assertEqual(table["pending"]["/w/artifacts/res-eval/abc"]["pid"], 1, "its claim stays the other's")
 
 
 class WatchTest(unittest.TestCase):
