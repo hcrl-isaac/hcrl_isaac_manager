@@ -26,7 +26,7 @@ import threading
 import time
 import tomllib
 import uuid
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -1111,6 +1111,7 @@ def slurm_runner_script(
     python: str = "",
     command: bool = False,
     refs: str = "",
+    pythonpath: Sequence[str] = (),
 ) -> str:
     """The bash that runs inside the container on a SLURM node: pin by UUID, run, stop on request, record status.
 
@@ -1122,6 +1123,7 @@ def slurm_runner_script(
         cwd: Directory to run the script from, in the container.
         python: The interpreter (default: ``CONTAINER_PYTHON``).
         command: Run the arguments as a command line instead of the script.
+        pythonpath: Container paths appended to the container's PYTHONPATH (``--with`` repos).
         refs: The stage's W&B config file, copied into ``cwd`` as the ``config-defaults.yaml`` that ``wandb.init``
             loads.
 
@@ -1146,6 +1148,8 @@ def slurm_runner_script(
     )
     launch = '"$@"' if command else f'{q(python)} {dist}{q(script)} "$@"'
     s = {k: q(f"{stage}/{k}") for k in ("log", "env", "status", "stop", "heartbeat", "MANIFEST")}
+    joined = q(":".join(pythonpath))
+    extra_path = f'export PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}"{joined}\n' if pythonpath else ""
     # node-local: the run's TMPDIR is in this step's own /tmp (develop exec --own-tmp); its per-card Kit caches are in
     # /tmp/cache, the job's dir that persists across runs (one lease per card)
     run_id = os.path.basename(stage)
@@ -1183,7 +1187,7 @@ if [ -e {s["stop"]} ]; then  # stopped before the step started (a slow start, or
 fi
 set -a; source {s["env"]}; set +a
 rm -f {s["env"]}  # credentials stay in this process's environment only
-touch {s["heartbeat"]}
+{extra_path}touch {s["heartbeat"]}
 {visible}
 export CUDA_VISIBLE_DEVICES={q(cards)} RES_EVAL_DEVICE=cuda:0 PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
 export TMPDIR={tmp} XDG_CACHE_HOME={cache}/xdg OMNI_CACHE_DIR={cache}/omni
@@ -2299,17 +2303,18 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         else:
             code = local_code(source, args.wt)
             pythonpath, manifest = stage.sync_code(code, local_data(source, args.wt), args.root or "")
+        with_paths = []  # the --with repos a SLURM container imports, after its own tree
         for name, (src, sib) in siblings.items():  # a sibling repo, found through its variable (and PYTHONPATH)
-            if t.kind == "slurm":
-                sys.exit(f"[res] --with {name} ships to box cards only; SLURM runs do not support it yet")
             if t.kind == "local":
                 env[sib.env] = src
                 manifest.append(f"{name} {src} {_describe(src)} (in place, {sib.env})")
-            else:
-                env[sib.env], line = stage.snapshot(name, src, outputs=False, only=sib.dirs)
+            else:  # a SLURM snapshot sits on the cluster's scratch, which its container sees under artifacts/
+                snap, line = stage.snapshot(name, src, outputs=False, only=sib.dirs)
+                env[sib.env] = container_path(t, snap)
                 manifest.append(f"{line} ({', '.join(sib.dirs) + ' only, ' if sib.dirs else ''}{sib.env})")
             if sib.importable:
                 pythonpath.append(container_path(t, env[sib.env]))
+                with_paths.append(env[sib.env])
         if args.root:
             manifest.append(f"python {args.root}/venv (--root)")
         if args.allow_dirty:
@@ -2361,6 +2366,7 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
                 python=python,
                 command=args.cmd,
                 refs=refs_file,
+                pythonpath=with_paths,
             )
         else:
             venv = tool_venv(args.venv, code, t.scratch) if args.venv else None
@@ -2520,7 +2526,8 @@ def parser() -> argparse.ArgumentParser:
         metavar="REPO[=PATH]",
         help=f"ship a repo beside the workspace and point its variable at it ({', '.join(SIBLINGS)}: default path"
         " ~/<repo>); any other git checkout as NAME=PATH ships whole, on PYTHONPATH, as <NAME>_ROOT, and runs its"
-        " scripts as NAME:<path> (repeatable)",
+        " scripts as NAME:<path> (repeatable). On a SLURM card the run sees only the container's mounts: data it"
+        " reads must sit under the cluster's artifacts dir (the container's /workspace/artifacts)",
     )
     ev.add_argument(
         "--venv",
