@@ -151,6 +151,10 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
 - `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
   owns its stage dir, which its lease records, and the lease stays held until the card goes idle. `--timeout`
   and `--stall` do not apply to a detached run.
+- `--seeds 42,43,44` with `--detach` launches one run per seed at once, each with `--seed <s>` and the same
+  `--run_name`: `--on` names one card (or `lease:<id>`) per seed, or a pool for any free cards. Each launch's
+  output streams prefixed `[seed=<s> <card>]`, so every run's start or failure shows as it happens; the command exits
+  with the worst launch's status.
 - A detached `train` run is then followed, so launch it in the background: the launch waits for its first
   `Learning iteration` (failing if the run ends or 40 min pass first), arms an async recorder when the run records
   async (`--eval`/`--video async`), then stays on `scripts/tools/watch_run.sh` until the run ends. Its exit is the
@@ -172,6 +176,17 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   released or lapsed while it ran): the stage's recorded launch must name you as holder, and a stage a live lease
   still records is sent to `--stop lease:<id> --stage <id>`. `pls res status` and `pls res leases` show each lease's
   stage id.
+- A detached `train.py` run on a SLURM card resumes itself when its hold ends under it (sacct `TIMEOUT`, `NODE_FAIL` or
+  `PREEMPTED`): its watch queues one replacement hold per cut hold (same cluster, partition, `--time`; the first of the
+  hold's runs to notice queues it, the rest share it), waits for it, and relaunches each cut run on the same card index
+  of the new node from its newest W&B checkpoint, with its recorded launch, code and remaining budget (as `--move`
+  does), then confirms it trains and watches it on. A run stopped with `pls run --stop`, finished, crashed on a live
+  hold, launched before `--move` existed, or with `--no-resume` is left as it is; a run chain resumes at most 3 times.
+  A replacement still queued after 6 h is noted once with its queue reason. Only a running watch resumes: after a
+  session restart, `pls run --watch --holder <you>` re-arms its runs' watches, including a cut run whose resume the
+  dead watch left unfinished (it rejoins the same replacement hold). A failed relaunch leaves its replacement held and
+  says how to drop it (`pls res drop --on <cluster> <job>`). `pls res events [--follow]` prints every replacement hold
+  and resume as JSON lines.
 - `pls run --move <lease> --to <same|lease:<id>|host:gpu> --holder <you>` moves a detached `train.py` run, e.g. off a
   node whose hold ends: it claims the target first, waits (`--wait`, 30 min) for a checkpoint newer than any on the
   run's W&B run, stops the run (keeping the lease when the card stays the same), relaunches it detached with the same

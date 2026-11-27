@@ -123,8 +123,14 @@ def pin_code(stage: ev.Stage, tag: str) -> tuple[str, list[tuple[str, str]]]:
     if raw is None:
         sys.exit("[move] the run recorded no code refs (wandb_config.yaml), so its code cannot be rebuilt")
     refs = json.loads(raw)["pls_refs"]["value"]
-    if refs.get("tree"):
+    # only a --tree launch reuses its tree (the relaunch keeps --tree); a --wt launch is staged into a tree too, so a
+    # recorded tree name alone would relaunch on the default tree, not the run's own code
+    launch = json.loads(read_stage(stage, "pls_argv.json") or "[]")
+    head = launch[: launch.index("--")] if "--" in launch else launch
+    if any(a == "--tree" or a.startswith("--tree=") for a in head):
         return "", []
+    if not refs.get("repos"):
+        sys.exit("[move] the run recorded no code commits (pls_refs.repos), so its code cannot be rebuilt")
     workspace = ev.local_workspace()
     code = ev.local_code(workspace, refs.get("wt") or "")
     made: list[tuple[str, str]] = []
@@ -269,6 +275,29 @@ def manual_steps(lease_id: str, holder: str, state: tuple[str, int, int] | None)
     )
 
 
+def drop_ended(lease_id: str, t: ev.Target) -> None:
+    """Forget the stages of ``lease_id`` whose run already ended, on every lease recording them, so a lease that ran
+    an earlier run before its current one still moves."""
+    with ls.locked_store() as leases:
+        lease = next(x for x in leases if x.id == lease_id)
+        stages = list(lease.stages) or ([lease.stage] if lease.stage else [])
+    if len(stages) < 2:  # nothing to choose between: the one-run checks below decide
+        return
+    probe, q = ev.Stage(t), shlex.quote
+    # ended: its status is written, its stage was removed, or (SLURM) its runner's heartbeat went stale
+    stale = '|| [ -n "$(find {d}/heartbeat -mmin +2 2>/dev/null)" ]' if t.kind == "slurm" else ""
+    ended = [d for d in stages if probe.sh(f"[ -f {q(d)}/status ] || [ ! -d {q(d)} ] {stale.format(d=q(d))}") == 0]
+    if not ended or len(ended) == len(stages):
+        return
+    with ls.locked_store() as leases:
+        for x in leases:
+            if set(x.stages) & set(ended) or x.stage in ended:
+                x.stages = [d for d in x.stages if d not in ended]
+                x.stage = x.stages[-1] if x.stages else ""
+    names = ", ".join(d.rstrip("/").rsplit("/", 1)[-1] for d in ended)
+    print(f"[move] lease {lease_id}: dropped the record of runs that already ended ({names})", file=sys.stderr)
+
+
 def cmd_move(
     lease_id: str, holder: str, to: str, wait_s: float, verify_s: float, pools: list[Pool], watch: bool = True
 ) -> int:
@@ -290,6 +319,7 @@ def cmd_move(
     """
     lease_id = lease_id.removeprefix("lease:")
     pool, host, gpu, job, uuid_ = ev._lease_card(lease_id, holder, pools)
+    drop_ended(lease_id, ev.make_target(pool, host, gpu, job, uuid_))
     with ls.locked_store() as leases:
         lease = next(x for x in leases if x.id == lease_id)
         recorded = {x.id: list(x.stages) or ([x.stage] if x.stage else []) for x in leases}
@@ -326,7 +356,8 @@ def cmd_move(
         return 0
     run = follow.WANDB_RUN.search(moved[0])
     print("[move] watching the moved run to its end (stopping this watch leaves the run running)", file=sys.stderr)
-    return follow.watch(new, "/".join(run.groups()) if run else "", moved[2], follow._run_name(args, new.dir))
+    run_path = "/".join(run.groups()) if run else ""
+    return follow.watch(new, run_path, moved[2], follow._run_name(args, new.dir), holder=holder)
 
 
 def _move(

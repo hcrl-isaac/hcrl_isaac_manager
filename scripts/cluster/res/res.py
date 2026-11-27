@@ -914,6 +914,8 @@ def main() -> None:
     rv.add_argument("--note", default="", help="what it is for, and who granted the priority")
     rv.add_argument("--end", nargs="?", const="", help="end your reservation (by id, or all of yours)")
     sub.add_parser("leases", help="list leases and reservations (no probe)")
+    evp = sub.add_parser("events", help="print every resume and replacement hold, one JSON line each")
+    evp.add_argument("--follow", action="store_true", help="keep printing new events")
     sub.add_parser("pools", help="list the configured pools")
     args = parser.parse_args(sys.argv[1:] or ["status"])
 
@@ -921,6 +923,11 @@ def main() -> None:
         pools = load_pools()
     except Exception as exc:  # a broken inventory must say so, not print a traceback mid-table
         sys.exit(f"[res] cannot read the compute inventory: {type(exc).__name__}: {exc}")
+    if args.cmd == "events":
+        import resume
+
+        resume.print_events(args.follow)
+        return
     if args.cmd == "pools":
         for p in pools:
             detail = p.settings.get("hosts") or p.settings.get("login") or p.settings.get("address") or ""

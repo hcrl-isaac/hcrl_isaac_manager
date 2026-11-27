@@ -413,6 +413,15 @@ class SlurmTest(unittest.TestCase):
             ev.slurm_profile(label, "3566414", pools)
         self.assertIn("Invalid job id", str(cm.exception.code))
 
+    def test_a_with_repo_joins_the_containers_pythonpath_after_its_env(self) -> None:
+        t = ev.Target("horizon", "slurm", "c125-013", 0, "u@login", "/w", "/w/artifacts", job="71017", uuid="GPU-a")
+        repo = "/workspace/artifacts/res-eval/code/fb-57f5"
+        runner = ev.slurm_runner_script(t, "/x", f"{repo}/scripts/a.py", [], "/c", pythonpath=[repo])
+        line = f'export PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}"{repo}'
+        self.assertIn(line, runner)
+        self.assertLess(runner.index("source /x/env"), runner.index(line), "after the env, so it adds to it")
+        self.assertNotIn("PYTHONPATH", ev.slurm_runner_script(t, "/x", "/s.py", [], "/c"))
+
     def test_a_multi_gpu_runner_pins_every_card_and_launches_one_rank_per_card(self) -> None:
         t = ev.Target("horizon", "slurm", "c125-013", 0, "u@login", "/w", "/w/artifacts", job="71017", uuid="GPU-a")
         t.extra_uuids = ("GPU-b", "GPU-c", "GPU-d")
@@ -567,7 +576,7 @@ class SlurmTest(unittest.TestCase):
             left = list(prunes)
             return (
                 lambda cmd, **kw: mock.Mock(returncode=left.pop(0) if left else 0, stderr="timeout")
-                if cmd[0] == "ssh"
+                if os.path.basename(cmd[0]) in ("ssh", "ssh_slot.sh")
                 else staged
             )
 
@@ -1105,6 +1114,10 @@ class SlurmEvalTest(Isolated):
         self.assertIn("CKPT_A_CONTENT weights", log)
         node_tmp = self.tmp / "node_tmp" / stage.name
         self.assertIn(f"TMPDIR {node_tmp}", log, "a per-run TMPDIR inside the node-local /tmp")
+        for _ in range(100):  # the status is written just before the runner's EXIT trap removes TMPDIR
+            if not node_tmp.exists():
+                break
+            time.sleep(0.1)
         self.assertFalse(node_tmp.exists(), "the run's TMPDIR goes with it")
         work = self.remote / "artifacts" / "res-eval" / "work" / stage.name
         self.assertIn(f"CWD {work}", log, "a copied script writes into a work dir that outlives its stage")
@@ -1556,7 +1569,7 @@ class EvalRunTest(Isolated):
         watched = []
         with (
             mock.patch.object(follow, "POLL_S", 0.2),
-            mock.patch.object(follow, "watch", lambda st, run, target, label: watched.append(target) or 4),
+            mock.patch.object(follow, "watch", lambda st, run, target, label, **kw: watched.append(target) or 4),
         ):
             rc, out = self._eval("--any", "--detach", "--", "--video", "on")
             self.assertEqual((rc, watched), (4, [40]), out)
@@ -1884,6 +1897,31 @@ class LaunchSlotTest(unittest.TestCase):
             ev.explain_ssh_failure(t)
             ev.explain_ssh_failure(t)
         self.assertEqual(err.getvalue().count("had no free session"), 1, err.getvalue())
+
+
+class OwnLeaseTest(unittest.TestCase):
+    """`--on <card>` on a card the caller already leases runs on that lease instead of refusing."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        p = mock.patch.object(ev.ls, "STORE", Path(tmp.name) / "leases.json")
+        p.start()
+        self.addCleanup(p.stop)
+        with ev.ls.locked_store() as leases:
+            leases.append(ev.ls.Lease("a6de9c", "k1", "c571-003:6", "horizon", "Latent", job="3747515"))
+            leases.append(ev.ls.Lease("b1", "k2", "c571-003:7", "horizon", "Kick", job="3747515"))
+            leases.append(ev.ls.Lease("c1", "k3", "pepi:-1", "larg", "Latent", cpus=4))
+
+    def test_the_callers_own_card_resolves_to_its_lease_in_either_spelling(self) -> None:
+        self.assertEqual(ev.own_lease("c571-003:3747515:6", "Latent"), "a6de9c")
+        self.assertEqual(ev.own_lease("c571-003:6", "Latent"), "a6de9c")
+
+    def test_another_holders_card_another_job_or_a_cpu_lease_do_not(self) -> None:
+        self.assertEqual(ev.own_lease("c571-003:3747515:7", "Latent"), "", "a peer's lease stays the claim's to refuse")
+        self.assertEqual(ev.own_lease("c571-003:999:6", "Latent"), "")
+        self.assertEqual(ev.own_lease("pepi:-1", "Latent"), "")
+        self.assertEqual(ev.own_lease("horizon", "Latent"), "")
 
 
 if __name__ == "__main__":
