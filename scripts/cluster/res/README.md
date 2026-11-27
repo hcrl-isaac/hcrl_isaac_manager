@@ -168,6 +168,17 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   lease. A lease that records no run (one taken before `--stop` existed) is just released.
   `--keep-lease` keeps the card leased once the run is gone, so a relaunch (`pls run --on lease:<id>`) needs no
   reclaim and the card is never unheld in between. Like any lease it lapses after 30 min idle, counted from the stop.
+- A detached `train.py` run on a SLURM card resumes itself when its hold ends under it (sacct `TIMEOUT`, `NODE_FAIL` or
+  `PREEMPTED`): its watch queues one replacement hold per cut hold (same cluster, partition, `--time`; the first of the
+  hold's runs to notice queues it, the rest share it), waits for it, and relaunches each cut run on the same card index
+  of the new node from its newest W&B checkpoint, with its recorded launch, code and remaining budget (as `--move`
+  does), then confirms it trains and watches it on. A run stopped with `pls run --stop`, finished, crashed on a live
+  hold, launched before `--move` existed, or with `--no-resume` is left as it is; a run chain resumes at most 3 times.
+  A replacement still queued after 6 h is noted once with its queue reason. Only a running watch resumes: after a
+  session restart, `pls run --watch --holder <you>` re-arms its runs' watches, including a cut run whose resume the
+  dead watch left unfinished (it rejoins the same replacement hold). A failed relaunch leaves its replacement held and
+  says how to drop it (`pls res drop --on <cluster> <job>`). `pls res events [--follow]` prints every replacement hold
+  and resume as JSON lines.
 - `pls run --move <lease> --to <same|lease:<id>|host:gpu> --holder <you>` moves a detached `train.py` run, e.g. off a
   node whose hold ends: it claims the target first, waits (`--wait`, 30 min) for a checkpoint newer than any on the
   run's W&B run, stops the run (keeping the lease when the card stays the same), relaunches it detached with the same

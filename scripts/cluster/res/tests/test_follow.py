@@ -185,7 +185,7 @@ class AfterLaunchTest(unittest.TestCase):
         patches = [
             mock.patch.object(follow, "started", lambda st: ("hcrl/kick/ab12cd34", 6000)),
             mock.patch.object(follow, "arm_recorder", lambda *a: self.armed.append(a) or ("larg-a40", "/rec")),
-            mock.patch.object(follow, "watch", lambda *a: self.watched.append(a) or 3),
+            mock.patch.object(follow, "watch", lambda *a, **kw: self.watched.append(a) or 3),
         ]
         for p in patches:
             p.start()

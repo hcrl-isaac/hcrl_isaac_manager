@@ -2460,6 +2460,12 @@ def parser() -> argparse.ArgumentParser:
     ev.add_argument(
         "--no-watch", action="store_true", help="--detach: return once a train run is started, with no watch"
     )
+    ev.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="--detach on a SLURM card: when the hold's end (walltime, node failure) cuts the run, leave it cut instead"
+        " of resuming it on a replacement hold",
+    )
     ev.add_argument("--no-recorder", action="store_true", help="--detach: arm no async recorder for an async train run")
     ev.add_argument("--cmd", action="store_true", help=argparse.SUPPRESS)  # script + its args are a command line
     # the card selectors and --wt come from `pls run --on/--wt` (see `pls run --help`), so they are not listed here
@@ -2593,13 +2599,18 @@ def main(argv: list[str] | None = None) -> None:
         pools = res.load_pools()
         with ls.locked_store() as leases:
             found = follow.detached_stages(list(leases), wa.holder, [x.removeprefix("lease:") for x in wa.watch])
-        if not found:
-            sys.exit(f"[res] no detached run on {'those leases' if wa.watch else 'any lease'} of {wa.holder}")
         stages = []
         for lease_id, d in found:
             stage = Stage(make_target(*_lease_card(lease_id, wa.holder, pools)))
             stage.dir = d
             stages.append((lease_id, stage))
+        if not wa.watch:  # cut runs whose resume a dead watch left unfinished, their leases gone with the hold
+            import resume
+
+            have = {st.dir for _, st in stages}
+            stages += [(k, st) for k, st in resume.pending_stages(wa.holder, pools) if st.dir not in have]
+        if not stages:
+            sys.exit(f"[res] no detached run on {'those leases' if wa.watch else 'any lease'} of {wa.holder}")
         print(f"[res] watching {len(stages)} detached run(s) of {wa.holder}", file=sys.stderr)
 
         def arm(stage: Stage, run: str) -> None:
@@ -2612,7 +2623,7 @@ def main(argv: list[str] | None = None) -> None:
             wt = given[-1] if given else ""
             follow.arm_for(stage, run, wa.holder, wt, pools)
 
-        sys.exit(follow.rewatch(stages, arm=arm))
+        sys.exit(follow.rewatch(stages, arm=arm, holder=wa.holder))
     # `pls run --stop <lease> --holder <you>`: no script, no card to claim; a script's own --stop (after --) is its own
     if "--stop" in head:
         sp = argparse.ArgumentParser(prog="pls run --stop", description="stop a detached run and release its lease")
