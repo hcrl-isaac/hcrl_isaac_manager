@@ -26,6 +26,14 @@ class StopStageTest(unittest.TestCase):
             mock.patch.object(ev.follow, "_probe", lambda st, cmd: self.argv),
             mock.patch.object(ev.Stage, "sh", lambda st, cmd: self.ended),
             mock.patch.object(ev.Stage, "kill", lambda st: self.killed.append(st.dir) or True),
+            # make_target reads the user's gitignored cluster profile (absent on CI); a login target needs none of it
+            mock.patch.object(
+                ev,
+                "make_target",
+                lambda pool, host, gpu, job="", uuid="": ev.Target(
+                    pool.name, pool.kind, host, gpu, "u@login", "/w", pool.settings["scratch"], job=job, uuid=uuid
+                ),
+            ),
             mock.patch("sys.stderr"),
         ]
         for p in patches:
