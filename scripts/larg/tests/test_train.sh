@@ -140,7 +140,7 @@ pid="$(sed -n 's/^started pid //p' "$T/out8")"
 check "a tree run prints a group stop line" "grep -qx \"stop: kill -- -$pid\" '$T/out8'"
 check "while it runs, the tree is marked" "[ -n \"\$(ls '$TR/.in-use' 2>/dev/null)\" ]"
 kill -TERM "$pid"
-for _ in $(seq 50); do [ -z "$(ls "$TR/.in-use" 2>/dev/null)" ] && break; sleep 0.1; done
+for _ in $(seq 100); do [ -z "$(ls "$TR/.in-use" 2>/dev/null)" ] && ! kill -0 "$pid" 2>/dev/null && break; sleep 0.1; done
 check "TERM to the reported pid reaches python" "grep -q '^TERMED' '$T/ran'"
 check "which still finds the tree marked while it exits" "grep -q '^TERMED inuse=larg\.$pid' '$T/ran'"
 check "and the mark goes once python has exited" "[ -z \"\$(ls '$TR/.in-use' 2>/dev/null)\" ] && ! kill -0 '$pid' 2>/dev/null"
