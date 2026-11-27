@@ -484,6 +484,25 @@ def claim(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple[ls.Le
             time.sleep(WAIT_POLL_S)
 
 
+def pool_for_label(label: str, pools: list[Pool]) -> Pool | None:
+    """The pool a card or lease label names: ``local``, ``<pool>/<host>``, or a cluster's ``<name> (<profile>, ...)``."""
+    names = [label.split("/")[0], *[n.strip() for n in label.partition("(")[2].rstrip(")").split(",") if n.strip()]]
+    return next((p for n in names for p in pools if p.name == n), None)
+
+
+def stage_dir(stage: str, card: Card, pools: list[Pool]) -> str:
+    """The absolute stage dir ``stage`` names on ``card``'s pool: as given, or a stage id under its res-eval dir."""
+    if stage.startswith("/"):
+        return stage
+    import evaluate as ev
+
+    pool = pool_for_label(card.pool, pools)
+    if pool is None:
+        sys.exit(f"[res] --stage {stage}: pass the stage's full path (no pool named {card.pool!r} to resolve it in)")
+    t = ev.make_target(pool, card.host, card.index, card.job, card.uuid)
+    return f"{t.scratch}/res-eval/{stage.strip('/')}"
+
+
 def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple[ls.Lease, Card, Report]], dict]:
     """One probe-and-lease attempt of :func:`claim`."""
     reports = probe_all(select_pools(pools, args.pool))
@@ -547,6 +566,7 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
                         )
                         lease = ls.new_lease(c, r, args.holder, args.note, args.for_, run=run, shared=shared)
                         if stage := getattr(args, "stage", ""):
+                            stage = stage_dir(stage, c, pools)
                             lease.stage, lease.stages = stage, [stage]
                         leases.append(lease)
                         if res_ is not None and res_.holder != args.holder:
@@ -865,8 +885,8 @@ def main() -> None:
         "--stage",
         default="",
         metavar="DIR",
-        help="ssh box: the stage dir of a detached `pls run` on the card (e.g. one you --adopt); the lease then stays"
-        " held while that run lives, and `pls run --stop` stops it",
+        help="the stage of a detached `pls run` on the card (e.g. one you --adopt), as its dir or its id (resolved"
+        " under the pool's res-eval dir); the lease then records that run, and `pls run --stop` stops it",
     )
     cl.add_argument(
         "--wait",
