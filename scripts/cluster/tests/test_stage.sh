@@ -46,6 +46,8 @@ printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nC
 printf '#!/usr/bin/env bash\n#SBATCH -p test\n' > "$T/scripts/cluster/config/zz/submit_job_slurm.sh"
 dev() { PATH="$T/bin:$PATH" HOME="$T" CLUSTER=zz LOCAL_ISAACLAB_DIR="$L" bash "$T/scripts/cluster/cluster_dev/cluster_dev.sh" "$@"; }
 ntrees() { ls -d "$R"/trees/"$1"-* 2>/dev/null | grep -c . ; }
+# waits (up to 10 s) for a stage's discarded copies, deleted in the background, to be gone
+gone() { for _ in $(seq 50); do ls -d "$R"/trees/"$1"-*.partial.* "$R"/trees/"$1"-*.discard >/dev/null 2>&1 || return 0; sleep 0.2; done; }
 
 fails=0
 check() {
@@ -156,6 +158,7 @@ check "an upload failure is not reported as staged" "[ $rc -ne 0 ] && ! grep -q 
 dev stage conc hcrl_isaaclab=feat > "$T/out_c1" 2>&1 &
 dev stage conc hcrl_isaaclab=feat > "$T/out_c2" 2>&1 &
 wait
+gone conc
 check "concurrent stages give one tree" "[ \$(ntrees conc) -eq 1 ] && [ -f \"\$(ls -d '$R'/trees/conc-*)/.complete\" ] && ! ls -d '$R'/trees/conc-*.partial.* 2>/dev/null"
 
 dev trees > "$T/out5" 2>&1
@@ -305,6 +308,23 @@ fp_tree="$(ls -d "$R"/trees/fp-* 2>/dev/null | head -1)"
 chmod -R u+w "$fp_tree" && rm -rf "$fp_tree" && touch "$fp_tree"
 dev stage fp hcrl_isaaclab=feat > "$T/out_fp2" 2>&1
 check "a stray file at a tree's path is replaced by the restaged tree" "[ $? -eq 0 ] && [ -d '$fp_tree' ] && [ -f '$fp_tree/.complete' ]"
+
+# Two stages of the same refs (pls run --seeds): the one whose rename loses uses the winner's tree, prints no mv error,
+# and leaves its own copy to a detached delete instead of waiting for it
+mkdir -p "$T/racebin"
+cat > "$T/racebin/mv" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = -T ] && [[ "$2" == *.partial.* ]] && [[ "$3" != *.discard ]] && [ ! -e "$3" ]; then cp -a "$2" "$3"; fi
+exec /bin/mv "$@"
+EOF
+chmod +x "$T/racebin/mv"
+PATH="$T/racebin:$PATH" dev stage race hcrl_isaaclab=feat > "$T/out_race" 2>&1
+rc=$?
+gone race
+check "a stage that loses the rename still succeeds" "[ $rc -eq 0 ] && grep -q 'finished first' '$T/out_race' && [ \$(ntrees race) -eq 1 ]"
+check "its lost rename prints no mv error" "! grep -q '^mv:' '$T/out_race'"
+check "it names the winner's tree" "grep -q -- \"--tree \$(basename \"\$(ls -d '$R'/trees/race-*)\") --\" '$T/out_race'"
+check "its discarded copy is removed in the background" "! ls -d '$R'/trees/race-*.partial.* '$R'/trees/race-*.discard 2>/dev/null"
 
 if [ "$fails" -ne 0 ]; then
     ls -la "$R/trees"
