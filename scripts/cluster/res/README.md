@@ -151,6 +151,10 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
 - `--detach` starts the run in its own session and returns, printing how to follow its log and stop it. The run
   owns its stage dir, which its lease records, and the lease stays held until the card goes idle. `--timeout`
   and `--stall` do not apply to a detached run.
+- `--seeds 42,43,44` with `--detach` launches one run per seed at once, each with `--seed <s>` and the same
+  `--run_name`: `--on` names one card (or `lease:<id>`) per seed, or a pool for any free cards. Each launch's
+  output streams prefixed `[seed=<s> <card>]`, so every run's start or failure shows as it happens; the command exits
+  with the worst launch's status.
 - A detached `train` run is then followed, so launch it in the background: the launch waits for its first
   `Learning iteration` (failing if the run ends or 40 min pass first), arms an async recorder when the run records
   async (`--eval`/`--video async`), then stays on `scripts/tools/watch_run.sh` until the run ends. Its exit is the
