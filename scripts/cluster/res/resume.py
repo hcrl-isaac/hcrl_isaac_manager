@@ -232,6 +232,11 @@ def _resume(
         event(kind="resume_failed", label=label, holder=holder, cut_job=stage.t.job, new_job=new_job, why=str(e))
         print(f"{e}; `pls run --watch --holder {holder}` on the run queues a fresh one", file=sys.stderr)
         return None
+    # a hold can queue for hours: a run stopped meanwhile (`pls run --stop`) stays stopped
+    if move.read_stage(stage, "stop") is not None:
+        print(f"[resume] {label}: not resumed: stopped on purpose while hold {new_job} queued", file=sys.stderr)
+        event(kind="resume_refused", label=label, holder=holder, new_job=new_job, why="stopped while its hold queued")
+        return None
     gpus = int(move.launch_value(opts, "--gpus") or 1)
     on = f"{node}:{new_job}" if gpus > 1 else f"{node}:{new_job}:{stage.t.gpu}"
     wt, made = move.pin_code(stage, f"resume-{stage.t.job}-{int(time.time())}")
