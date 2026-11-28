@@ -291,10 +291,15 @@ dev stage --no-space-check full hcrl_isaaclab=feat > /dev/null 2>&1
 check "--no-space-check stages anyway" "[ \$(ntrees full) -eq 1 ]"
 rm "$T/bin/lfs"
 
-# each stage keeps the newest 5 trees of its name, and any a run still uses
+# each stage keeps the newest 5 trees of its name, any a run still uses, and any used within TREE_MIN_AGE_DAYS
 mkdir -p "$dt/.in-use" && touch "$dt/.in-use/node7.99"
-for i in 1 2 3 4 5 6; do echo "v$i" > "$G/whole_new.py"; dev stage > /dev/null 2>&1; done
+for i in 1 2 3 4 5 6; do echo "v$i" > "$G/whole_new.py"; dev stage > "$T/out_p$i" 2>&1; done
+check "a recently used tree beyond the newest 5 is kept" "[ \$(ntrees default) -eq 7 ] && grep -q 'used within' '$T/out_p6'"
+i=0  # distinct ages in their staging order, so which trees fall past the newest 5 is fixed
+for d in $(ls -1td "$R"/trees/default-*/ | tail -n +2); do i=$((i + 1)); touch -d "$((30 + i)) days ago" "$d"; done
+dev stage > /dev/null 2>&1
 check "older trees are pruned" "[ \$(ntrees default) -eq 6 ]"
+check "each removal is logged on the cluster" "grep -q 'removing default-' '$R/trees/.removal.log'"
 check "the one in use is kept" "[ -d '$dt' ]"
 check "the newest is what default resolves to" "grep -qx v6 \"\$(dev __resolve_tree default 2>/dev/null)/resources/hcrl_isaaclab/whole_new.py\""
 rm -f "$G/whole_new.py"
