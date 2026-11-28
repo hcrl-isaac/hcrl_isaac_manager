@@ -116,11 +116,18 @@ def _ago(ts: float) -> str:
     return f"{mins // 60}h{mins % 60:02d}m" if mins >= 60 else f"{mins}m"
 
 
+def _lapse(lease: ls.Lease) -> str:
+    """``, lapses in Nm`` for an idle lease, else ""."""
+    left = ls.lapses_in(lease, lease_windows())
+    return "" if left is None else f", {'unused' if not lease.last_active else 'idle'}: lapses in {int(left // 60)}m"
+
+
 def _lease_text(lease: ls.Lease, card: Card) -> str:
     tag = "CONFLICT " if lease.conflict else ""
     if card.state == "held" and not card.procs and card.util < HELD_UTIL:
         tag += "held, no process; "
-    return f"[{tag}{lease.holder}: {lease.note or lease.id}, {_ago(lease.created)}]"
+    stage = f", stage {lease.stage.rstrip('/').rsplit('/', 1)[-1]}" if lease.stage else ""
+    return f"[{tag}{lease.holder}: {lease.note or lease.id}, {_ago(lease.created)}{stage}{_lapse(lease)}]"
 
 
 def _reservation_lines(reservations: list[ls.Reservation], leases: list[ls.Lease]) -> list[str]:
@@ -792,11 +799,12 @@ def cmd_leases(_args: argparse.Namespace, _pools: list[Pool]) -> None:
         if ls.is_cpu(x):  # no card to watch: it ends with its run
             act = f"{x.cpus} cores ({x.cores}) since {_ago(x.created)} ago, held while its run lives"
         if x.idle_since:
-            act += f", idle since {_ago(x.idle_since)} ago"
+            act += f", idle since {_ago(x.idle_since)} ago{_lapse(x).replace(', unused:', ',').replace(', idle:', ',')}"
         box = f", time box ends in {int((x.expires - time.time()) // 60)}m" if x.expires else ""
         flag = " CONFLICT" if x.conflict else ""
         flag += f" YIELDS to {x.yield_to}" if x.yield_to else ""
-        extra = "".join(f" [{k} {v}]" for k, v in (("run", x.run), ("from", x.previous)) if v)
+        stage = x.stage.rstrip("/").rsplit("/", 1)[-1] if x.stage else ""
+        extra = "".join(f" [{k} {v}]" for k, v in (("run", x.run), ("from", x.previous), ("stage", stage)) if v)
         print(f"{x.id}  {x.card:<22} {x.report:<28} {x.holder:<24} {act}{box}{flag}  {x.note}{extra}")
     if reserved:
         print("\nreservations:")

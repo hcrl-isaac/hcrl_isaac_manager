@@ -172,6 +172,10 @@ pls run --on any --holder "<session>" --cmd -- nvidia-smi                       
   lease. A lease that records no run (one taken before `--stop` existed) is just released.
   `--keep-lease` keeps the card leased once the run is gone, so a relaunch (`pls run --on lease:<id>`) needs no
   reclaim and the card is never unheld in between. Like any lease it lapses after 30 min idle, counted from the stop.
+- `pls run --stop --stage <id> --on <cluster|host> --holder <you>` stops a run no lease records any more (its lease
+  released or lapsed while it ran): the stage's recorded launch must name you as holder, and a stage a live lease
+  still records is sent to `--stop lease:<id> --stage <id>`. `pls res status` and `pls res leases` show each lease's
+  stage id.
 - A detached `train.py` run on a SLURM card resumes itself when its hold ends under it (sacct `TIMEOUT`, `NODE_FAIL` or
   `PREEMPTED`): its watch queues one replacement hold per cut hold (same cluster, partition, `--time`; the first of the
   hold's runs to notice queues it, the rest share it), waits for it, and relaunches each cut run on the same card index

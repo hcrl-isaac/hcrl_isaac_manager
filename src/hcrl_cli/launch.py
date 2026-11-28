@@ -26,6 +26,7 @@ USAGE = """pls run <script> [args]
        pls run [--on TARGET] [--wt NAME] [card options] --cmd -- <command> [args]
        pls run --on CLUSTER --batch [--tree N | --wt NAME] -- <script> [args]
        pls run --stop LEASE --holder YOU    (stop a --detach run on that lease and release the lease)
+       pls run --stop --stage ID --on CLUSTER|HOST --holder YOU    (stop your run no lease records any more)
        pls run --stop LEASE --holder YOU --stage ID    (stop only that run; the lease keeps its other runs)"""
 EPILOG = """targets (--on):
   (none)           this machine, with the ilab venv
