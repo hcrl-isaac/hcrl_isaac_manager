@@ -266,5 +266,22 @@ class EventsTest(StateTest):
         self.assertEqual([json.loads(c.args[0])["kind"] for c in out.call_args_list], ["resumed", "hold_queued"])
 
 
+class SlurmProfileTest(unittest.TestCase):
+    """A lease on a hold that already ended still maps to its cluster profile, so `pls run --watch` can resume it."""
+
+    def test_a_single_profile_cluster_needs_no_lookup(self) -> None:
+        with mock.patch.object(ev.subprocess, "run", side_effect=AssertionError("looked up a job")):
+            self.assertEqual(ev.slurm_profile("horizon (horizon)", "105795", [POOL]).name, "horizon")
+
+    def test_an_ended_job_falls_back_instead_of_ending_the_watch(self) -> None:
+        pools = [Pool("amd-rtx", "slurm", {"login": "u@s3"}), Pool("rtx-small", "slurm", {"login": "u@s3"})]
+        gone = subprocess.CompletedProcess([], 0, "", "slurm_load_jobs error: Invalid job id specified")
+        with mock.patch.object(ev.subprocess, "run", lambda *a, **k: gone), mock.patch("sys.stderr"):
+            self.assertEqual(ev.slurm_profile("stampede3 (amd-rtx, rtx-small)", "1", pools).name, "amd-rtx")
+        sacct = subprocess.CompletedProcess([], 0, "rtx-small\n", "")
+        with mock.patch.object(ev.subprocess, "run", lambda *a, **k: sacct):
+            self.assertEqual(ev.slurm_profile("stampede3 (amd-rtx, rtx-small)", "1", pools).name, "rtx-small")
+
+
 if __name__ == "__main__":
     unittest.main()
