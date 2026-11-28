@@ -125,6 +125,7 @@ class AfterCutTest(StateTest):
     ) -> tuple[ev.Stage | None, list[list[str]]]:
         files = {"status": None, "stop": None, "pls_argv.json": json.dumps(ARGV), "resumes": resumes,
                  "log": "https://wandb.ai/e/p/runs/abc Learning iteration 1450/2000"}  # fmt: skip
+        self.files = files
         launched, self.armed = [], []
 
         def run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess:
@@ -194,6 +195,16 @@ class AfterCutTest(StateTest):
         self.assertEqual(self.events()[0]["kind"], "resume_failed")
         with resume._locked() as table:
             self.assertEqual(table, {"holds": {}, "pending": {}, "resumed": {}}, "a re-armed watch queues a fresh hold")
+
+    def test_a_run_stopped_while_its_hold_queued_is_not_relaunched(self) -> None:
+        def stopped_meanwhile(t: ev.Target, job: str, holder: str) -> str:
+            self.files["stop"] = ""  # `pls run --stop` touches an empty stop file
+            return "c102-007"
+
+        new, launched = self.run_cut(wait=stopped_meanwhile)
+        self.assertEqual((new, launched), (None, []))
+        [row] = self.events()
+        self.assertEqual((row["kind"], row["new_job"]), ("resume_refused", "105901"))
 
     def test_a_resume_is_pending_while_it_runs_and_cleared_after(self) -> None:
         seen = []
