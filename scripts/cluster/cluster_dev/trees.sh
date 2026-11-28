@@ -8,7 +8,7 @@ TREES_DIR="${CLUSTER_TREES_DIR:-${REMOTE_ISAACLAB_DIR}/trees}"  # a profile poin
 TREE_RW_DIRS=(logs outputs wandb)  # mount points that redirect run output out of a staged repo
 TREE_DATA_REPOS=(motion_datasets)  # cluster-side data, shared by every tree: a whole stage adds new files, never trees
 TREE_KEEP=5  # complete trees kept per name (besides any a run still uses); older ones go after the next stage
-TREE_MIN_AGE_DAYS=7  # a tree staged or reused within this many days is never pruned by count: a run may read it
+TREE_MIN_AGE_DAYS=7  # a tree staged, reused or launched from within this many days is never pruned by count
 TREE_MDT_MAX=98  # refuse to stage once the metadata target holding the trees is this % full (Lustre inodes)
 
 # The whole workspace as on disk: every git repo under resources/, less the data repos and the repos a profile
@@ -238,6 +238,7 @@ cmd_stage() {  # stage [--no-space-check] [NAME] [REPO=REF|REPO=PATH ...] : uplo
     tree="${TREES_DIR}/${name}-${fp}"
     if on_login "[ -f '${tree}/.complete' ]"; then
         log "Tree already staged: ${tree}"
+        on_login "touch '${tree}'"  # its mtime is its last use: pruning by age and count reads it
     else
         STAGE_PART="${tree}.partial.$$"
         on_login "mkdir -p '${STAGE_PART}/resources' '${STAGE_PART}/scripts/cluster/cluster_dev'" || exit 1
