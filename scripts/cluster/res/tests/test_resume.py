@@ -118,11 +118,18 @@ class ReplacementTest(StateTest):
         self.assertEqual(node, "c102-007")
         self.assertEqual([e["kind"] for e in self.events()], ["hold_pending"])
 
-    def test_a_failed_squeue_on_a_pending_hold_keeps_waiting(self) -> None:
-        squeue = iter(["", "RUNNING|c102-007|None"])  # "" is what _login returns when squeue itself fails
-        sacct = iter(["PENDING\n"])
-        with mock.patch.object(resume, "_login", lambda t, cmd, timeout=60: next(squeue if "squeue" in cmd else sacct)):
-            self.assertEqual(resume.wait_running(_stage().t, "105901", "Kick", sleep=lambda s: None), "c102-007")
+    def test_a_failed_squeue_on_a_live_hold_keeps_waiting(self) -> None:
+        for state in ("PENDING", "CONFIGURING", "REQUEUE_HOLD"):  # -P keeps long states whole
+            # "" is what _login returns when squeue itself fails
+            answers = {"squeue": iter(["", "RUNNING|c102-007|None"]), "sacct": iter([f"{state}\n"]), "calls": []}
+
+            def login(t: ev.Target, cmd: str, timeout: float = 60, answers: dict = answers) -> str:
+                answers["calls"].append(cmd)
+                return next(answers["squeue" if "squeue" in cmd else "sacct"])
+
+            with self.subTest(state), mock.patch.object(resume, "_login", login):
+                self.assertEqual(resume.wait_running(_stage().t, "105901", "Kick", sleep=lambda s: None), "c102-007")
+                self.assertIn("-P", next(c for c in answers["calls"] if "sacct" in c).split())
 
     def test_a_hold_sacct_says_ended_ends_the_wait(self) -> None:
         with (
@@ -136,9 +143,9 @@ class ReplacementTest(StateTest):
 
 class AfterCutTest(StateTest):
     def run_cut(
-        self, resumes: str | None = None, confirm: str = "ok", wait: object = None
+        self, resumes: str | None = None, confirm: str = "ok", wait: object = None, stop: str | None = None
     ) -> tuple[ev.Stage | None, list[list[str]]]:
-        files = {"status": None, "stop": None, "pls_argv.json": json.dumps(ARGV), "resumes": resumes,
+        files = {"status": None, "stop": stop, "pls_argv.json": json.dumps(ARGV), "resumes": resumes,
                  "log": "https://wandb.ai/e/p/runs/abc Learning iteration 1450/2000"}  # fmt: skip
         self.files = files
         launched, self.armed = [], []
@@ -235,6 +242,15 @@ class AfterCutTest(StateTest):
         [(_, st)] = resume.pending_stages("Kick", [POOL])
         self.assertEqual(st.dir, "/w/artifacts/res-eval/abc")
         self.assertEqual(resume.claim(st, "Kick"), "", "the re-armed watch claims it")
+
+    def test_a_failed_resume_a_later_watch_finds_stopped_is_dropped(self) -> None:
+        with resume._locked() as table:
+            table["pending"]["/w/artifacts/res-eval/abc"] = {"holder": "Kick", "pool": "horizon", "host": "c101-001",
+                                                             "gpu": 2, "job": "100", "uuid": "", "pid": 0,
+                                                             "failed": "105901", "failed_by": 1}  # fmt: skip
+        new, launched = self.run_cut(stop="")
+        self.assertEqual((new, launched), (None, []))
+        self.assertEqual(resume.pending_stages("Kick", [POOL]), [], "decided: not left for every later watch")
 
     def test_a_run_stopped_while_its_hold_queued_is_not_relaunched(self) -> None:
         def stopped_meanwhile(t: ev.Target, job: str, holder: str) -> str:
