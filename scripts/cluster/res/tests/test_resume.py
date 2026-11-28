@@ -125,6 +125,7 @@ class AfterCutTest(StateTest):
     ) -> tuple[ev.Stage | None, list[list[str]]]:
         files = {"status": None, "stop": None, "pls_argv.json": json.dumps(ARGV), "resumes": resumes,
                  "log": "https://wandb.ai/e/p/runs/abc Learning iteration 1450/2000"}  # fmt: skip
+        self.files = files
         launched, self.armed = [], []
 
         def run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess:
@@ -214,6 +215,16 @@ class AfterCutTest(StateTest):
         self.assertEqual(self.events()[0]["kind"], "resume_failed")
         with resume._locked() as table:
             self.assertEqual(table, {"holds": {}, "pending": {}, "resumed": {}}, "a re-armed watch queues a fresh hold")
+
+    def test_a_run_stopped_while_its_hold_queued_is_not_relaunched(self) -> None:
+        def stopped_meanwhile(t: ev.Target, job: str, holder: str) -> str:
+            self.files["stop"] = ""  # `pls run --stop` touches an empty stop file
+            return "c102-007"
+
+        new, launched = self.run_cut(wait=stopped_meanwhile)
+        self.assertEqual((new, launched), (None, []))
+        [row] = self.events()
+        self.assertEqual((row["kind"], row["new_job"]), ("resume_refused", "105901"))
 
     def test_a_resume_is_pending_while_it_runs_and_cleared_after(self) -> None:
         seen = []
@@ -337,6 +348,23 @@ class ReleasedLeaseTest(StateTest):
         )
         t = found[0][1].t
         self.assertEqual((t.pool, t.host, t.gpu, t.job, t.uuid), ("horizon", "c103-021", 3, "107937", "GPU-0b4c"))
+
+
+class SlurmProfileTest(unittest.TestCase):
+    """A lease on a hold that already ended still maps to its cluster profile, so `pls run --watch` can resume it."""
+
+    def test_a_single_profile_cluster_needs_no_lookup(self) -> None:
+        with mock.patch.object(ev.subprocess, "run", side_effect=AssertionError("looked up a job")):
+            self.assertEqual(ev.slurm_profile("horizon (horizon)", "105795", [POOL]).name, "horizon")
+
+    def test_an_ended_job_falls_back_instead_of_ending_the_watch(self) -> None:
+        pools = [Pool("amd-rtx", "slurm", {"login": "u@s3"}), Pool("rtx-small", "slurm", {"login": "u@s3"})]
+        gone = subprocess.CompletedProcess([], 0, "", "slurm_load_jobs error: Invalid job id specified")
+        with mock.patch.object(ev.subprocess, "run", lambda *a, **k: gone), mock.patch("sys.stderr"):
+            self.assertEqual(ev.slurm_profile("stampede3 (amd-rtx, rtx-small)", "1", pools).name, "amd-rtx")
+        sacct = subprocess.CompletedProcess([], 0, "rtx-small\n", "")
+        with mock.patch.object(ev.subprocess, "run", lambda *a, **k: sacct):
+            self.assertEqual(ev.slurm_profile("stampede3 (amd-rtx, rtx-small)", "1", pools).name, "rtx-small")
 
 
 if __name__ == "__main__":

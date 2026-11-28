@@ -109,7 +109,7 @@ if [ -n "${NODE_EXEC_RESOURCES:-}" ]; then
     else
         IN_USE="$(dirname "$RESOURCES")/.in-use/$(hostname -s).$$"
     fi
-    mkdir -p "$(dirname "$IN_USE")" && touch "$IN_USE"
+    mkdir -p "$(dirname "$IN_USE")" && touch "$IN_USE" "$(dirname "$RESOURCES")"  # the tree's mtime: its last use
     trap 'exit 143' TERM INT HUP
 fi
 EXT_BINDS=""

@@ -37,6 +37,14 @@ GRACE_MIN = 30
 IDLE_MIN = 30
 
 
+def lapses_in(lease: Lease, windows: dict[str, float], now: float | None = None) -> float | None:
+    """Seconds until an idle lease lapses (``release_idle``'s rule), or None while it is not idle."""
+    if not lease.idle_since or lease.cpus:
+        return None
+    window = windows["idle_min" if lease.last_active else "grace_min"] * 60
+    return max(0.0, lease.idle_since + window - (time.time() if now is None else now))
+
+
 class LeaseStoreError(Exception):
     """The lease store could not be read or locked; callers must not act on an empty lease list."""
 

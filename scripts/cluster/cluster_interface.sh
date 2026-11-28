@@ -208,7 +208,8 @@ cmd_job() {  # job [--tree NAME] [--script PATH] [args]: a batch job on a staged
     printf '%s\n' "$out"
     # the tree stays while the job is queued or running: `trees rm` and pruning check squeue for this marker
     id="$(grep -oE 'Submitted batch job [0-9]+' <<< "$out" | grep -oE '[0-9]+$' | tail -1)"
-    [ -z "$id" ] || ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" "mkdir -p '${tree}/.in-use' && touch '${tree}/.in-use/${id}.nostep'" < /dev/null
+    [ -z "$id" ] || ssh "${SSH_OPTS[@]}" "$CLUSTER_LOGIN" \
+        "mkdir -p '${tree}/.in-use' && touch '${tree}/.in-use/${id}.nostep' '${tree}'" < /dev/null  # mtime: last use
 }
 
 # this profile's own sbatch flags (e.g. its partition), from submit_job_slurm.sh

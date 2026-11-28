@@ -407,11 +407,12 @@ class SlurmTest(unittest.TestCase):
                 done = mock.Mock(returncode=0, stdout=partition, stderr="")
                 with mock.patch.object(ev.subprocess, "run", return_value=done):
                     self.assertEqual(ev.slurm_profile(label, "3566414", pools).name, want)
-        # a job squeue cannot read is refused rather than guessed
+        # a job neither squeue nor sacct can read (an ended hold's lease) warns and takes the first profile:
+        # refusing would end a whole `pls run --watch` over one lease
         gone = mock.Mock(returncode=1, stdout="", stderr="slurm_load_jobs error: Invalid job id")
-        with mock.patch.object(ev.subprocess, "run", return_value=gone), self.assertRaises(SystemExit) as cm:
-            ev.slurm_profile(label, "3566414", pools)
-        self.assertIn("Invalid job id", str(cm.exception.code))
+        with mock.patch.object(ev.subprocess, "run", return_value=gone), mock.patch("sys.stderr") as err:
+            self.assertEqual(ev.slurm_profile(label, "3566414", pools).name, "amd-rtx")
+        self.assertIn("Invalid job id", "".join(c.args[0] for c in err.write.call_args_list))
 
     def test_a_with_repo_joins_the_containers_pythonpath_after_its_env(self) -> None:
         t = ev.Target("horizon", "slurm", "c125-013", 0, "u@login", "/w", "/w/artifacts", job="71017", uuid="GPU-a")
@@ -1909,19 +1910,50 @@ class OwnLeaseTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         with ev.ls.locked_store() as leases:
-            leases.append(ev.ls.Lease("a6de9c", "k1", "c571-003:6", "horizon", "Latent", job="3747515"))
-            leases.append(ev.ls.Lease("b1", "k2", "c571-003:7", "horizon", "Kick", job="3747515"))
+            # SLURM leases record their card as res.claim writes it: the label `host:gpu (job J)`
+            leases.append(ev.ls.Lease("a6de9c", "k1", "c571-003:6 (job 3747515)", "horizon", "Latent", job="3747515"))
+            leases.append(ev.ls.Lease("b1", "k2", "c571-003:7 (job 3747515)", "horizon", "Kick", job="3747515"))
+            leases.append(ev.ls.Lease("d1", "k4", "pepi:2", "larg", "Latent"))
             leases.append(ev.ls.Lease("c1", "k3", "pepi:-1", "larg", "Latent", cpus=4))
 
     def test_the_callers_own_card_resolves_to_its_lease_in_either_spelling(self) -> None:
         self.assertEqual(ev.own_lease("c571-003:3747515:6", "Latent"), "a6de9c")
         self.assertEqual(ev.own_lease("c571-003:6", "Latent"), "a6de9c")
+        self.assertEqual(ev.own_lease("pepi:2", "Latent"), "d1", "an ssh box's card has no job label")
 
     def test_another_holders_card_another_job_or_a_cpu_lease_do_not(self) -> None:
         self.assertEqual(ev.own_lease("c571-003:3747515:7", "Latent"), "", "a peer's lease stays the claim's to refuse")
         self.assertEqual(ev.own_lease("c571-003:999:6", "Latent"), "")
         self.assertEqual(ev.own_lease("pepi:-1", "Latent"), "")
         self.assertEqual(ev.own_lease("horizon", "Latent"), "")
+
+
+class ResolveRootTest(unittest.TestCase):
+    """`--root <name>` on an ssh box is the install beside the box's workspace; a missing one is refused by path."""
+
+    def setUp(self) -> None:
+        self.t = ev.Target("larg", "ssh", "pepi", 0, ssh="u@pepi", workspace="/var/local/u/hcrl_isaac_manager")
+        self.probed: list[str] = []
+
+    def probe(self, rc: int) -> mock._patch:
+        def run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess:
+            self.probed.append(cmd[-1])
+            return subprocess.CompletedProcess(cmd, rc)
+
+        return mock.patch.object(ev.subprocess, "run", run)
+
+    def test_a_bare_name_sits_beside_the_workspace_and_a_path_stays_as_given(self) -> None:
+        with self.probe(0):
+            self.assertEqual(ev.resolve_root(self.t, "isaac3-v300"), "/var/local/u/isaac3-v300")
+            self.assertEqual(ev.resolve_root(self.t, "/opt/isaac3"), "/opt/isaac3")
+        self.assertEqual(
+            self.probed, ["[ -x /var/local/u/isaac3-v300/venv/bin/python ]", "[ -x /opt/isaac3/venv/bin/python ]"]
+        )
+
+    def test_a_root_without_a_venv_is_refused_naming_the_path_tried(self) -> None:
+        with self.probe(1), self.assertRaises(SystemExit) as cm:
+            ev.resolve_root(self.t, "isaac3")
+        self.assertIn("/var/local/u/isaac3/venv/bin/python", str(cm.exception.code))
 
 
 if __name__ == "__main__":

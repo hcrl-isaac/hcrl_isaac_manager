@@ -46,6 +46,8 @@ printf 'CLUSTER_ISAACLAB_DIR=%s\nCLUSTER_LOGIN=fake@host\nCLUSTER_SIF_PATH=/x\nC
 printf '#!/usr/bin/env bash\n#SBATCH -p test\n' > "$T/scripts/cluster/config/zz/submit_job_slurm.sh"
 dev() { PATH="$T/bin:$PATH" HOME="$T" CLUSTER=zz LOCAL_ISAACLAB_DIR="$L" bash "$T/scripts/cluster/cluster_dev/cluster_dev.sh" "$@"; }
 ntrees() { ls -d "$R"/trees/"$1"-* 2>/dev/null | grep -c . ; }
+# waits (up to 10 s) for a stage's discarded copies, deleted in the background, to be gone
+gone() { for _ in $(seq 50); do ls -d "$R"/trees/"$1"-*.partial.* "$R"/trees/"$1"-*.discard >/dev/null 2>&1 || return 0; sleep 0.2; done; }
 
 fails=0
 check() {
@@ -156,6 +158,7 @@ check "an upload failure is not reported as staged" "[ $rc -ne 0 ] && ! grep -q 
 dev stage conc hcrl_isaaclab=feat > "$T/out_c1" 2>&1 &
 dev stage conc hcrl_isaaclab=feat > "$T/out_c2" 2>&1 &
 wait
+gone conc
 check "concurrent stages give one tree" "[ \$(ntrees conc) -eq 1 ] && [ -f \"\$(ls -d '$R'/trees/conc-*)/.complete\" ] && ! ls -d '$R'/trees/conc-*.partial.* 2>/dev/null"
 
 dev trees > "$T/out5" 2>&1
@@ -291,10 +294,28 @@ dev stage --no-space-check full hcrl_isaaclab=feat > /dev/null 2>&1
 check "--no-space-check stages anyway" "[ \$(ntrees full) -eq 1 ]"
 rm "$T/bin/lfs"
 
-# each stage keeps the newest 5 trees of its name, and any a run still uses
+# each stage keeps the newest 5 trees of its name, any a run still uses, and any used within TREE_MIN_AGE_DAYS
 mkdir -p "$dt/.in-use" && touch "$dt/.in-use/node7.99"
-for i in 1 2 3 4 5 6; do echo "v$i" > "$G/whole_new.py"; dev stage > /dev/null 2>&1; done
+for i in 1 2 3 4 5 6; do echo "v$i" > "$G/whole_new.py"; dev stage > "$T/out_p$i" 2>&1; done
+check "a recently used tree beyond the newest 5 is kept" "[ \$(ntrees default) -eq 7 ] && grep -q 'used within' '$T/out_p6'"
+i=0  # distinct ages in their staging order, so which trees fall past the newest 5 is fixed
+for d in $(ls -1td "$R"/trees/default-*/ | tail -n +2); do i=$((i + 1)); touch -d "$((30 + i)) days ago" "$d"; done
+dev stage > /dev/null 2>&1
 check "older trees are pruned" "[ \$(ntrees default) -eq 6 ]"
+check "each removal is logged on the cluster" "grep -q 'removing default-' '$R/trees/.removal.log'"
+
+# reuse is use: a tree staged long ago but restaged (or launched from) today reads as recent to the prune
+dev stage reuse hcrl_isaaclab=feat > /dev/null 2>&1
+old=$(ls -d "$R"/trees/reuse-*)
+touch -d '30 days ago' "$old"
+dev stage reuse hcrl_isaaclab=feat > "$T/out_reuse" 2>&1
+check "restaging an old tree's refs refreshes its mtime"     "grep -q 'already staged' '$T/out_reuse' && [ -n \"\$(find '$old' -maxdepth 0 -mtime -1)\" ]"
+touch -d '30 days ago' "$old"
+( RESOURCES="$old/resources" SLURM_JOB_ID=4243 SLURM_STEP_ID=0
+  IN_USE="$old/.in-use/4243.0"
+  eval "$(grep -m1 'touch "\$IN_USE"' "$REPO/scripts/cluster/cluster_dev/node_exec.sh")" )
+check "a launch taking its in-use marker refreshes its tree's mtime"     "[ -f '$old/.in-use/4243.0' ] && [ -n \"\$(find '$old' -maxdepth 0 -mtime -1)\" ]"
+rm -rf "$old/.in-use"
 check "the one in use is kept" "[ -d '$dt' ]"
 check "the newest is what default resolves to" "grep -qx v6 \"\$(dev __resolve_tree default 2>/dev/null)/resources/hcrl_isaaclab/whole_new.py\""
 rm -f "$G/whole_new.py"
@@ -305,6 +326,23 @@ fp_tree="$(ls -d "$R"/trees/fp-* 2>/dev/null | head -1)"
 chmod -R u+w "$fp_tree" && rm -rf "$fp_tree" && touch "$fp_tree"
 dev stage fp hcrl_isaaclab=feat > "$T/out_fp2" 2>&1
 check "a stray file at a tree's path is replaced by the restaged tree" "[ $? -eq 0 ] && [ -d '$fp_tree' ] && [ -f '$fp_tree/.complete' ]"
+
+# Two stages of the same refs (pls run --seeds): the one whose rename loses uses the winner's tree, prints no mv error,
+# and leaves its own copy to a detached delete instead of waiting for it
+mkdir -p "$T/racebin"
+cat > "$T/racebin/mv" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = -T ] && [[ "$2" == *.partial.* ]] && [[ "$3" != *.discard ]] && [ ! -e "$3" ]; then cp -a "$2" "$3"; fi
+exec /bin/mv "$@"
+EOF
+chmod +x "$T/racebin/mv"
+PATH="$T/racebin:$PATH" dev stage race hcrl_isaaclab=feat > "$T/out_race" 2>&1
+rc=$?
+gone race
+check "a stage that loses the rename still succeeds" "[ $rc -eq 0 ] && grep -q 'finished first' '$T/out_race' && [ \$(ntrees race) -eq 1 ]"
+check "its lost rename prints no mv error" "! grep -q '^mv:' '$T/out_race'"
+check "it names the winner's tree" "grep -q -- \"--tree \$(basename \"\$(ls -d '$R'/trees/race-*)\") --\" '$T/out_race'"
+check "its discarded copy is removed in the background" "! ls -d '$R'/trees/race-*.partial.* '$R'/trees/race-*.discard 2>/dev/null"
 
 if [ "$fails" -ne 0 ]; then
     ls -la "$R/trees"

@@ -116,11 +116,18 @@ def _ago(ts: float) -> str:
     return f"{mins // 60}h{mins % 60:02d}m" if mins >= 60 else f"{mins}m"
 
 
+def _lapse(lease: ls.Lease) -> str:
+    """``, lapses in Nm`` for an idle lease, else ""."""
+    left = ls.lapses_in(lease, lease_windows())
+    return "" if left is None else f", {'unused' if not lease.last_active else 'idle'}: lapses in {int(left // 60)}m"
+
+
 def _lease_text(lease: ls.Lease, card: Card) -> str:
     tag = "CONFLICT " if lease.conflict else ""
     if card.state == "held" and not card.procs and card.util < HELD_UTIL:
         tag += "held, no process; "
-    return f"[{tag}{lease.holder}: {lease.note or lease.id}, {_ago(lease.created)}]"
+    stage = f", stage {lease.stage.rstrip('/').rsplit('/', 1)[-1]}" if lease.stage else ""
+    return f"[{tag}{lease.holder}: {lease.note or lease.id}, {_ago(lease.created)}{stage}{_lapse(lease)}]"
 
 
 def _reservation_lines(reservations: list[ls.Reservation], leases: list[ls.Lease]) -> list[str]:
@@ -262,20 +269,62 @@ def stage_run_states(leases: list[ls.Lease], pools: list[Pool]) -> dict[str, set
 
 
 def live_runs(pools: list[Pool]) -> tuple[dict[str, set[str]], set[str]]:
-    """Check the runs behind the leases that record a stage on an ssh box, outside the lease lock (it reaches the boxes).
+    """Check the runs behind the leases that record a stage, outside the lease lock (it reaches the boxes and logins).
 
     Returns:
-        (report label -> ended stage dirs, ids of card leases whose detached run still runs).
+        (report label -> ended stage dirs on ssh boxes, ids of card leases whose detached run still runs).
     """
     with ls.locked_store() as leases:
         staged = [x for x in leases if ls.is_cpu(x) or (x.stage and not x.job)]
+        on_slurm = [x for x in leases if not ls.is_cpu(x) and x.stage and x.job]
     ended = stage_run_states(staged, pools)
     alive = {
         x.id
         for x in staged
         if not ls.is_cpu(x) and x.report in ended and any(s not in ended[x.report] for s in x.stages or [x.stage])
     }
-    return ended, alive
+    return ended, alive | slurm_live(on_slurm, pools)
+
+
+SLURM_BEAT_S = 120  # a live SLURM runner touches its stage's heartbeat every 2 s
+
+
+def slurm_live(leases: list[ls.Lease], pools: list[Pool]) -> set[str]:
+    """Ids of SLURM card leases whose detached run is still alive (fresh heartbeat, no status), one login call per
+    cluster; a run that idles its card between bursts (a --follow scorer) otherwise reads as an idle lease."""
+    import shlex
+
+    import evaluate as ev
+    import follow
+
+    by_pool: dict[str, list[ls.Lease]] = {}
+    for x in leases:
+        # a cluster's label is "<name> (<profile>, ...)"; its pools are the profiles (horizon, amd-rtx, rtx-small)
+        names = [n.strip() for n in x.report.partition("(")[2].rstrip(")").split(",") if n.strip()] or [x.report]
+        pool = next((p for n in names for p in pools if p.kind == "slurm" and p.name == n), None)
+        if pool is not None:
+            by_pool.setdefault(pool.name, []).append(x)
+    live: set[str] = set()
+    for name, group in by_pool.items():
+        pool = next(p for p in pools if p.name == name)
+        dirs = sorted({d for x in group for d in (*x.stages, x.stage) if d})
+        script = "; ".join(
+            f'd={shlex.quote(d)}; [ -f "$d/status" ] && echo "$d ended" || '
+            f'echo "$d $(( $(date +%s) - $(stat -c %Y "$d/heartbeat" 2>/dev/null || echo 0) ))"'
+            for d in dirs
+        )
+        try:
+            probe = ev.Stage(ev.make_target(pool, "login", 0, "-", "-"))  # login-node commands only: no card needed
+            out = follow._probe(probe, script)
+        except (SystemExit, Exception):  # an unreachable cluster keeps today's behaviour: idle by the card alone
+            continue
+        fresh = {
+            d
+            for d, _, age in (ln.rpartition(" ") for ln in out.splitlines())
+            if age.isdigit() and int(age) < SLURM_BEAT_S
+        }
+        live |= {x.id for x in group if fresh & {*x.stages, x.stage}}
+    return live
 
 
 def cmd_status(args: argparse.Namespace, pools: list[Pool]) -> None:
@@ -485,6 +534,25 @@ def claim(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple[ls.Le
             time.sleep(WAIT_POLL_S)
 
 
+def pool_for_label(label: str, pools: list[Pool]) -> Pool | None:
+    """The pool a card or lease label names: ``local``, ``<pool>/<host>``, or a cluster's ``<name> (<profile>, ...)``."""
+    names = [label.split("/")[0], *[n.strip() for n in label.partition("(")[2].rstrip(")").split(",") if n.strip()]]
+    return next((p for n in names for p in pools if p.name == n), None)
+
+
+def stage_dir(stage: str, card: Card, pools: list[Pool]) -> str:
+    """The absolute stage dir ``stage`` names on ``card``'s pool: as given, or a stage id under its res-eval dir."""
+    if stage.startswith("/"):
+        return stage
+    import evaluate as ev
+
+    pool = pool_for_label(card.pool, pools)
+    if pool is None:
+        sys.exit(f"[res] --stage {stage}: pass the stage's full path (no pool named {card.pool!r} to resolve it in)")
+    t = ev.make_target(pool, card.host, card.index, card.job, card.uuid)
+    return f"{t.scratch}/res-eval/{stage.strip('/')}"
+
+
 def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple[ls.Lease, Card, Report]], dict]:
     """One probe-and-lease attempt of :func:`claim`."""
     reports = probe_all(select_pools(pools, args.pool))
@@ -548,6 +616,7 @@ def _claim_once(args: argparse.Namespace, pools: list[Pool]) -> tuple[list[tuple
                         )
                         lease = ls.new_lease(c, r, args.holder, args.note, args.for_, run=run, shared=shared)
                         if stage := getattr(args, "stage", ""):
+                            stage = stage_dir(stage, c, pools)
                             lease.stage, lease.stages = stage, [stage]
                         leases.append(lease)
                         if res_ is not None and res_.holder != args.holder:
@@ -793,11 +862,12 @@ def cmd_leases(_args: argparse.Namespace, _pools: list[Pool]) -> None:
         if ls.is_cpu(x):  # no card to watch: it ends with its run
             act = f"{x.cpus} cores ({x.cores}) since {_ago(x.created)} ago, held while its run lives"
         if x.idle_since:
-            act += f", idle since {_ago(x.idle_since)} ago"
+            act += f", idle since {_ago(x.idle_since)} ago{_lapse(x).replace(', unused:', ',').replace(', idle:', ',')}"
         box = f", time box ends in {int((x.expires - time.time()) // 60)}m" if x.expires else ""
         flag = " CONFLICT" if x.conflict else ""
         flag += f" YIELDS to {x.yield_to}" if x.yield_to else ""
-        extra = "".join(f" [{k} {v}]" for k, v in (("run", x.run), ("from", x.previous)) if v)
+        stage = x.stage.rstrip("/").rsplit("/", 1)[-1] if x.stage else ""
+        extra = "".join(f" [{k} {v}]" for k, v in (("run", x.run), ("from", x.previous), ("stage", stage)) if v)
         print(f"{x.id}  {x.card:<22} {x.report:<28} {x.holder:<24} {act}{box}{flag}  {x.note}{extra}")
     if reserved:
         print("\nreservations:")
@@ -866,8 +936,8 @@ def main() -> None:
         "--stage",
         default="",
         metavar="DIR",
-        help="ssh box: the stage dir of a detached `pls run` on the card (e.g. one you --adopt); the lease then stays"
-        " held while that run lives, and `pls run --stop` stops it",
+        help="the stage of a detached `pls run` on the card (e.g. one you --adopt), as its dir or its id (resolved"
+        " under the pool's res-eval dir); the lease then records that run, and `pls run --stop` stops it",
     )
     cl.add_argument(
         "--wait",

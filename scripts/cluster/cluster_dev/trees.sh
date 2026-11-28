@@ -8,6 +8,7 @@ TREES_DIR="${CLUSTER_TREES_DIR:-${REMOTE_ISAACLAB_DIR}/trees}"  # a profile poin
 TREE_RW_DIRS=(logs outputs wandb)  # mount points that redirect run output out of a staged repo
 TREE_DATA_REPOS=(motion_datasets)  # cluster-side data, shared by every tree: a whole stage adds new files, never trees
 TREE_KEEP=5  # complete trees kept per name (besides any a run still uses); older ones go after the next stage
+TREE_MIN_AGE_DAYS=7  # a tree staged, reused or launched from within this many days is never pruned by count
 TREE_MDT_MAX=98  # refuse to stage once the metadata target holding the trees is this % full (Lustre inodes)
 
 # The whole workspace as on disk: every git repo under resources/, less the data repos and the repos a profile
@@ -121,7 +122,9 @@ _prune_trees() {  # _prune_trees NAME
     local id
     while IFS= read -r id; do
         [ -n "$id" ] || continue
-        if ( _trees_rm "$id" ) > /dev/null 2>&1; then log "Pruned ${id}"; else log "Kept ${id} (in use)"; fi
+        if ! on_login "[ -n \"\$(find '${TREES_DIR}/${id}' -maxdepth 0 -mtime +${TREE_MIN_AGE_DAYS})\" ]"; then
+            log "Kept ${id} (used within ${TREE_MIN_AGE_DAYS} days)"
+        elif ( _trees_rm "$id" ) > /dev/null 2>&1; then log "Pruned ${id}"; else log "Kept ${id} (in use)"; fi
     done < <(on_login "ls -1td '${TREES_DIR}/${1}'-*/ 2>/dev/null" | sed 's|/$||; s|.*/||' |
         grep -E "^${1//./\\.}-[0-9a-f]{10}$" | tail -n +$((TREE_KEEP + 1)))
 }
@@ -235,6 +238,7 @@ cmd_stage() {  # stage [--no-space-check] [NAME] [REPO=REF|REPO=PATH ...] : uplo
     tree="${TREES_DIR}/${name}-${fp}"
     if on_login "[ -f '${tree}/.complete' ]"; then
         log "Tree already staged: ${tree}"
+        on_login "touch '${tree}'"  # its mtime is its last use: pruning by age and count reads it
     else
         STAGE_PART="${tree}.partial.$$"
         on_login "mkdir -p '${STAGE_PART}/resources' '${STAGE_PART}/scripts/cluster/cluster_dev'" || exit 1
@@ -287,10 +291,10 @@ cmd_stage() {  # stage [--no-space-check] [NAME] [REPO=REF|REPO=PATH ...] : uplo
         on_login "touch '${STAGE_PART}/.complete'" || exit 1
         # a stray non-directory at the tree's path (an old touch after a prune) would block the rename forever
         on_login "[ ! -e '${tree}' ] || [ -d '${tree}' ] || rm -f '${tree}'" || exit 1
-        if on_login "mv -T '${STAGE_PART}' '${tree}'"; then
+        if on_login "mv -T '${STAGE_PART}' '${tree}' 2>/dev/null"; then
             STAGE_PART=""
         elif on_login "[ -f '${tree}/.complete' ]"; then
-            log "Another stage of the same refs finished first; using it."
+            log "Another stage of the same refs finished first; using it (this copy is discarded)."
         else
             err "could not move ${STAGE_PART} to ${tree}"; exit 1
         fi
@@ -309,8 +313,15 @@ _stage_cleanup() {  # trap: drop this run's temporary checkouts and any partial 
         git -C "${entry%%=*}" worktree remove --force "${entry#*=}" 2>/dev/null
     done
     [ -n "${STAGE_WORK:-}" ] && rm -rf "$STAGE_WORK"
-    [ -n "${STAGE_PART:-}" ] && on_login "rm -rf '${STAGE_PART}'" 2>/dev/null
+    [ -n "${STAGE_PART:-}" ] && _discard_part "$STAGE_PART"
     return 0
+}
+
+# Deleting a whole tree on a slow shared filesystem can take most of an hour, so the stage (and the run waiting on it)
+# renames the copy out of the trees' names and leaves the delete to a detached process on the login.
+_discard_part() {  # _discard_part REMOTE_PATH
+    on_login "d='${1}.discard'; mv -T '${1}' \"\$d\" 2>/dev/null || d='${1}'; \
+        nohup setsid sh -c 'chmod -R u+w \"\$1\"; rm -rf \"\$1\"' sh \"\$d\" > /dev/null 2>&1 < /dev/null &" 2>/dev/null
 }
 
 # The complete tree NAME-<fingerprint>, or the newest complete tree named NAME (each stage of a name is newer).
@@ -344,7 +355,7 @@ _trees_rm() {
         return
     fi
     [ "${1:-}" = -- ] && shift
-    local id="${1:-}" force="${2:-}" marker live=""
+    local id="${1:-}" force="${2:-}" marker live="" seen=""
     _tree_valid "$id" && [[ "$id" =~ -[0-9a-f]{10}$ ]] || { err "usage: trees rm <name>-<fingerprint> [--force] | --partials"; exit 1; }
     on_login "[ -d '${TREES_DIR}/${id}' ]" || { err "no tree ${id}"; exit 1; }
     # node_exec.sh holds .in-use/<job>.<step|nostep> while each run lasts, and one squeue no longer lists has ended
@@ -352,6 +363,7 @@ _trees_rm() {
         local job sq rc
         while IFS= read -r marker; do
             [ -n "$marker" ] || continue
+            seen+="${marker} "
             if [[ "$marker" =~ ^([0-9]+)\.([0-9]+|nostep)$ ]]; then
                 job="${BASH_REMATCH[1]}"
                 sq="$(on_login "squeue -h -s -j '${job}' -o %i 2>&1")" && rc=0 || rc=$?
@@ -373,5 +385,7 @@ _trees_rm() {
         done < <(on_login "ls -1 '${TREES_DIR}/${id}/.in-use' 2>/dev/null")
         [ -z "$live" ] || { err "tree ${id} is in use by ${live}(pass --force if those runs are gone)"; exit 1; }
     fi
-    on_login "rm -rf '${TREES_DIR}/${id}'" && log "Removed ${TREES_DIR}/${id}"
+    # on the cluster, not only this terminal: a tree removed under a live run must be traceable from the runs' side
+    on_login "echo \"\$(date -u +%FT%TZ) removing ${id} from $(hostname -s) pid $$ ${force:-} markers: ${seen:-none}\" \
+        >> '${TREES_DIR}/.removal.log'; rm -rf '${TREES_DIR}/${id}'" && log "Removed ${TREES_DIR}/${id}"
 }

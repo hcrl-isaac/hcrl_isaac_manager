@@ -181,7 +181,12 @@ def own_lease(on: str, holder: str) -> str:
         return ""
     card, job = f"{parts[0]}:{parts[-1]}", parts[1] if len(parts) == 3 else ""
     with ls.locked_store() as leases:
-        mine = [x for x in leases if x.holder == holder and x.card == card and not x.cpus and (not job or x.job == job)]
+        # a SLURM lease records its card as a label, `host:gpu (job J)`
+        mine = [
+            x
+            for x in leases
+            if x.holder == holder and x.card.split(" ")[0] == card and not x.cpus and (not job or x.job == job)
+        ]
     return mine[0].id if len(mine) == 1 else ""
 
 
@@ -257,6 +262,32 @@ def pool_timeout(pool: Pool, timeout: float) -> float:
             f"[res] pool {pool.name} caps runs at max_hours {hours}: running with --timeout {hours}h", file=sys.stderr
         )
     return timeout or cap
+
+
+def resolve_root(t: Target, root: str) -> str:
+    """The ``--root`` install on an ssh box: a bare name sits beside the box's workspace; refused if it has no venv.
+
+    Args:
+        t: The ssh target.
+        root: ``--root`` as given: an absolute path, or a name such as ``isaac3-v300``.
+
+    Returns:
+        The root's absolute path on the box.
+    """
+    path = root if root.startswith("/") else f"{os.path.dirname(t.workspace.rstrip('/'))}/{root}"
+    try:
+        ok = subprocess.run(
+            [SSH, *t.ssh_opts, t.ssh, f"[ -x {shlex.quote(path)}/venv/bin/python ]"], capture_output=True, timeout=60
+        ).returncode
+    except subprocess.TimeoutExpired:
+        ok = 255
+    if ok == 255:
+        sys.exit(f"[res] could not reach {t.host} to check --root {path}: nothing staged")
+    if ok != 0:
+        sys.exit(
+            f"[res] --root {root}: {t.host} has no {path}/venv/bin/python (ls {os.path.dirname(path)} lists roots)"
+        )
+    return path
 
 
 def check_free_disk(t: Target, pool: Pool) -> None:
@@ -1777,16 +1808,22 @@ def slurm_profile(report_pool: str, job: str, pools: list[Pool]) -> Pool:
     profiles = [p for n in names for p in pools if p.kind == "slurm" and p.name == n]
     if not profiles:
         sys.exit(f"[res] no cluster profile for {report_pool}")
+    if len(profiles) == 1:  # nothing to choose: no lookup, which an ended job's lease could not answer anyway
+        return profiles[0]
     login = profiles[0].settings.get("login", "")
+    q = shlex.quote(job)
+    # a running job is in squeue; one that ended (its leases still name its runs, e.g. to resume them) only in sacct
     res = subprocess.run(
-        [SSH, *MASTER_OPTS, *SSH_OPTS, login, f"squeue -h -j {shlex.quote(job)} -o %P"],
+        [SSH, *MASTER_OPTS, *SSH_OPTS, login, f"squeue -h -j {q} -o %P 2>/dev/null || sacct -X -n -j {q} -o Partition"],
         capture_output=True,
         text=True,
     )
-    if res.returncode != 0 or not res.stdout.strip():
-        sys.exit(f"[res] cannot read job {job}'s partition on {login}: {(res.stderr.strip() or 'no such job')[:160]}")
-    partition = res.stdout.strip().splitlines()[-1].strip()
-    return next((p for p in profiles if p.name == partition), profiles[0])
+    lines = [x.strip() for x in res.stdout.splitlines() if x.strip()]
+    if not lines:
+        print(f"[res] cannot read job {job}'s partition on {login} ({(res.stderr.strip() or 'no such job')[:120]});"
+              f" using profile {profiles[0].name}", file=sys.stderr)  # fmt: skip
+        return profiles[0]
+    return next((p for p in profiles if p.name == lines[-1]), profiles[0])
 
 
 def _lease_card(lease_id: str, holder: str, pools: list[Pool]) -> tuple[Pool, str, int, str, str]:
@@ -1926,8 +1963,14 @@ def _repo_script(spec: str, wt: str, siblings: dict[str, tuple[str, Sibling]] | 
     return repo, rel
 
 
-def _record_stage(lease_id: str, stage_dir: str) -> None:
-    """Note the detached run's stage on its lease, beside any earlier ones, so `pls run --stop <lease>` finds them all."""
+def _record_stage(lease_id: str, stage_dir: str, note: str = "") -> None:
+    """Note the detached run's stage on its lease, beside any earlier ones, so `pls run --stop <lease>` finds them all.
+
+    Args:
+        lease_id: The lease the run holds ("" records nothing).
+        stage_dir: The run's stage dir.
+        note: The run's description, which replaces the lease's note so status names the run now on the card.
+    """
     if not lease_id:
         return
     with ls.locked_store() as leases:
@@ -1936,6 +1979,17 @@ def _record_stage(lease_id: str, stage_dir: str) -> None:
                 lease.stage = stage_dir
                 if stage_dir not in lease.stages:
                     lease.stages.append(stage_dir)
+                if note:
+                    lease.note = note
+
+
+def launch_note(note: str, script: str, run_args: list[str]) -> str:
+    """What a detached launch tells status it is: its --note, else the script and its --run_name."""
+    if note:
+        return note
+    name = next((b for a, b in itertools.pairwise(run_args) if a == "--run_name"), "")
+    name = name or next((a.split("=", 1)[1] for a in run_args if a.startswith("--run_name=")), "")
+    return f"{os.path.basename(script)} {name}".strip()
 
 
 def _print_detached(stage: Stage, lease_id: str, holder: str) -> None:
@@ -1967,6 +2021,52 @@ def _print_detached(stage: Stage, lease_id: str, holder: str) -> None:
     if lease_id:
         ends = "`pls res status` finds the run gone" if stage.t.cores or stage.t.kind == "ssh" else "the card idles"
         print(f"[res] lease {lease_id} stays held while the run lives; it releases once {ends}", file=sys.stderr)
+
+
+def cmd_stop_stage(on: str, stage_id: str, holder: str, pools: list[Pool]) -> int:
+    """Stop a detached run no lease records any more (`pls run --stop --stage <id> --on <cluster|host>`).
+
+    Args:
+        on: The SLURM cluster, or the ssh box, the stage is on.
+        stage_id: The stage dir, or its last component.
+        holder: The caller, whom the run's recorded launch must name as its holder.
+
+    Returns:
+        0 once the run is gone, 1 when it may still hold its card.
+    """
+    pool = next((p for p in pools if p.name == on), None) or next(
+        (p for p in pools if p.kind == "ssh" and on in p.settings.get("hosts", [])), None
+    )
+    if pool is None or pool.kind not in ("slurm", "ssh"):
+        sys.exit(f"[res] --stop --stage takes --on <a SLURM cluster or an ssh box>, not {on!r}")
+    # a login-node shell is all a SLURM stop needs: the runner polls its stage's stop file
+    t = make_target(pool, "login", 0, "-", "-") if pool.kind == "slurm" else make_target(pool, on, 0)
+    name = stage_id.rstrip("/").rsplit("/", 1)[-1]
+    stage = Stage(t)
+    stage.dir = stage_id if stage_id.startswith("/") else f"{t.scratch}/res-eval/{name}"
+    with ls.locked_store() as leases:
+        held = [x.id for x in leases if any(d.rstrip("/").endswith("/" + name) for d in (*x.stages, x.stage) if d)]
+    if held:
+        sys.exit(
+            f"[res] lease {held[0]} records stage {name}: stop it with `pls run --stop lease:{held[0]} --stage {name}`"
+        )
+    q = shlex.quote
+    raw = follow._probe(stage, f"cat {q(stage.dir)}/pls_argv.json 2>/dev/null")
+    if not raw.strip():
+        sys.exit(f"[res] {on} has no stage {name} with a recorded launch ({stage.dir}/pls_argv.json)")
+    argv = json.loads(raw)
+    owner = next((b for a, b in itertools.pairwise(argv) if a == "--holder"), "")
+    if owner != holder:
+        sys.exit(
+            f"[res] stage {name} was launched by {owner or 'an unnamed holder'}, not {holder}; it is theirs to stop"
+        )
+    if stage.sh(f"[ -f {q(stage.dir)}/status ]") == 0:
+        print(f"[res] the run in {name} already ended (its status is written); nothing to stop", file=sys.stderr)
+        return 0
+    gone = stage.kill()
+    print(f"[res] stopped the run in {stage.dir} ({'gone' if gone else 'STILL RUNNING, check the card'})",
+          file=sys.stderr)  # fmt: skip
+    return 0 if gone else 1
 
 
 def cmd_stop(lease_id: str, holder: str, pools: list[Pool], only: str = "", keep_lease: bool = False) -> int:
@@ -2289,6 +2389,8 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
         if t.kind != "slurm":  # the pool's guardrails, before anything is staged
             args.timeout = pool_timeout(pool, args.timeout)
             check_free_disk(t, pool)
+        if t.kind == "ssh" and args.root:
+            args.root = resolve_root(t, args.root)
         staging = _LeaseHeartbeat(taken.id if taken is not None else args.lease or "", *(x.id for x in extra)).start()
         stage = Stage(t)
         stage.make()
@@ -2394,8 +2496,9 @@ def cmd_eval(args: argparse.Namespace, pools: list[Pool], claim: Callable) -> No
             if slot is not None:  # submitted: its watch must not keep the next launch waiting
                 slot.release()
             held = taken.id if taken is not None else args.lease or ""
+            note = launch_note(args.note, local_file, run_args)
             for lease_id in (held, *(x.id for x in extra)):  # every card's lease names the run's stage
-                _record_stage(lease_id, stage.dir)
+                _record_stage(lease_id, stage.dir, note)
             _print_detached(stage, held, args.holder)
             rc = 0
             if not args.cmd and os.path.basename(script) == "train.py" and not getattr(args, "no_watch", False):
@@ -2659,7 +2762,15 @@ def main(argv: list[str] | None = None) -> None:
     # `pls run --stop <lease> --holder <you>`: no script, no card to claim; a script's own --stop (after --) is its own
     if "--stop" in head:
         sp = argparse.ArgumentParser(prog="pls run --stop", description="stop a detached run and release its lease")
-        sp.add_argument("--stop", required=True, metavar="LEASE", help="the lease the detached run holds")
+        sp.add_argument(
+            "--stop",
+            nargs="?",
+            const="",
+            required=True,
+            metavar="LEASE",
+            help="the lease the detached run holds; bare --stop with --stage and --on stops a run no lease records",
+        )
+        sp.add_argument("--on", default="", help="with a bare --stop: the SLURM cluster or ssh box the stage is on")
         sp.add_argument("--holder", required=True, help="your session name (must match the lease)")
         sp.add_argument(
             "--stage", default="", help="stop only this run (its stage id, e.g. 75c9b10f); the lease keeps the others"
@@ -2674,6 +2785,10 @@ def main(argv: list[str] | None = None) -> None:
             pools = res.load_pools()
         except Exception as exc:
             sys.exit(f"[res] cannot read the compute inventory: {type(exc).__name__}: {exc}")
+        if not st.stop:
+            if not (st.stage and st.on) or st.keep_lease:
+                sys.exit("[res] a bare --stop takes --stage <id> and --on <cluster|host> (no --keep-lease)")
+            sys.exit(cmd_stop_stage(st.on, st.stage, st.holder, pools))
         sys.exit(cmd_stop(st.stop, st.holder, pools, st.stage, st.keep_lease))
     args = parse_args(argv)
     args.raw_argv = list(argv)  # what `pls run --move` relaunches from
