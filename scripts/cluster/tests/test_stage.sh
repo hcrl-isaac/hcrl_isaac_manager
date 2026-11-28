@@ -291,10 +291,28 @@ dev stage --no-space-check full hcrl_isaaclab=feat > /dev/null 2>&1
 check "--no-space-check stages anyway" "[ \$(ntrees full) -eq 1 ]"
 rm "$T/bin/lfs"
 
-# each stage keeps the newest 5 trees of its name, and any a run still uses
+# each stage keeps the newest 5 trees of its name, any a run still uses, and any used within TREE_MIN_AGE_DAYS
 mkdir -p "$dt/.in-use" && touch "$dt/.in-use/node7.99"
-for i in 1 2 3 4 5 6; do echo "v$i" > "$G/whole_new.py"; dev stage > /dev/null 2>&1; done
+for i in 1 2 3 4 5 6; do echo "v$i" > "$G/whole_new.py"; dev stage > "$T/out_p$i" 2>&1; done
+check "a recently used tree beyond the newest 5 is kept" "[ \$(ntrees default) -eq 7 ] && grep -q 'used within' '$T/out_p6'"
+i=0  # distinct ages in their staging order, so which trees fall past the newest 5 is fixed
+for d in $(ls -1td "$R"/trees/default-*/ | tail -n +2); do i=$((i + 1)); touch -d "$((30 + i)) days ago" "$d"; done
+dev stage > /dev/null 2>&1
 check "older trees are pruned" "[ \$(ntrees default) -eq 6 ]"
+check "each removal is logged on the cluster" "grep -q 'removing default-' '$R/trees/.removal.log'"
+
+# reuse is use: a tree staged long ago but restaged (or launched from) today reads as recent to the prune
+dev stage reuse hcrl_isaaclab=feat > /dev/null 2>&1
+old=$(ls -d "$R"/trees/reuse-*)
+touch -d '30 days ago' "$old"
+dev stage reuse hcrl_isaaclab=feat > "$T/out_reuse" 2>&1
+check "restaging an old tree's refs refreshes its mtime"     "grep -q 'already staged' '$T/out_reuse' && [ -n \"\$(find '$old' -maxdepth 0 -mtime -1)\" ]"
+touch -d '30 days ago' "$old"
+( RESOURCES="$old/resources" SLURM_JOB_ID=4243 SLURM_STEP_ID=0
+  IN_USE="$old/.in-use/4243.0"
+  eval "$(grep -m1 'touch "\$IN_USE"' "$REPO/scripts/cluster/cluster_dev/node_exec.sh")" )
+check "a launch taking its in-use marker refreshes its tree's mtime"     "[ -f '$old/.in-use/4243.0' ] && [ -n \"\$(find '$old' -maxdepth 0 -mtime -1)\" ]"
+rm -rf "$old/.in-use"
 check "the one in use is kept" "[ -d '$dt' ]"
 check "the newest is what default resolves to" "grep -qx v6 \"\$(dev __resolve_tree default 2>/dev/null)/resources/hcrl_isaaclab/whole_new.py\""
 rm -f "$G/whole_new.py"
