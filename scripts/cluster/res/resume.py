@@ -105,9 +105,18 @@ def claim(stage: ev.Stage, holder: str) -> str:
 def _release(stage: ev.Stage) -> None:
     """Drop ``stage``'s pending row once this watch decided it; a row another live watch claimed stays theirs."""
     with _locked() as table:
-        pid = int((table["pending"].get(stage.dir) or {}).get("pid") or 0)
-        if not pid or pid == os.getpid() or not _alive(pid):
+        row = table["pending"].get(stage.dir) or {}
+        pid = int(row.get("pid") or 0)
+        left_here = row.get("failed_by") == os.getpid()  # this watch's failed resume stays for the next watch
+        if not left_here and (not pid or pid == os.getpid() or not _alive(pid)):
             table["pending"].pop(stage.dir, None)
+
+
+def _leave_pending(stage: ev.Stage, new_job: str) -> None:
+    """Keep ``stage``'s row after its resume failed, unclaimed, so `pls run --watch --holder` adopts the run."""
+    with _locked() as table:
+        if row := table["pending"].get(stage.dir):
+            row.update(pid=0, failed=new_job, failed_by=os.getpid())
 
 
 def _mark_resumed(old_dir: str, new_dir: str) -> None:
@@ -189,6 +198,10 @@ def forget(cut_job: str) -> None:
         table["holds"].pop(cut_job, None)
 
 
+SLURM_LIVE = {"PENDING", "CONFIGURING", "RUNNING", "COMPLETING", "SUSPENDED", "REQUEUED", "REQUEUE_HOLD", "RESIZING"}
+"""sacct states of a job that has not ended: squeue failing to list one says nothing about it."""
+
+
 def wait_running(t: ev.Target, job: str, holder: str, sleep: Callable = time.sleep) -> str:
     """The node of ``job`` once it runs; notes a long queue once, and exits if the job ends without running."""
     start, noted = time.monotonic(), False
@@ -197,8 +210,10 @@ def wait_running(t: ev.Target, job: str, holder: str, sleep: Callable = time.sle
         state, node, reason = ([*out.split("|"), "", ""])[:3] if out else ("", "", "")
         if state == "RUNNING" and node:
             return node
-        if not out and _login(t, f"sacct -j {shlex.quote(job)} -X -n -o State").strip():
-            raise SystemExit(f"[resume] replacement hold {job} ended before it ran")
+        # an empty squeue is also a failed call: only sacct's record of an end means the hold is gone
+        acct = _login(t, f"sacct -j {shlex.quote(job)} -X -n -P -o State").split() if not out else []
+        if acct and acct[0] not in SLURM_LIVE:
+            raise SystemExit(f"[resume] replacement hold {job} ended {acct[0]} before it ran")
         if not noted and time.monotonic() - start > PENDING_NOTE_S:
             note = (f"[resume] hold {job} still {state or 'queued'} after 6 h ({reason}); a shorter --time or another"
                     " partition or cluster (pls res status) would start sooner")  # fmt: skip
@@ -269,6 +284,7 @@ def _resume(
         node = wait_running(stage.t, new_job, holder)
     except SystemExit as e:
         forget(stage.t.job)
+        _leave_pending(stage, new_job)
         event(kind="resume_failed", label=label, holder=holder, cut_job=stage.t.job, new_job=new_job, why=str(e))
         print(f"{e}; `pls run --watch --holder {holder}` on the run queues a fresh one", file=sys.stderr)
         return None
