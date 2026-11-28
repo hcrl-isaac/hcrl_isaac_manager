@@ -268,20 +268,62 @@ def stage_run_states(leases: list[ls.Lease], pools: list[Pool]) -> dict[str, set
 
 
 def live_runs(pools: list[Pool]) -> tuple[dict[str, set[str]], set[str]]:
-    """Check the runs behind the leases that record a stage on an ssh box, outside the lease lock (it reaches the boxes).
+    """Check the runs behind the leases that record a stage, outside the lease lock (it reaches the boxes and logins).
 
     Returns:
-        (report label -> ended stage dirs, ids of card leases whose detached run still runs).
+        (report label -> ended stage dirs on ssh boxes, ids of card leases whose detached run still runs).
     """
     with ls.locked_store() as leases:
         staged = [x for x in leases if ls.is_cpu(x) or (x.stage and not x.job)]
+        on_slurm = [x for x in leases if not ls.is_cpu(x) and x.stage and x.job]
     ended = stage_run_states(staged, pools)
     alive = {
         x.id
         for x in staged
         if not ls.is_cpu(x) and x.report in ended and any(s not in ended[x.report] for s in x.stages or [x.stage])
     }
-    return ended, alive
+    return ended, alive | slurm_live(on_slurm, pools)
+
+
+SLURM_BEAT_S = 120  # a live SLURM runner touches its stage's heartbeat every 2 s
+
+
+def slurm_live(leases: list[ls.Lease], pools: list[Pool]) -> set[str]:
+    """Ids of SLURM card leases whose detached run is still alive (fresh heartbeat, no status), one login call per
+    cluster; a run that idles its card between bursts (a --follow scorer) otherwise reads as an idle lease."""
+    import shlex
+
+    import evaluate as ev
+    import follow
+
+    by_pool: dict[str, list[ls.Lease]] = {}
+    for x in leases:
+        # a cluster's label is "<name> (<profile>, ...)"; its pools are the profiles (horizon, amd-rtx, rtx-small)
+        names = [n.strip() for n in x.report.partition("(")[2].rstrip(")").split(",") if n.strip()] or [x.report]
+        pool = next((p for n in names for p in pools if p.kind == "slurm" and p.name == n), None)
+        if pool is not None:
+            by_pool.setdefault(pool.name, []).append(x)
+    live: set[str] = set()
+    for name, group in by_pool.items():
+        pool = next(p for p in pools if p.name == name)
+        dirs = sorted({d for x in group for d in (*x.stages, x.stage) if d})
+        script = "; ".join(
+            f'd={shlex.quote(d)}; [ -f "$d/status" ] && echo "$d ended" || '
+            f'echo "$d $(( $(date +%s) - $(stat -c %Y "$d/heartbeat" 2>/dev/null || echo 0) ))"'
+            for d in dirs
+        )
+        try:
+            probe = ev.Stage(ev.make_target(pool, "login", 0, "-", "-"))  # login-node commands only: no card needed
+            out = follow._probe(probe, script)
+        except (SystemExit, Exception):  # an unreachable cluster keeps today's behaviour: idle by the card alone
+            continue
+        fresh = {
+            d
+            for d, _, age in (ln.rpartition(" ") for ln in out.splitlines())
+            if age.isdigit() and int(age) < SLURM_BEAT_S
+        }
+        live |= {x.id for x in group if fresh & {*x.stages, x.stage}}
+    return live
 
 
 def cmd_status(args: argparse.Namespace, pools: list[Pool]) -> None:
