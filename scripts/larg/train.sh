@@ -101,7 +101,8 @@ if [ -n $(printf %q "${tree:-}") ]; then
     pp=\"\$T/\${d%/}\${pp:+:\$pp}\"
   done
   export PYTHONPATH=\"\$pp\${PYTHONPATH:+:\$PYTHONPATH}\"
-  mkdir -p \"\$T/.in-use\" && marker=\"\$T/.in-use/larg\"
+  # the tree's mtime is its last use, which the tree prune's age floor reads
+  mkdir -p \"\$T/.in-use\" && touch \"\$T\" && marker=\"\$T/.in-use/larg\"
   echo \"tree: \$T\"; echo \"PYTHONPATH: \$pp\"
 fi
 if [ \"\$marker\" = /dev/null ]; then
