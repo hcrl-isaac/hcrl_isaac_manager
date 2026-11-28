@@ -291,10 +291,10 @@ cmd_stage() {  # stage [--no-space-check] [NAME] [REPO=REF|REPO=PATH ...] : uplo
         on_login "touch '${STAGE_PART}/.complete'" || exit 1
         # a stray non-directory at the tree's path (an old touch after a prune) would block the rename forever
         on_login "[ ! -e '${tree}' ] || [ -d '${tree}' ] || rm -f '${tree}'" || exit 1
-        if on_login "mv -T '${STAGE_PART}' '${tree}'"; then
+        if on_login "mv -T '${STAGE_PART}' '${tree}' 2>/dev/null"; then
             STAGE_PART=""
         elif on_login "[ -f '${tree}/.complete' ]"; then
-            log "Another stage of the same refs finished first; using it."
+            log "Another stage of the same refs finished first; using it (this copy is discarded)."
         else
             err "could not move ${STAGE_PART} to ${tree}"; exit 1
         fi
@@ -313,8 +313,15 @@ _stage_cleanup() {  # trap: drop this run's temporary checkouts and any partial 
         git -C "${entry%%=*}" worktree remove --force "${entry#*=}" 2>/dev/null
     done
     [ -n "${STAGE_WORK:-}" ] && rm -rf "$STAGE_WORK"
-    [ -n "${STAGE_PART:-}" ] && on_login "rm -rf '${STAGE_PART}'" 2>/dev/null
+    [ -n "${STAGE_PART:-}" ] && _discard_part "$STAGE_PART"
     return 0
+}
+
+# Deleting a whole tree on a slow shared filesystem can take most of an hour, so the stage (and the run waiting on it)
+# renames the copy out of the trees' names and leaves the delete to a detached process on the login.
+_discard_part() {  # _discard_part REMOTE_PATH
+    on_login "d='${1}.discard'; mv -T '${1}' \"\$d\" 2>/dev/null || d='${1}'; \
+        nohup setsid sh -c 'chmod -R u+w \"\$1\"; rm -rf \"\$1\"' sh \"\$d\" > /dev/null 2>&1 < /dev/null &" 2>/dev/null
 }
 
 # The complete tree NAME-<fingerprint>, or the newest complete tree named NAME (each stage of a name is newer).
