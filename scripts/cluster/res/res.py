@@ -226,6 +226,7 @@ def lease_windows() -> dict[str, float]:
 
 
 def _report_released(released: list[tuple[ls.Lease, str]]) -> None:
+    ls.keep_cut_runs(released)  # a hold's end releases its leases; their cut runs stay for `pls run --watch`
     for lease, why in released:
         print(f"[res] released {lease.id} ({lease.card}, {lease.holder}): {why}", file=sys.stderr)
 

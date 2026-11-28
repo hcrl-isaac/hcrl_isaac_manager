@@ -177,6 +177,26 @@ class AfterCutTest(StateTest):
         [ev_row] = self.events()
         self.assertEqual((ev_row["kind"], ev_row["new_job"], ev_row["ckpt"]), ("resumed", "105901", 1400))
 
+    def test_a_decided_stage_leaves_the_pending_table(self) -> None:
+        with resume._locked() as table:  # a released lease's run: no watch has claimed it
+            table["pending"][_stage().dir] = {"holder": "Kick", "pool": "horizon", "host": "c102-007", "gpu": 2,
+                                              "job": "100", "uuid": ""}  # fmt: skip
+        new, launched = self.run_cut(resumes="3")
+        self.assertEqual((new, launched), (None, []))
+        with resume._locked() as table:
+            self.assertEqual(table["pending"], {}, "a later watch does not decide it again")
+
+    def test_a_released_leases_run_is_resumed_by_one_watch_and_the_next_stands_down(self) -> None:
+        with resume._locked() as table:  # keep_cut_runs' row: no pid, so the first watch to decide it claims it
+            table["pending"][_stage().dir] = {"holder": "Kick", "pool": "horizon", "host": "c102-007", "gpu": 2,
+                                              "job": "100", "uuid": ""}  # fmt: skip
+        first, launched = self.run_cut()
+        self.assertEqual((first.dir, len(launched)), ("/w/new", 1))
+        self.assertIsNone(resume.after_cut(_stage(), "Kick", "lease/abc"), "a second watch on the same run")
+        self.assertEqual(len(launched), 1, "relaunched once")
+        with resume._locked() as table:
+            self.assertEqual((table["pending"], table["resumed"]), ({}, {_stage().dir: "/w/new"}))
+
     def test_a_chain_resumed_three_times_is_left_cut(self) -> None:
         new, launched = self.run_cut(resumes="3")
         self.assertIsNone(new)
@@ -256,6 +276,8 @@ class ClaimTest(StateTest):
             mock.patch("sys.stderr"),
         ):
             self.assertIsNone(resume.after_cut(_stage(), "Kick", "lease/abc"))
+        with resume._locked() as table:
+            self.assertEqual(table["pending"]["/w/artifacts/res-eval/abc"]["pid"], 1, "its claim stays the other's")
 
 
 class WatchTest(unittest.TestCase):
@@ -303,6 +325,29 @@ class EventsTest(StateTest):
         with mock.patch("builtins.print") as out:
             resume.print_events()
         self.assertEqual([json.loads(c.args[0])["kind"] for c in out.call_args_list], ["resumed", "hold_queued"])
+
+
+class ReleasedLeaseTest(StateTest):
+    """A lease `pls res status` releases at its hold's end hands its runs to the table `pls run --watch` reads."""
+
+    def test_a_released_slurm_leases_runs_stay_pending_for_the_watch(self) -> None:
+        p = mock.patch.object(resume.ls, "STORE", self.d / "leases.json")
+        p.start()
+        self.addCleanup(p.stop)
+        # a lease as res.claim records one on a SLURM card
+        cut = ev.ls.Lease("9136af", "GPU-0b4c", "c103-021:3 (job 107937)", "horizon (horizon)", "Latent", job="107937")
+        cut.stages, cut.stage = ["/w/res-eval/old", "/w/res-eval/0e4c"], "/w/res-eval/0e4c"
+        box = ev.ls.Lease("b2", "pepi:1", "pepi:1", "larg", "Latent")
+        box.stage = "/w/box"
+        ev.ls.keep_cut_runs([(cut, "job 107937 ended"), (box, "idle for 30 min")])
+        target = lambda pool, host, gpu, job, uuid: ev.Target(pool.name, "slurm", host, gpu, job=job, uuid=uuid)  # noqa: E731
+        with mock.patch.object(resume.ev, "make_target", target):
+            found = resume.pending_stages("Latent", [POOL])
+        self.assertEqual(
+            sorted(st.dir for _, st in found), ["/w/res-eval/0e4c", "/w/res-eval/old"], "a box run is not one"
+        )
+        t = found[0][1].t
+        self.assertEqual((t.pool, t.host, t.gpu, t.job, t.uuid), ("horizon", "c103-021", 3, "107937", "GPU-0b4c"))
 
 
 class SlurmProfileTest(unittest.TestCase):

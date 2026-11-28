@@ -103,9 +103,10 @@ def claim(stage: ev.Stage, holder: str) -> str:
 
 
 def _release(stage: ev.Stage) -> None:
-    """End this watch's claim on ``stage``'s resume (a claim another watch took over stays theirs)."""
+    """Drop ``stage``'s pending row once this watch decided it; a row another live watch claimed stays theirs."""
     with _locked() as table:
-        if int((table["pending"].get(stage.dir) or {}).get("pid") or 0) == os.getpid():
+        pid = int((table["pending"].get(stage.dir) or {}).get("pid") or 0)
+        if not pid or pid == os.getpid() or not _alive(pid):
             table["pending"].pop(stage.dir, None)
 
 
@@ -215,6 +216,13 @@ def chain_count(stage: ev.Stage) -> int:
 
 def after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
     """Resume ``stage``'s run if its hold's end cut it; returns the resumed run's stage, else None (said why)."""
+    try:
+        return _after_cut(stage, holder, label)
+    finally:
+        _release(stage)  # decided; a watch that dies mid-resume never gets here, so its claim stays
+
+
+def _after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
     rec = hold_end(stage.t)
     files = {name: move.read_stage(stage, name) for name in ("status", "stop", "pls_argv.json")}
     why = verdict(files, rec.get("state", ""))
@@ -242,10 +250,7 @@ def after_cut(stage: ev.Stage, holder: str, label: str) -> ev.Stage | None:
     if taken := claim(stage, holder):
         print(f"[resume] {label}: not resumed here: {taken}", file=sys.stderr)
         return None
-    try:
-        return _resume(stage, holder, label, rec, done, (opts, script, args), state, ckpt)
-    finally:
-        _release(stage)
+    return _resume(stage, holder, label, rec, done, (opts, script, args), state, ckpt)
 
 
 def _resume(
