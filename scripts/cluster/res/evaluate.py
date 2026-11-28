@@ -1777,16 +1777,22 @@ def slurm_profile(report_pool: str, job: str, pools: list[Pool]) -> Pool:
     profiles = [p for n in names for p in pools if p.kind == "slurm" and p.name == n]
     if not profiles:
         sys.exit(f"[res] no cluster profile for {report_pool}")
+    if len(profiles) == 1:  # nothing to choose: no lookup, which an ended job's lease could not answer anyway
+        return profiles[0]
     login = profiles[0].settings.get("login", "")
+    q = shlex.quote(job)
+    # a running job is in squeue; one that ended (its leases still name its runs, e.g. to resume them) only in sacct
     res = subprocess.run(
-        [SSH, *MASTER_OPTS, *SSH_OPTS, login, f"squeue -h -j {shlex.quote(job)} -o %P"],
+        [SSH, *MASTER_OPTS, *SSH_OPTS, login, f"squeue -h -j {q} -o %P 2>/dev/null || sacct -X -n -j {q} -o Partition"],
         capture_output=True,
         text=True,
     )
-    if res.returncode != 0 or not res.stdout.strip():
-        sys.exit(f"[res] cannot read job {job}'s partition on {login}: {(res.stderr.strip() or 'no such job')[:160]}")
-    partition = res.stdout.strip().splitlines()[-1].strip()
-    return next((p for p in profiles if p.name == partition), profiles[0])
+    lines = [x.strip() for x in res.stdout.splitlines() if x.strip()]
+    if not lines:
+        print(f"[res] cannot read job {job}'s partition on {login} ({(res.stderr.strip() or 'no such job')[:120]});"
+              f" using profile {profiles[0].name}", file=sys.stderr)  # fmt: skip
+        return profiles[0]
+    return next((p for p in profiles if p.name == lines[-1]), profiles[0])
 
 
 def _lease_card(lease_id: str, holder: str, pools: list[Pool]) -> tuple[Pool, str, int, str, str]:

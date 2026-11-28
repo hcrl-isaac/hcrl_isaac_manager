@@ -407,11 +407,12 @@ class SlurmTest(unittest.TestCase):
                 done = mock.Mock(returncode=0, stdout=partition, stderr="")
                 with mock.patch.object(ev.subprocess, "run", return_value=done):
                     self.assertEqual(ev.slurm_profile(label, "3566414", pools).name, want)
-        # a job squeue cannot read is refused rather than guessed
+        # a job neither squeue nor sacct can read (an ended hold's lease) warns and takes the first profile:
+        # refusing would end a whole `pls run --watch` over one lease
         gone = mock.Mock(returncode=1, stdout="", stderr="slurm_load_jobs error: Invalid job id")
-        with mock.patch.object(ev.subprocess, "run", return_value=gone), self.assertRaises(SystemExit) as cm:
-            ev.slurm_profile(label, "3566414", pools)
-        self.assertIn("Invalid job id", str(cm.exception.code))
+        with mock.patch.object(ev.subprocess, "run", return_value=gone), mock.patch("sys.stderr") as err:
+            self.assertEqual(ev.slurm_profile(label, "3566414", pools).name, "amd-rtx")
+        self.assertIn("Invalid job id", "".join(c.args[0] for c in err.write.call_args_list))
 
     def test_a_with_repo_joins_the_containers_pythonpath_after_its_env(self) -> None:
         t = ev.Target("horizon", "slurm", "c125-013", 0, "u@login", "/w", "/w/artifacts", job="71017", uuid="GPU-a")
