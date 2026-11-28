@@ -124,7 +124,9 @@ touch "$TR/.complete" "$TR/resources/hcrl_isaaclab/setup.py" "$TR/resources/hhlm
 ln -s "$T/ws/resources/robot_rl" "$TR/resources/robot_rl"
 mkdir -p "$T/ws/trees/kick-9999999999.partial.1"
 rm -f "$T/ran"
+touch -d '30 days ago' "$TR"  # staged long ago: launching from it is a use the tree prune must see
 launch CUDA_VISIBLE_DEVICES=0 bash "$REPO/scripts/larg/train.sh" --tree kick hazard hhlm/T1-Kick-v0 r > "$T/out6" 2>&1
+check "a launch from a tree refreshes its mtime" "[ -n \"\$(find '$TR' -maxdepth 0 -mtime -1)\" ]"
 wait_ran
 check "a tree run starts in the newest complete tree" "grep -qx 'PWD=$TR' '$T/ran'"
 check "the tree's staged repos lead PYTHONPATH, linked ones are left to the venv" \
