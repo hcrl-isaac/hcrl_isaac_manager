@@ -118,6 +118,21 @@ class ReplacementTest(StateTest):
         self.assertEqual(node, "c102-007")
         self.assertEqual([e["kind"] for e in self.events()], ["hold_pending"])
 
+    def test_a_failed_squeue_on_a_pending_hold_keeps_waiting(self) -> None:
+        squeue = iter(["", "RUNNING|c102-007|None"])  # "" is what _login returns when squeue itself fails
+        sacct = iter(["PENDING\n"])
+        with mock.patch.object(resume, "_login", lambda t, cmd, timeout=60: next(squeue if "squeue" in cmd else sacct)):
+            self.assertEqual(resume.wait_running(_stage().t, "105901", "Kick", sleep=lambda s: None), "c102-007")
+
+    def test_a_hold_sacct_says_ended_ends_the_wait(self) -> None:
+        with (
+            mock.patch.object(
+                resume, "_login", lambda t, cmd, timeout=60: "" if "squeue" in cmd else "CANCELLED by 1\n"
+            ),
+            self.assertRaisesRegex(SystemExit, "105901 ended CANCELLED before it ran"),
+        ):
+            resume.wait_running(_stage().t, "105901", "Kick", sleep=lambda s: None)
+
 
 class AfterCutTest(StateTest):
     def run_cut(
@@ -214,7 +229,12 @@ class AfterCutTest(StateTest):
         self.assertEqual((new, launched), (None, []))
         self.assertEqual(self.events()[0]["kind"], "resume_failed")
         with resume._locked() as table:
-            self.assertEqual(table, {"holds": {}, "pending": {}, "resumed": {}}, "a re-armed watch queues a fresh hold")
+            self.assertEqual((table["holds"], table["resumed"]), ({}, {}), "a re-armed watch queues a fresh hold")
+            row = table["pending"]["/w/artifacts/res-eval/abc"]
+        self.assertEqual((row["pid"], row["failed"]), (0, "105901"), "kept, unclaimed, for the re-armed watch")
+        [(_, st)] = resume.pending_stages("Kick", [POOL])
+        self.assertEqual(st.dir, "/w/artifacts/res-eval/abc")
+        self.assertEqual(resume.claim(st, "Kick"), "", "the re-armed watch claims it")
 
     def test_a_run_stopped_while_its_hold_queued_is_not_relaunched(self) -> None:
         def stopped_meanwhile(t: ev.Target, job: str, holder: str) -> str:
